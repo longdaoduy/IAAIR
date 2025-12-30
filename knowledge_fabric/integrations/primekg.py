@@ -12,17 +12,14 @@ DOI: https://doi.org/10.1038/s41597-023-01960-3
 """
 
 import pandas as pd
-import numpy as np
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any, Set
+from typing import Dict, List, Optional, Any
 import logging
 from datetime import datetime
 import networkx as nx
-from collections import defaultdict
 import json
 
-from ..schemas import Document, Author, Venue
-from ..core import KnowledgeFabric
+from models.schemas.schemas import Document
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +95,7 @@ class PrimeKGIntegrator:
             True if successful, False otherwise
         """
         import requests
-        import zipfile
-        from io import BytesIO
-        
+
         logger.info("Downloading PrimeKG data from Harvard Dataverse...")
         
         # Create data directory

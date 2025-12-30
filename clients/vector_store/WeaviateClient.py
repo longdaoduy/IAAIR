@@ -9,8 +9,8 @@ import logging
 from typing import List
 from .VectorClient import VectorClient
 
-from knowledge_fabric.schemas import Document, SearchResult
-from configurators.Settings import VectorDBConfig
+from models.schemas.schemas import Document, SearchResult
+from models.configurators import VectorDBConfig
 import weaviate
 
 logger = logging.getLogger(__name__)

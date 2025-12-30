@@ -11,7 +11,7 @@ from pathlib import Path
 from . import VectorDBConfig
 from . import SciBERTConfig
 from . import GraphDBConfig
-from . import OpenAlexConfig
+
 
 @dataclass
 class Settings:

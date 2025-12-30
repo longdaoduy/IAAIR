@@ -9,15 +9,15 @@ import asyncio
 import logging
 from typing import List, Dict, Optional, Any
 
-from .schemas import Document, SearchResult, EvidenceBundle, QueryPlan
-from pipelines.ingestions import IngestionPipeline
+from models.schemas.schemas import Document, SearchResult, EvidenceBundle, QueryPlan
+from models.pipelines import IngestionPipeline
 from ..clients.graph_store import Neo4jClient
 from ..clients.vector_store import MilvusClient
 from .fusion.hybrid_retriever import HybridRetriever
 from .attribution.attribution_tracker import AttributionTracker
 from .provenance.provenance_ledger import ProvenanceLedger
 from .integrations.snomed_ct import SnomedCTIntegrator
-from ..configurators.Settings import Settings
+from models.configurators.Settings import Settings
 
 logger = logging.getLogger(__name__)
 

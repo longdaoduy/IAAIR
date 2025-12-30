@@ -7,14 +7,14 @@ enabling medical knowledge extraction and annotation capabilities.
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 import aiohttp
 from urllib.parse import quote, urlencode
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from ..core import KnowledgeFabric
-from ..schemas import Document, Author, Venue
+from models.schemas.schemas import Document
 from ..utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)

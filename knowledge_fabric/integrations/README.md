@@ -83,7 +83,7 @@ asyncio.run(main())
 
 ```python
 from knowledge_fabric.core import KnowledgeFabric
-from knowledge_fabric.schemas import Document, Author
+from models.schemas.schemas import Document, Author
 
 # Configure Knowledge Fabric with BioPortal API key
 config = Settings(bioportal_api_key="YOUR_API_KEY_HERE")
@@ -266,12 +266,13 @@ asyncio.run(analyze_medical_paper())
 ```python
 import asyncio
 from knowledge_fabric.core import KnowledgeFabric
-from knowledge_fabric.schemas import Document, Author
+from models.schemas.schemas import Document, Author
+
 
 async def build_medical_knowledge_graph():
     # Initialize Knowledge Fabric with SNOMED CT
     kf = KnowledgeFabric(config=Settings(bioportal_api_key="YOUR_API_KEY"))
-    
+
     # Sample medical documents
     documents = [
         Document(
@@ -281,25 +282,26 @@ async def build_medical_knowledge_graph():
             authors=[Author(name="Dr. Jones")]
         ),
         Document(
-            id="doc2", 
+            id="doc2",
             title="Hypertension Management Guidelines",
             abstract="Clinical guidelines for blood pressure control...",
             authors=[Author(name="Dr. Smith")]
         )
     ]
-    
+
     # Enhance with medical concepts
     enhanced_docs = await kf.enhance_with_medical_concepts(documents)
-    
+
     # Ingest into knowledge graph_store
     results = await kf.ingest_documents(enhanced_docs)
     print(f"Ingested {results['successful']} documents with medical concepts")
-    
+
     # Search using medical terminology
     search_results = await kf.search("diabetes management hypertension")
     print(f"Found {len(search_results)} related documents")
-    
+
     await kf.close()
+
 
 asyncio.run(build_medical_knowledge_graph())
 ```

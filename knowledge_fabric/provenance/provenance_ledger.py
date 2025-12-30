@@ -8,7 +8,7 @@ for all data transformations in the knowledge fabric.
 import logging
 from typing import List, Dict, Any
 
-from ..schemas import Document, EvidenceBundle
+from models.schemas.schemas import Document, EvidenceBundle
 from ..graph.neo4j_client import Neo4jGraphStore
 
 logger = logging.getLogger(__name__)

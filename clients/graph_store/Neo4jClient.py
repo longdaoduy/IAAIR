@@ -8,10 +8,9 @@ citations, author collaborations, and concept hierarchies.
 import logging
 from typing import List, Dict, Any, Optional
 from neo4j import AsyncGraphDatabase, AsyncDriver
-from datetime import datetime
 
-from knowledge_fabric.schemas import Document, Author, Venue, Citation
-from configurators.GraphDBConfig import GraphDBConfig
+from models.schemas.schemas import Document, Author, Venue, Citation
+from models.configurators.GraphDBConfig import GraphDBConfig
 
 logger = logging.getLogger(__name__)
 

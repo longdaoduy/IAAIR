@@ -9,7 +9,7 @@ import logging
 from typing import List
 from abc import ABC, abstractmethod
 
-from knowledge_fabric.schemas import Document, SearchResult
+from models.schemas.schemas import Document, SearchResult
 
 logger = logging.getLogger(__name__)
 

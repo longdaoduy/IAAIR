@@ -4,9 +4,9 @@ from dataclasses import dataclass
 @dataclass
 class GraphDBConfig:
     """Neo4j database configuration."""
-    provider: str = "neo4j"  # "milvus" or "weaviate"
+    provider: str = "neo4j"
     username: str = "neo4j"
-    password: str = "password"
+    password: str = "LkIC3FNqbGTGHtkxiYujARXY6IUZnvyvyrMFJBeagCI"
     database: str = "neo4j"
     uri: str = "bolt://localhost:7687"
     max_connection_lifetime: int = 3600

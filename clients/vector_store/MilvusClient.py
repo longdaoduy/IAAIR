@@ -6,11 +6,11 @@ optimized indexing for SciBERT embeddings and scientific text.
 """
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List
 from .VectorClient import VectorClient
 
-from knowledge_fabric.schemas import Document, SearchResult
-from configurators.Settings import VectorDBConfig
+from models.schemas.schemas import Document, SearchResult
+from models.configurators import VectorDBConfig
 from pymilvus import FieldSchema, CollectionSchema, DataType, Collection, utility, connections
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,6 @@ class MilvusClient(VectorClient):
     async def connect(self):
         """Connect to Milvus server."""
         try:
-            from pymilvus import connections, Collection, FieldSchema, CollectionSchema, DataType
 
             connections.connect(
                 alias="default",
@@ -38,9 +37,6 @@ class MilvusClient(VectorClient):
             await self._ensure_collection_exists()
             logger.info("Connected to Milvus successfully")
 
-        except ImportError:
-            logger.error("pymilvus not installed. Run: pip install pymilvus")
-            raise
         except Exception as e:
             logger.error(f"Failed to connect to Milvus: {e}")
             raise

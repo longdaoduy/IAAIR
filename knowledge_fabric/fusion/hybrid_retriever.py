@@ -6,9 +6,9 @@ graph_store-based citation traversal with vector_store semantic search.
 """
 
 import logging
-from typing import List, Optional
+from typing import List
 
-from ..schemas import SearchResult, QueryPlan
+from models.schemas.schemas import SearchResult, QueryPlan
 from ..graph.neo4j_client import Neo4jGraphStore
 from ..vector.vector_store import VectorStore
 from ..attribution.attribution_tracker import AttributionTracker

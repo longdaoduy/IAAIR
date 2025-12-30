@@ -8,7 +8,7 @@ for scientific queries with complete citation chains.
 import logging
 from typing import List
 
-from ..schemas import EvidenceBundle, SearchResult
+from models.schemas.schemas import EvidenceBundle, SearchResult
 
 logger = logging.getLogger(__name__)
 

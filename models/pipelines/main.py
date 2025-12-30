@@ -11,8 +11,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import logging
 
-from ..knowledge_fabric import KnowledgeFabric
-from ..configurators import Settings
+from knowledge_fabric import KnowledgeFabric
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
@@ -146,7 +145,7 @@ async def search_documents(
         # Create query plan if weights provided
         query_plan = None
         if request.vector_weight is not None or request.graph_weight is not None:
-            from ..knowledge_fabric.schemas import QueryPlan
+            from models.schemas.schemas import QueryPlan
             query_plan = QueryPlan(
                 query=request.query,
                 vector_weight=request.vector_weight or settings.retrieval.default_vector_weight,
@@ -318,7 +317,7 @@ async def ingest_documents(
                 raise HTTPException(status_code=400, detail="Documents required for manual ingestions")
             
             # Convert document dicts to Document objects
-            from ..knowledge_fabric.schemas import Document
+            from models.schemas.schemas import Document
             documents = [Document(**doc_dict) for doc_dict in request.documents]
             
             # Start background ingestions

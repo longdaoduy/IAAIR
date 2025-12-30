@@ -7,10 +7,10 @@ with support for citation graph_store construction and entity linking.
 
 import logging
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from datetime import datetime
 
-from knowledge_fabric.schemas import Document, Author, Venue, Citation
+from models.schemas.schemas import Document
 from clients.graph_store import Neo4jClient
 from clients.vector_store import MilvusClient
 from knowledge_fabric.provenance.provenance_ledger import ProvenanceLedger
