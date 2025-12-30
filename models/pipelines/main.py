@@ -316,7 +316,7 @@ async def ingest_documents(
             if not request.documents:
                 raise HTTPException(status_code=400, detail="Documents required for manual ingestions")
             
-            # Convert document dicts to Document objects
+            # Convert document dicts to Paper objects
             from models.schemas.schemas import Document
             documents = [Document(**doc_dict) for doc_dict in request.documents]
             
@@ -353,7 +353,7 @@ async def get_document(
         document = await fabric.get_document_by_id(document_id)
         
         if not document:
-            raise HTTPException(status_code=404, detail="Document not found")
+            raise HTTPException(status_code=404, detail="Paper not found")
         
         return {
             "id": document.id,

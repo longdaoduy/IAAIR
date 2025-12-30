@@ -34,7 +34,7 @@ Explore relationships between medical concepts:
 - Semantic relationship types
 - Concept properties and attributes
 
-### 4. Document Enhancement
+### 4. Paper Enhancement
 Enhance biomedical documents with medical concept metadata:
 - Automatic concept extraction from titles and abstracts
 - Semantic type categorization
@@ -83,14 +83,14 @@ asyncio.run(main())
 
 ```python
 from knowledge_fabric.core import KnowledgeFabric
-from models.schemas.schemas import Document, Author
+from models.schemas.schemas import Paper, Author
 
 # Configure Knowledge Fabric with BioPortal API key
 config = Settings(bioportal_api_key="YOUR_API_KEY_HERE")
 kf = KnowledgeFabric(config=config)
 
 # Create sample document
-document = Document(
+document = Paper(
     id="sample_doc",
     title="Diabetes Management in Clinical Practice",
     abstract="This study examines treatment protocols for type 2 diabetes...",
@@ -190,10 +190,10 @@ Get hierarchical relationships for a concept.
 Enhance a document with SNOMED CT concepts.
 
 **Parameters:**
-- `document`: Document to enhance
+- `document`: Paper to enhance
 - `knowledge_fabric`: Knowledge Fabric instance
 
-**Returns:** Enhanced `Document` with medical concepts in metadata
+**Returns:** Enhanced `Paper` with medical concepts in metadata
 
 ### Data Structures
 
@@ -266,7 +266,7 @@ asyncio.run(analyze_medical_paper())
 ```python
 import asyncio
 from knowledge_fabric.core import KnowledgeFabric
-from models.schemas.schemas import Document, Author
+from models.schemas.schemas import Paper, Author
 
 
 async def build_medical_knowledge_graph():
@@ -275,13 +275,13 @@ async def build_medical_knowledge_graph():
 
     # Sample medical documents
     documents = [
-        Document(
+        Paper(
             id="doc1",
             title="Diabetes and Cardiovascular Disease",
             abstract="Study of diabetes complications...",
             authors=[Author(name="Dr. Jones")]
         ),
-        Document(
+        Paper(
             id="doc2",
             title="Hypertension Management Guidelines",
             abstract="Clinical guidelines for blood pressure control...",

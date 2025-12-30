@@ -13,9 +13,9 @@ from models.schemas.schemas import Document, Author, Venue, Citation, EvidenceBu
 
 __all__ = [
     "KnowledgeFabric",
-    "Document", 
+    "Paper",
     "Author",
     "Venue", 
-    "Citation",
+    "CitedBy",
     "EvidenceBundle"
 ]

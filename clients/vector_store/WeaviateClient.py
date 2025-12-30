@@ -80,7 +80,7 @@ class WeaviateClient(VectorClient):
     async def store_document(self, document: Document):
         """Store document in Weaviate."""
         if not document.abstract_embedding:
-            logger.warning(f"Document {document.id} missing embedding, skipping")
+            logger.warning(f"Paper {document.id} missing embedding, skipping")
             return
 
         data_object = {

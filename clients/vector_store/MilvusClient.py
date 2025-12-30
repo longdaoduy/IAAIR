@@ -89,7 +89,7 @@ class MilvusClient(VectorClient):
     async def store_document(self, document: Document):
         """Store document embeddings in Milvus."""
         if not document.title_embedding or not document.abstract_embedding:
-            logger.warning(f"Document {document.id} missing embeddings, skipping")
+            logger.warning(f"Paper {document.id} missing embeddings, skipping")
             return
 
         data = [{

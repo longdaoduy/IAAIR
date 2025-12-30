@@ -431,7 +431,7 @@ class SnomedCTIntegrator:
         Enhance a document with SNOMED CT medical concept annotations
         
         Args:
-            document: Document to enhance
+            document: Paper to enhance
             knowledge_fabric: Knowledge Fabric instance
             
         Returns:

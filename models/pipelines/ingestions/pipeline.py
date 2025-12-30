@@ -129,7 +129,7 @@ class IngestionPipeline:
             # 1. Entity linking (authors, venues, concepts)
             document = await self.entity_linker.process(document)
             
-            # 2. Citation extraction and linking
+            # 2. CitedBy extraction and linking
             document = await self.citation_extractor.process(document)
             
             # 3. Multi-modal content extraction (figures, tables)

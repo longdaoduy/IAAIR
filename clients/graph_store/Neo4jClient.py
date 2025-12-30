@@ -103,7 +103,7 @@ class Neo4jClient:
     async def _create_document_node(self, tx, document: Document):
         """Create a document node in the graph_store."""
         query = '''
-        MERGE (d:Document {id: $id})
+        MERGE (d:Paper {id: $id})
         SET d.title = $title,
             d.abstract = $abstract,
             d.document_type = $document_type,
@@ -177,7 +177,7 @@ class Neo4jClient:
     async def _create_authorship_relationship(self, tx, document_id: str, author_id: str):
         """Create authorship relationship between document and author."""
         query = '''
-        MATCH (d:Document {id: $document_id})
+        MATCH (d:Paper {id: $document_id})
         MATCH (a:Author {id: $author_id})
         MERGE (a)-[:AUTHORED]->(d)
         '''
@@ -190,7 +190,7 @@ class Neo4jClient:
     async def _create_publication_relationship(self, tx, document_id: str, venue_id: str):
         """Create publication relationship between document and venue."""
         query = '''
-        MATCH (d:Document {id: $document_id})
+        MATCH (d:Paper {id: $document_id})
         MATCH (v:Venue {id: $venue_id})
         MERGE (d)-[:PUBLISHED_IN]->(v)
         '''
@@ -203,8 +203,8 @@ class Neo4jClient:
     async def _create_citation_relationship(self, tx, citation: Citation):
         """Create citation relationship between documents."""
         query = '''
-        MATCH (citing:Document {id: $citing_id})
-        MATCH (cited:Document {id: $cited_id})
+        MATCH (citing:Paper {id: $citing_id})
+        MATCH (cited:Paper {id: $cited_id})
         MERGE (citing)-[c:CITES {
             context: $context,
             intent: $intent,
@@ -238,8 +238,8 @@ class Neo4jClient:
             Subgraph data with nodes and relationships
         """
         query = f'''
-        MATCH path = (center:Document {{id: $document_id}})
-                    -[:CITES*1..{depth}]-(connected:Document)
+        MATCH path = (center:Paper {{id: $document_id}})
+                    -[:CITES*1..{depth}]-(connected:Paper)
         RETURN path
         LIMIT 1000
         '''
@@ -281,8 +281,8 @@ class Neo4jClient:
     ) -> List[Dict[str, Any]]:
         """Find documents with similar citation patterns."""
         query = '''
-        MATCH (target:Document {id: $document_id})-[:CITES]->(cited:Document)
-        MATCH (similar:Document)-[:CITES]->(cited)
+        MATCH (target:Paper {id: $document_id})-[:CITES]->(cited:Paper)
+        MATCH (similar:Paper)-[:CITES]->(cited)
         WHERE similar.id <> target.id
         WITH similar, count(cited) as common_citations
         ORDER BY common_citations DESC
@@ -312,7 +312,7 @@ class Neo4jClient:
         """Get collaboration network for an author."""
         query = f'''
         MATCH path = (center:Author {{id: $author_id}})
-                    -[:AUTHORED]->(:Document)<-[:AUTHORED]-(collaborator:Author)
+                    -[:AUTHORED]->(:Paper)<-[:AUTHORED]-(collaborator:Author)
         WHERE center.id <> collaborator.id
         RETURN DISTINCT collaborator
         LIMIT 100
