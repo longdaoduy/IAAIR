@@ -9,7 +9,10 @@ import logging
 from typing import List, Dict, Any, Optional
 from neo4j import AsyncGraphDatabase, AsyncDriver
 
-from models.schemas.schemas import Document, Author, Venue, Citation
+from models.schemas.nodes.Paper import Paper
+from models.schemas.nodes.Author import Author
+from models.schemas.nodes.Venue import Venue
+from models.schemas.edges.CitedBy import CitedBy
 from models.configurators.GraphDBConfig import GraphDBConfig
 
 logger = logging.getLogger(__name__)
@@ -22,12 +25,12 @@ class Neo4jClient:
     Manages citation networks, author collaboration graphs, and
     concept hierarchies with optimized Cypher queries for retrieval.
     """
-    
+
     def __init__(self, config: GraphDBConfig):
         self.config = config
         self.driver: Optional[AsyncDriver] = None
         self._connection_pool = None
-    
+
     async def connect(self):
         """Establish connection to Neo4j database."""
         try:
@@ -37,123 +40,126 @@ class Neo4jClient:
                 max_connection_lifetime=self.config.max_connection_lifetime,
                 max_connection_pool_size=self.config.max_connection_pool_size
             )
-            
+
             # Verify connectivity
             await self.driver.verify_connectivity()
             logger.info("Successfully connected to Neo4j")
-            
+
         except Exception as e:
             logger.error(f"Failed to connect to Neo4j: {e}")
             raise
-    
+
     async def close(self):
         """Close the Neo4j driver connection."""
         if self.driver:
             await self.driver.close()
             logger.info("Neo4j connection closed")
-    
+
     async def health_check(self) -> bool:
         """Perform health check on the Neo4j connection."""
         try:
             if not self.driver:
                 await self.connect()
-            
+
             async with self.driver.session() as session:
                 result = await session.run("RETURN 1 AS health")
                 await result.single()
                 return True
-                
+
         except Exception as e:
             logger.error(f"Neo4j health check failed: {e}")
             return False
-    
-    async def store_document(self, document: Document):
+
+    async def store_paper(self, paper: Paper, authors: List[Author] = None, venue: Venue = None,
+                          citations: List[str] = None):
         """
-        Store a document and its relationships in the graph_store database.
+        Store a paper and its relationships in the graph_store database.
         
-        Creates nodes for the document, authors, venue, and citation relationships.
+        Creates nodes for the paper, authors, venue, and citation relationships.
         """
         async with self.driver.session() as session:
             try:
                 # Start transaction
-                async with session.begin_transaction() as tx:
-                    # Create document node
-                    await self._create_document_node(tx, document)
-                    
+                tx = await session.begin_transaction()
+                try:
+                    # Create paper node
+                    await self._create_paper_node(tx, paper)
+
                     # Create author nodes and relationships
-                    for author in document.authors:
-                        await self._create_author_node(tx, author)
-                        await self._create_authorship_relationship(tx, document.id, author.id)
-                    
+                    if authors:
+                        for author in authors:
+                            await self._create_author_node(tx, author)
+                            await self._create_authorship_relationship(tx, paper.id, author.id)
+
                     # Create venue node and relationship
-                    if document.venue:
-                        await self._create_venue_node(tx, document.venue)
-                        await self._create_publication_relationship(tx, document.id, document.venue.id)
-                    
+                    if venue:
+                        await self._create_venue_node(tx, venue)
+                        await self._create_publication_relationship(tx, paper.id, venue.id)
+
                     # Create citation relationships
-                    for citation in document.citations:
-                        await self._create_citation_relationship(tx, citation)
-                    
-                logger.debug(f"Stored document {document.id} in graph_store database")
-                
+                    if citations:
+                        for cited_paper_id in citations:
+                            await self._create_simple_citation_relationship(tx, paper.id, cited_paper_id)
+
+                    # Commit the transaction
+                    await tx.commit()
+                    logger.debug(f"Stored paper {paper.id} in graph_store database")
+
+                except Exception as e:
+                    # Rollback the transaction on error
+                    await tx.rollback()
+                    raise e
+                finally:
+                    await tx.close()
+
             except Exception as e:
-                logger.error(f"Failed to store document {document.id}: {e}")
+                logger.error(f"Failed to store paper {paper.id}: {e}")
                 raise
-    
-    async def _create_document_node(self, tx, document: Document):
-        """Create a document node in the graph_store."""
+
+    async def _create_paper_node(self, tx, paper: Paper, cited_by_count: int = 0):
+        """Create a paper node in the graph_store."""
         query = '''
-        MERGE (d:Paper {id: $id})
-        SET d.title = $title,
-            d.abstract = $abstract,
-            d.document_type = $document_type,
-            d.publication_date = $publication_date,
-            d.doi = $doi,
-            d.arxiv_id = $arxiv_id,
-            d.url = $url,
-            d.language = $language,
-            d.keywords = $keywords,
-            d.subjects = $subjects,
-            d.source = $source,
-            d.ingested_at = $ingested_at,
-            d.last_updated = $last_updated
+        MERGE (p:Paper {id: $id})
+        SET p.title = $title,
+            p.abstract = $abstract,
+            p.publication_date = $publication_date,
+            p.doi = $doi,
+            p.arxiv_id = $arxiv_id,
+            p.source = $source,
+            p.ingested_at = $ingested_at,
+            p.last_updated = $last_updated,
+            p.cited_by_count = $cited_by_count
         '''
-        
+
         await tx.run(query, {
-            "id": document.id,
-            "title": document.title,
-            "abstract": document.abstract,
-            "document_type": document.document_type.value if document.document_type else None,
-            "publication_date": document.publication_date.isoformat() if document.publication_date else None,
-            "doi": document.doi,
-            "arxiv_id": document.arxiv_id,
-            "url": document.url,
-            "language": document.language,
-            "keywords": document.keywords,
-            "subjects": document.subjects,
-            "source": document.source,
-            "ingested_at": document.ingested_at.isoformat(),
-            "last_updated": document.last_updated.isoformat()
+            "id": paper.id,
+            "title": paper.title,
+            "abstract": paper.abstract,
+            "publication_date": paper.publication_date.isoformat() if paper.publication_date else None,
+            "doi": paper.doi,
+            "arxiv_id": getattr(paper, 'arxiv_id', None),
+            "source": paper.source,
+            "ingested_at": paper.ingested_at.isoformat(),
+            "last_updated": paper.last_updated.isoformat(),
+            "cited_by_count": cited_by_count
         })
-    
+
     async def _create_author_node(self, tx, author: Author):
         """Create an author node in the graph_store."""
         query = '''
         MERGE (a:Author {id: $id})
         SET a.name = $name,
             a.orcid = $orcid,
-            a.affiliation = $affiliation,
             a.h_index = $h_index
         '''
-        
+
         await tx.run(query, {
             "id": author.id,
             "name": author.name,
             "orcid": author.orcid,
-            "affiliation": author.affiliation,
             "h_index": author.h_index
         })
-    
+
     async def _create_venue_node(self, tx, venue: Venue):
         """Create a venue node in the graph_store."""
         query = '''
@@ -164,7 +170,7 @@ class Neo4jClient:
             v.impact_factor = $impact_factor,
             v.publisher = $publisher
         '''
-        
+
         await tx.run(query, {
             "id": venue.id,
             "name": venue.name,
@@ -173,7 +179,7 @@ class Neo4jClient:
             "impact_factor": venue.impact_factor,
             "publisher": venue.publisher
         })
-    
+
     async def _create_authorship_relationship(self, tx, document_id: str, author_id: str):
         """Create authorship relationship between document and author."""
         query = '''
@@ -181,12 +187,12 @@ class Neo4jClient:
         MATCH (a:Author {id: $author_id})
         MERGE (a)-[:AUTHORED]->(d)
         '''
-        
+
         await tx.run(query, {
             "document_id": document_id,
             "author_id": author_id
         })
-    
+
     async def _create_publication_relationship(self, tx, document_id: str, venue_id: str):
         """Create publication relationship between document and venue."""
         query = '''
@@ -194,13 +200,13 @@ class Neo4jClient:
         MATCH (v:Venue {id: $venue_id})
         MERGE (d)-[:PUBLISHED_IN]->(v)
         '''
-        
+
         await tx.run(query, {
             "document_id": document_id,
             "venue_id": venue_id
         })
-    
-    async def _create_citation_relationship(self, tx, citation: Citation):
+
+    async def _create_citation_relationship(self, tx, citation: CitedBy):
         """Create citation relationship between documents."""
         query = '''
         MATCH (citing:Paper {id: $citing_id})
@@ -212,7 +218,7 @@ class Neo4jClient:
             created_at: $created_at
         }]->(cited)
         '''
-        
+
         await tx.run(query, {
             "citing_id": citation.citing_paper_id,
             "cited_id": citation.cited_paper_id,
@@ -221,11 +227,26 @@ class Neo4jClient:
             "confidence": citation.confidence,
             "created_at": citation.created_at.isoformat()
         })
-    
+
+    async def _create_simple_citation_relationship(self, tx, citing_paper_id: str, cited_paper_id: str):
+        """Create simple citation relationship between papers using IDs."""
+        from datetime import datetime
+        query = '''
+        MATCH (citing:Paper {id: $citing_id})
+        MATCH (cited:Paper {id: $cited_id})
+        MERGE (citing)-[:CITES {created_at: $created_at}]->(cited)
+        '''
+
+        await tx.run(query, {
+            "citing_id": citing_paper_id,
+            "cited_id": cited_paper_id,
+            "created_at": datetime.now().isoformat()
+        })
+
     async def get_citation_subgraph(
-        self,
-        document_id: str,
-        depth: int = 2
+            self,
+            document_id: str,
+            depth: int = 2
     ) -> Dict[str, Any]:
         """
         Get citation subgraph around a specific document.
@@ -243,22 +264,22 @@ class Neo4jClient:
         RETURN path
         LIMIT 1000
         '''
-        
+
         async with self.driver.session() as session:
             result = await session.run(query, {"document_id": document_id})
-            
+
             # Process results into subgraph structure
             nodes = {}
             edges = []
-            
+
             async for record in result:
                 path = record["path"]
-                
+
                 # Extract nodes and relationships from path
                 for node in path.nodes:
                     if node.id not in nodes:
                         nodes[node.id] = dict(node)
-                
+
                 for rel in path.relationships:
                     edges.append({
                         "source": rel.start_node.id,
@@ -266,18 +287,18 @@ class Neo4jClient:
                         "type": rel.type,
                         "properties": dict(rel)
                     })
-            
+
             return {
                 "center_document": document_id,
                 "nodes": list(nodes.values()),
                 "edges": edges,
                 "depth": depth
             }
-    
+
     async def find_similar_by_citations(
-        self,
-        document_id: str,
-        limit: int = 10
+            self,
+            document_id: str,
+            limit: int = 10
     ) -> List[Dict[str, Any]]:
         """Find documents with similar citation patterns."""
         query = '''
@@ -289,25 +310,25 @@ class Neo4jClient:
         LIMIT $limit
         RETURN similar, common_citations
         '''
-        
+
         async with self.driver.session() as session:
             result = await session.run(query, {
                 "document_id": document_id,
                 "limit": limit
             })
-            
+
             similar_docs = []
             async for record in result:
                 doc_data = dict(record["similar"])
                 doc_data["common_citations"] = record["common_citations"]
                 similar_docs.append(doc_data)
-            
+
             return similar_docs
-    
+
     async def get_author_collaboration_network(
-        self,
-        author_id: str,
-        depth: int = 2
+            self,
+            author_id: str,
+            depth: int = 2
     ) -> Dict[str, Any]:
         """Get collaboration network for an author."""
         query = f'''
@@ -317,14 +338,14 @@ class Neo4jClient:
         RETURN DISTINCT collaborator
         LIMIT 100
         '''
-        
+
         async with self.driver.session() as session:
             result = await session.run(query, {"author_id": author_id})
-            
+
             collaborators = []
             async for record in result:
                 collaborators.append(dict(record["collaborator"]))
-            
+
             return {
                 "center_author": author_id,
                 "collaborators": collaborators

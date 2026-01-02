@@ -1,0 +1,31 @@
+[
+  {
+    "paper": {
+      "id": "W3038568908",
+      "title": "Radiation Resistant Camera System for Monitoring Deuterium Plasma Discharges in the Large Helical Device",
+      "abstract": "",
+      "publication_date": "2020-01-01T00:00:00",
+      "doi": "10.1585/pfr.15.2402039",
+      "source": "OpenAlex",
+      "ingested_at": "2026-01-01T09:36:58.960258"
+    },
+    "authors": [
+      {
+        "id": "A5039600762",
+        "name": "M. Shoji",
+        "orcid": "0000-0003-0655-7347"
+      }
+    ],
+    "citations": [
+      "W2783171299",
+      "W2945236265",
+      "W2151240562",
+      "W2069091362",
+      "W2590699823",
+      "W2922014310",
+      "W2806477398",
+      "W2527753843"
+    ],
+    "cited_by_count": 801215
+  }
+]

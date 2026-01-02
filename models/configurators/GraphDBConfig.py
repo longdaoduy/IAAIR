@@ -8,7 +8,7 @@ class GraphDBConfig:
     username: str = "neo4j"
     password: str = "LkIC3FNqbGTGHtkxiYujARXY6IUZnvyvyrMFJBeagCI"
     database: str = "neo4j"
-    uri: str = "https://4d600688.databases.neo4j.io/db/neo4j/query/v2"
+    uri: str = "neo4j+s://4d600688.databases.neo4j.io"
     max_connection_lifetime: int = 3600
     max_connection_pool_size: int = 50
 

@@ -9,8 +9,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
 import uuid
-from models.schemas.nodes.Author import Author
-
 
 # class DocumentType(Enum):
 #     """Types of documents in the knowledge fabric."""

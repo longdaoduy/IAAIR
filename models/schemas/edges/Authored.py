@@ -7,7 +7,7 @@ from enum import Enum
 import uuid
 
 @dataclass
-class WrittenBy:
+class Authored:
     """Represents a citation relationship between papers."""
     paper: Paper
     author: Author
