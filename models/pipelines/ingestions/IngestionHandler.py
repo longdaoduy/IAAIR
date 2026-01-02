@@ -5,7 +5,6 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import json
 import asyncio
-
 from models.configurators.OpenAlexConfig import OpenAlexConfig
 from models.configurators.GraphDBConfig import GraphDBConfig
 from models.schemas.nodes.Paper import Paper
@@ -13,7 +12,7 @@ from models.schemas.nodes.Author import Author
 from models.schemas.edges.CitedBy import CitedBy
 from clients.graph_store.Neo4jClient import Neo4jClient
 
-class OpenAplex():
+class IngestionHandler():
     def __init__(self):
         self.config = OpenAlexConfig()
         self.graph_config = GraphDBConfig()
@@ -85,7 +84,7 @@ class OpenAplex():
                     pub_date = datetime(work['publication_year'], 1, 1)
                 except:
                     pass
-            
+
             # Create Paper object
             paper = Paper(
                 id=work.get('id', '').replace('https://openalex.org/', ''),

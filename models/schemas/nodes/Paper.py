@@ -10,16 +10,12 @@ from datetime import datetime
 from typing import List, Optional
 import uuid
 
-from models.schemas.nodes import PaperMetadata
-
-
-# class DocumentType(Enum):
-#     """Types of documents in the knowledge fabric."""
-#     PAPER = "paper"
-#     ARTICLE = "article"
-#     PREPRINT = "preprint"
-#     BOOK_CHAPTER = "book_chapter"
-#     CONFERENCE_PAPER = "conference_paper"
+@dataclass
+class PaperMetadata:
+    """Metadata describing how two papers were matched or aligned."""
+    openalex_id: Optional[str] = None
+    semantic_scholar_id: Optional[str] = None
+    confidence: float = 1.0
 
 @dataclass
 class Paper:
@@ -27,13 +23,14 @@ class Paper:
     id: str
     title: str
     abstract: str
+    source: str
 
     # Publication details
     publication_date: Optional[datetime] = None
     doi: Optional[str] = None
     arxiv_id: Optional[str] = None
 
-    metadata: PaperMetadata
+    # metadata: PaperMetadata
     ingested_at: datetime = field(default_factory=datetime.now)
     last_updated: datetime = field(default_factory=datetime.now)
 

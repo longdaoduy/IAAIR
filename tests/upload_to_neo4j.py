@@ -2,14 +2,14 @@
 """
 Script to upload OpenAlex papers data to Neo4j database.
 
-This script loads papers data from the JSON file created by OpenAplex
+This script loads papers data from the JSON file created by IngestionHandler
 and uploads it to the Neo4j graph database.
 """
 
 import json
 import asyncio
 from datetime import datetime
-from models.pipelines.ingestions.OpenAplex import OpenAplex
+from models.pipelines.ingestions.IngestionHandler import IngestionHandler
 from models.schemas.nodes.Paper import Paper
 from models.schemas.nodes.Author import Author
 
@@ -60,8 +60,8 @@ def load_papers_from_json(filename: str):
 
 async def main():
     """Main function to upload papers to Neo4j."""
-    # Initialize OpenAplex instance
-    openalex = OpenAplex()
+    # Initialize IngestionHandler instance
+    openalex = IngestionHandler()
     
     # Load papers from JSON file (assuming it exists)
     json_filename = "/home/dnhoa/IAAIR/IAAIR/tests/openalex_papers_20260101_093658.json"

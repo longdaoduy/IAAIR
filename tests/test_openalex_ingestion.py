@@ -2,22 +2,22 @@
 """
 Test script for OpenAlex paper ingestion functionality.
 
-This script demonstrates how to use the OpenAplex class to fetch
+This script demonstrates how to use the IngestionHandler class to fetch
 500-1000 papers from OpenAlex with title, year, authors, DOI, and citations.
 """
 
-from models.pipelines.ingestions.OpenAplex import OpenAplex
+from models.pipelines.ingestions.IngestionHandler import IngestionHandler
 
 def main():
     """Test the OpenAlex paper ingestion functionality."""
     print("=== OpenAlex Paper Ingestion Test ===\n")
     
     # Initialize the OpenAlex ingestion client
-    openalex = OpenAplex()
+    openalex = IngestionHandler()
     
     # Test with a smaller number first (50 papers for quick testing)
     print("Testing with 1 papers first...\n")
-    test_papers = openalex.pull_OpenAlex_Paper(count=1, save_to_file=True)
+    test_papers = openalex.pull_OpenAlex_Paper(count=5, save_to_file=True)
     
     if test_papers:
         print(f"✅ Successfully fetched {len(test_papers)} papers")

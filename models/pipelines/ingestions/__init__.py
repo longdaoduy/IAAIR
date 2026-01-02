@@ -1,5 +1,5 @@
 """Ingestion module initialization."""
 
-from .OpenAplex import OpenAplex
+from .IngestionHandler import IngestionHandler
 
-__all__ = ["OpenAplex"]
+__all__ = ["IngestionHandler"]
