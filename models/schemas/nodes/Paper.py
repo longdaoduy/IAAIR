@@ -10,6 +10,9 @@ from datetime import datetime
 from typing import List, Optional
 import uuid
 
+from models.schemas.nodes import PaperMetadata
+
+
 # class DocumentType(Enum):
 #     """Types of documents in the knowledge fabric."""
 #     PAPER = "paper"
@@ -30,8 +33,7 @@ class Paper:
     doi: Optional[str] = None
     arxiv_id: Optional[str] = None
 
-    # Provenance
-    source: Optional[str] = None  # OpenAlex, Semantic Scholar, etc.
+    metadata: PaperMetadata
     ingested_at: datetime = field(default_factory=datetime.now)
     last_updated: datetime = field(default_factory=datetime.now)
 
