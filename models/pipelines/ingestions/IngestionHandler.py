@@ -10,6 +10,7 @@ from models.configurators.GraphDBConfig import GraphDBConfig
 from models.schemas.nodes.Paper import Paper
 from models.schemas.nodes.Author import Author
 from clients.graph_store.Neo4jClient import Neo4jClient
+from tqdm import tqdm
 
 
 class IngestionHandler():
@@ -153,7 +154,7 @@ class IngestionHandler():
 
         base_params = {
             "per-page": per_page,
-            "filter": "has_doi:true,publication_year:2023",
+            "filter": "has_doi:true",
             "select": "id,title,abstract,publication_year,doi,authorships,referenced_works,cited_by_count"
         }
 
@@ -167,7 +168,7 @@ class IngestionHandler():
 
         print(f"Fetching {count} papers from OpenAlex...")
 
-        for page in range(1, pages_needed + 1):
+        for page in tqdm(range(1, pages_needed + 1)):
             params = dict()
             params["page"] = page
 
@@ -262,10 +263,10 @@ class IngestionHandler():
 
         print(f"Starting paper ingestion from OpenAlex (target: {count} papers)")
 
-        # Test API connection first
-        if not self.test_api_connection():
-            print("API connection failed. Aborting ingestion.")
-            return []
+        # # Test API connection first
+        # if not self.test_api_connection():
+        #     print("API connection failed. Aborting ingestion.")
+        #     return []
 
         # Fetch papers
         papers_data = self.fetch_papers(count, filters)
