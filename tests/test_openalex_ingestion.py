@@ -17,7 +17,7 @@ def main():
     
     # Test with a smaller number first (50 papers for quick testing)
     print("Testing with 1 papers first...\n")
-    test_papers = openalex.pull_OpenAlex_Paper(count=5, save_to_file=True)
+    test_papers = openalex.pull_OpenAlex_Paper(count=1, save_to_file=True)
     
     if test_papers:
         print(f"✅ Successfully fetched {len(test_papers)} papers")

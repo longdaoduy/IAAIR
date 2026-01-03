@@ -7,15 +7,7 @@ citations, evidence bundles, and provenance tracking.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
-import uuid
-
-@dataclass
-class PaperMetadata:
-    """Metadata describing how two papers were matched or aligned."""
-    openalex_id: Optional[str] = None
-    semantic_scholar_id: Optional[str] = None
-    confidence: float = 1.0
+from typing import List, Optional, Dict
 
 @dataclass
 class Paper:
@@ -23,7 +15,6 @@ class Paper:
     id: str
     title: str
     abstract: str
-    source: str
 
     # Publication details
     publication_date: Optional[datetime] = None
@@ -33,7 +24,4 @@ class Paper:
     # metadata: PaperMetadata
     ingested_at: datetime = field(default_factory=datetime.now)
     last_updated: datetime = field(default_factory=datetime.now)
-
-    def __post_init__(self):
-        if not self.id:
-            self.id = str(uuid.uuid4())
+    metadata: Dict = field(default_factory=dict)
