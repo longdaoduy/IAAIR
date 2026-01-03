@@ -4,9 +4,6 @@ class SemanticScholarConfig:
 
     BASE_URL = "https://api.semanticscholar.org/graph/v1"
 
-    # Get your API key from: https://www.semanticscholar.org/product/api#api-key
-    # Without API key: 100 requests per 5 minutes
-    # With API key: 1000 requests per 5 minutes
     API_KEY = "PkEo5fAuu37zVik3hcGuG8se7wlMgD1D2UfWTm2V"  # Set your API key here or use environment variable
 
     # Request headers
@@ -17,7 +14,7 @@ class SemanticScholarConfig:
             "Accept": "application/json"
         }
         if self.API_KEY:
-            headers["x-pipelines-key"] = self.API_KEY
+            headers["x-api-key"] = self.API_KEY
         return headers
 
     # Rate limiting based on API key availability

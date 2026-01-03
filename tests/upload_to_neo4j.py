@@ -64,7 +64,7 @@ async def main():
     openalex = IngestionHandler()
     
     # Load papers from JSON file (assuming it exists)
-    json_filename = "/home/dnhoa/IAAIR/IAAIR/tests/openalex_papers_20260101_093658.json"
+    json_filename = "/home/dnhoa/IAAIR/IAAIR/openalex_papers_20260103_113509.json"
     
     try:
         papers_data = load_papers_from_json(json_filename)

@@ -15,8 +15,8 @@ def main():
     # Initialize the OpenAlex ingestion client
     openalex = IngestionHandler()
     
-    # Test with a smaller number first (50 papers for quick testing)
-    print("Testing with 1 papers first...\n")
+    # Test with a smaller number first (1 paper for quick testing)
+    print("Testing with 1 paper first...\n")
     test_papers = openalex.pull_OpenAlex_Paper(count=1, save_to_file=True)
     
     if test_papers:
@@ -29,16 +29,37 @@ def main():
             print(f"Title: {sample['paper'].title}")
             print(f"Year: {sample['paper'].publication_date.year if sample['paper'].publication_date else 'Unknown'}")
             print(f"DOI: {sample['paper'].doi}")
+            print(f"Abstract: {sample['paper'].abstract[:200] if sample['paper'].abstract else 'No abstract'}...")
             print(f"Authors: {[author.name for author in sample['authors']]}")
             print(f"Citations: {len(sample['citations'])} referenced works")
         
-        # # Now fetch the full 1000 papers
+        # Test Semantic Scholar enrichment
+        print("\n" + "="*50)
+        print("Testing Semantic Scholar enrichment...")
+        
+        enriched_papers = openalex.enrich_papers_with_semantic_scholar(test_papers)
+        
+        if enriched_papers:
+            sample_enriched = enriched_papers[0]
+            print(f"\n=== Enriched Paper Data ===")
+            print(f"Title: {sample_enriched['paper'].title}")
+            print(f"Abstract (after enrichment): {sample_enriched['paper'].abstract[:200] if sample_enriched['paper'].abstract else 'Still no abstract'}...")
+            
+            if "semantic_scholar" in sample_enriched:
+                print(f"Semantic Scholar ID: {sample_enriched['semantic_scholar'].get('paperId', 'N/A')}")
+                print(f"Semantic Scholar Citation Count: {sample_enriched['semantic_scholar'].get('citationCount', 'N/A')}")
+        
+        # # Now fetch the full 1000 papers and enrich them
         # print("\n" + "="*50)
-        # print("Now fetching 1000 papers (this may take a few minutes)...")
-        # full_papers = openalex.pull_OpenAlex_Paper(count=1000, save_to_file=True)
+        # print("Now fetching 100 papers and enriching with Semantic Scholar (this may take several minutes)...")
+        # full_papers = openalex.pull_OpenAlex_Paper(count=100, save_to_file=True)
         #
         # if full_papers:
-        #     print(f"✅ Successfully completed full ingestion of {len(full_papers)} papers")
+        #     print(f"✅ Successfully fetched {len(full_papers)} papers")
+        #     
+        #     # Enrich with Semantic Scholar
+        #     enriched_full_papers = openalex.enrich_papers_with_semantic_scholar(full_papers)
+        #     print(f"✅ Successfully completed enrichment of {len(enriched_full_papers)} papers")
         # else:
         #     print("❌ Full ingestion failed")
     else:

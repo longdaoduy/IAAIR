@@ -10,6 +10,7 @@ from models.configurators.GraphDBConfig import GraphDBConfig
 from models.schemas.nodes.Paper import Paper
 from models.schemas.nodes.Author import Author
 from clients.graph_store.Neo4jClient import Neo4jClient
+from clients.semantic_scholar.SemanticScholarClient import SemanticScholarClient
 from tqdm import tqdm
 
 
@@ -19,6 +20,7 @@ class IngestionHandler():
         self.graph_config = GraphDBConfig()
         self.nums_papers_to_pull = 1
         self.neo4j_client = None
+        self.semantic_scholar_client = SemanticScholarClient()
 
     def make_openalex_request(self, endpoint: str, params: Dict = None, delay: bool = True) -> Dict:
         """
@@ -389,3 +391,126 @@ class IngestionHandler():
             bool: Success status
         """
         return asyncio.run(self.upload_papers_to_neo4j(papers_data))
+    
+    def enrich_papers_with_semantic_scholar(self, papers_data: List[Dict], save_to_file: bool = True) -> List[Dict]:
+        """
+        Enrich papers data with abstracts and additional information from Semantic Scholar.
+        
+        Args:
+            papers_data: List of paper data dictionaries from OpenAlex
+            save_to_file: Whether to save the enriched results to a file
+            
+        Returns:
+            List of enriched paper data
+        """
+        print(f"Starting paper enrichment with Semantic Scholar...")
+        
+        # Use the Semantic Scholar client to enrich papers
+        enriched_papers = self.semantic_scholar_client.enrich_papers_with_abstracts(papers_data)
+        
+        # Save to file if requested
+        if save_to_file and enriched_papers:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"enriched_openalex_papers_{timestamp}.json"
+            self._save_enriched_papers_to_json(enriched_papers, filename)
+        
+        return enriched_papers
+    
+    def _save_enriched_papers_to_json(self, papers_data: List[Dict], filename: str):
+        """Save enriched papers data to a JSON file."""
+        # Convert dataclass objects to dictionaries for JSON serialization
+        json_data = []
+        
+        for paper_data in papers_data:
+            json_paper = {
+                "paper": {
+                    "id": paper_data["paper"].id,
+                    "title": paper_data["paper"].title,
+                    "abstract": paper_data["paper"].abstract,
+                    "publication_date": paper_data["paper"].publication_date.isoformat() if paper_data["paper"].publication_date else None,
+                    "doi": paper_data["paper"].doi,
+                    "ingested_at": paper_data["paper"].ingested_at.isoformat()
+                },
+                "authors": [
+                    {
+                        "id": author.id,
+                        "name": author.name,
+                        "orcid": author.orcid
+                    } for author in paper_data["authors"]
+                ],
+                "citations": paper_data["citations"],
+                "cited_by_count": paper_data["cited_by_count"]
+            }
+            
+            # Add Semantic Scholar enrichment data if available
+            if "semantic_scholar" in paper_data:
+                json_paper["semantic_scholar"] = paper_data["semantic_scholar"]
+            
+            json_data.append(json_paper)
+        
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"Saved {len(json_data)} enriched papers to {filename}")
+    
+    def load_papers_from_json(self, filename: str) -> List[Dict]:
+        """
+        Load papers data from JSON file and convert back to proper format.
+        
+        Args:
+            filename: JSON file containing papers data
+            
+        Returns:
+            List of paper data dictionaries
+        """
+        print(f"Loading papers data from {filename}...")
+        
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                json_data = json.load(f)
+            
+            papers_data = []
+            for item in json_data:
+                # Reconstruct Paper object
+                paper_data = item["paper"]
+                paper = Paper(
+                    id=paper_data["id"],
+                    title=paper_data["title"],
+                    abstract=paper_data["abstract"],
+                    publication_date=datetime.fromisoformat(paper_data["publication_date"]) if paper_data["publication_date"] else None,
+                    doi=paper_data["doi"],
+                    source=paper_data["source"],
+                    ingested_at=datetime.fromisoformat(paper_data["ingested_at"]),
+                    last_updated=datetime.now()
+                )
+                
+                # Reconstruct Author objects
+                authors = []
+                for author_data in item["authors"]:
+                    author = Author(
+                        id=author_data["id"],
+                        name=author_data["name"],
+                        orcid=author_data["orcid"]
+                    )
+                    authors.append(author)
+                
+                # Reconstruct full paper data structure
+                reconstructed_data = {
+                    "paper": paper,
+                    "authors": authors,
+                    "citations": item["citations"],
+                    "cited_by_count": item["cited_by_count"]
+                }
+                
+                # Add Semantic Scholar data if available
+                if "semantic_scholar" in item:
+                    reconstructed_data["semantic_scholar"] = item["semantic_scholar"]
+                
+                papers_data.append(reconstructed_data)
+            
+            print(f"Loaded {len(papers_data)} papers from JSON file")
+            return papers_data
+            
+        except Exception as e:
+            print(f"Error loading papers from {filename}: {e}")
+            return []
