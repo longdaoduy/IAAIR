@@ -16,11 +16,18 @@ from tqdm import tqdm
 
 class IngestionHandler():
     def __init__(self):
-        self.config = OpenAlexConfig()
+        self.openalex_config = OpenAlexConfig()
         self.graph_config = GraphDBConfig()
         self.nums_papers_to_pull = 1
         self.neo4j_client = None
         self.semantic_scholar_client = SemanticScholarClient()
+
+    async def _initialize_neo4j_client(self):
+        """Initialize and connect to Neo4j client."""
+        if self.neo4j_client is None:
+            self.neo4j_client = Neo4jClient(self.graph_config)
+            await self.neo4j_client.connect()
+        return self.neo4j_client
 
     def make_openalex_request(self, endpoint: str, params: Dict = None, delay: bool = True) -> Dict:
         """
@@ -38,15 +45,15 @@ class IngestionHandler():
             params = {}
 
         # Build URL
-        url = urljoin(self.config.BASE_URL, endpoint)
+        url = urljoin(self.openalex_config.BASE_URL, endpoint)
 
         try:
             # Rate limiting
             if delay:
-                time.sleep(self.config.REQUEST_DELAY)
+                time.sleep(self.openalex_config.REQUEST_DELAY)
 
             # Make request
-            response = requests.get(url, headers=self.config.HEADERS, params=params)
+            response = requests.get(url, headers=self.openalex_config.HEADERS, params=params)
             response.raise_for_status()
 
             return response.json()
@@ -299,13 +306,6 @@ class IngestionHandler():
             print(f"Average citations per paper: {total_citations / len(papers_data):.1f}")
 
         return papers_data
-
-    async def _initialize_neo4j_client(self):
-        """Initialize and connect to Neo4j client."""
-        if self.neo4j_client is None:
-            self.neo4j_client = Neo4jClient(self.graph_config)
-            await self.neo4j_client.connect()
-        return self.neo4j_client
 
     async def upload_papers_to_neo4j(self, papers_data: List[Dict]) -> bool:
         """
