@@ -26,8 +26,8 @@ class Neo4jClient:
     concept hierarchies with optimized Cypher queries for retrieval.
     """
 
-    def __init__(self, config: GraphDBConfig):
-        self.config = config
+    def __init__(self):
+        self.config = GraphDBConfig()
         self.driver: Optional[AsyncDriver] = None
         self._connection_pool = None
 

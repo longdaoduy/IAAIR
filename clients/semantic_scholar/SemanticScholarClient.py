@@ -208,7 +208,9 @@ class SemanticScholarClient:
                     "citationCount": s2_paper.get("citationCount", 0),
                     "source": "SemanticScholar"
                 }
-                
+
+                paper_data["paper"].metadata["semantic_scholar_id"] = s2_paper.get("paperId")
+
                 enriched_count += 1
                 print(f"  ✅ Enriched: {paper.title[:60]}...")
                 
