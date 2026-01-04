@@ -53,6 +53,7 @@ class IngestionHandler():
                         "paper"].publication_date else None,
                     "doi": paper_data["paper"].doi,
                     "metadata": paper_data["paper"].metadata,
+                    "venue": paper_data["paper"].venue,
                     "ingested_at": paper_data["paper"].ingested_at.isoformat()
                 },
                 "authors": [

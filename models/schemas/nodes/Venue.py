@@ -28,6 +28,11 @@ class Venue:
     issn: Optional[str] = None
     impact_factor: Optional[float] = None
     publisher: Optional[str] = None
+    
+    # Tracking fields
+    ingested_at: datetime = field(default_factory=datetime.now)
+    last_updated: datetime = field(default_factory=datetime.now)
+    metadata: Dict = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.id:

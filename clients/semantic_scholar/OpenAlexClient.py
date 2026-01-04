@@ -81,6 +81,12 @@ class OpenAlexClient:
 
             abstract = work.get('abstract', '') or ''
             doi = work.get('doi', '').replace('https://doi.org/', '') if work.get('doi') else None
+            
+            # Extract PMID from external IDs
+            pmid = None
+            external_ids = work.get('ids', {})
+            if external_ids and external_ids.get('pmid'):
+                pmid = external_ids.get('pmid').replace('https://pubmed.ncbi.nlm.nih.gov/', '')
 
             # Extract publication year
             pub_date = None
@@ -97,6 +103,7 @@ class OpenAlexClient:
                 abstract=abstract,
                 publication_date=pub_date,
                 doi=doi,
+                pmid=pmid,
                 source="OpenAlex",
                 metadata={
                     'openalex_id': work.get('id', '').replace('https://openalex.org/', ''),
@@ -123,7 +130,10 @@ class OpenAlexClient:
                 id=author_data.get('id', '').replace('https://openalex.org/', ''),
                 name=author_data.get('display_name', ''),
                 orcid=author_data.get('orcid', '').replace('https://orcid.org/', '') if author_data.get(
-                    'orcid') else None
+                    'orcid') else None,
+                metadata={
+                    'openalex_id': author_data.get('id', '').replace('https://openalex.org/', ''),
+                }
             )
 
             authors.append(author)
@@ -178,7 +188,10 @@ class OpenAlexClient:
                 name=venue_name,
                 venue_type=venue_type,
                 issn=source.get('issn_l') or (source.get('issn', [None])[0] if source.get('issn') else None),
-                publisher=source.get('host_organization_name')
+                publisher=source.get('host_organization_name'),
+                metadata={
+                    'openalex_id': source.get('id', '').replace('https://openalex.org/', ''),
+                }
             )
             
             return venue
@@ -205,7 +218,7 @@ class OpenAlexClient:
         base_params = {
             "per-page": per_page,
             "filter": "has_doi:true",
-            "select": "id,title,abstract,publication_year,doi,authorships,referenced_works,cited_by_count,primary_location,best_oa_location,locations"
+            "select": "id,title,abstract,publication_year,doi,ids,authorships,referenced_works,cited_by_count,primary_location,best_oa_location,locations"
         }
 
         # Add custom filters if provided

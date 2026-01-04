@@ -20,6 +20,7 @@ class Paper:
     # Publication details
     publication_date: Optional[datetime] = None
     doi: Optional[str] = None
+    pmid: Optional[str] = None
     arxiv_id: Optional[str] = None
 
     # metadata: PaperMetadata
