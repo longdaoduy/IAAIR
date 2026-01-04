@@ -24,7 +24,7 @@ def main():
         print(f"❌ JSON file '{json_filename}' not found.")
         
         # List available JSON files
-        json_files = [f for f in os.listdir('.') if f.startswith('openalex_papers_') and f.endswith('.json')]
+        json_files = [f for f in os.listdir('..') if f.startswith('openalex_papers_') and f.endswith('.json')]
         if json_files:
             print("\nAvailable OpenAlex JSON files:")
             for i, file in enumerate(json_files, 1):

@@ -9,9 +9,8 @@ from OpenAlex data.
 import requests
 import time
 import json
-from typing import Dict, List, Optional, Any
-from urllib.parse import urljoin
-
+from typing import Dict, List, Optional
+from utils.similarity import compute_confidence
 from models.configurators.SemanticScholarConfig import SemanticScholarConfig
 
 
@@ -68,6 +67,7 @@ class SemanticScholarClient:
                     param_parts.append(f"{key}={value}")
                 
                 full_url = f"{url}?{'&'.join(param_parts)}"
+                print(full_url)
                 response = requests.get(full_url, headers=headers)
             else:
                 # Make regular request for other endpoints
@@ -85,40 +85,7 @@ class SemanticScholarClient:
                     print("Rate limit exceeded. Waiting longer...")
                     time.sleep(10)  # Wait 10 seconds on rate limit
             return None
-    
-    def get_paper_by_doi(self, doi: str, fields: List[str] = None) -> Optional[Dict]:
-        """
-        Get paper information by DOI from Semantic Scholar.
-        
-        Args:
-            doi: DOI of the paper
-            fields: List of fields to retrieve
-            
-        Returns:
-            Paper data dictionary or None if not found
-        """
-        if not doi:
-            return None
-            
-        if fields is None:
-            fields = ["paperId", "title", "abstract", "year", "authors", "citationCount"]
-        
-        # Clean DOI - remove https://doi.org/ prefix if present
-        clean_doi = doi.replace("https://doi.org/", "")
-        
-        # Use the direct paper endpoint with DOI
-        endpoint = f"paper/DOI:{clean_doi}"
-        params = {
-            "fields": ",".join(fields)
-        }
-        
-        try:
-            response = self.make_request(endpoint, params)
-            return response
-        except Exception as e:
-            print(f"Error fetching paper by DOI {doi}: {e}")
-            return None
-    
+
     def get_paper_by_title(self, title: str, fields: List[str] = None, limit: int = 1) -> Optional[Dict]:
         """
         Search for a paper by title using Semantic Scholar search.
@@ -135,7 +102,7 @@ class SemanticScholarClient:
             return None
             
         if fields is None:
-            fields = ["paperId", "title", "abstract", "year", "authors", "citationCount"]
+            fields = ["paperId", "title", "abstract", "year", "authors", "citationCount","externalIds"]
         
         # Use the title exactly as provided, no processing
         params = {
@@ -203,13 +170,17 @@ class SemanticScholarClient:
                 enhanced_paper_data["paper"] = paper
                 
                 # Store additional Semantic Scholar metadata
-                enhanced_paper_data["semantic_scholar"] = {
-                    "paperId": s2_paper.get("paperId"),
+                semantic_scholar_data = {
+                    "semantic_scholar_id": s2_paper.get("paperId"),
                     "citationCount": s2_paper.get("citationCount", 0),
-                    "source": "SemanticScholar"
+                    "title": s2_paper.get("title"),
+                    "doi": s2_paper.get("externalIds").get("DOI"),
+                    "mag": s2_paper.get("externalIds").get("MAG"),
+                    "pmid": s2_paper.get("externalIds").get("PMID"),
                 }
 
-                paper_data["paper"].metadata["semantic_scholar_id"] = s2_paper.get("paperId")
+                enhanced_paper_data["paper"].metadata.update(semantic_scholar_data)
+                enhanced_paper_data["paper"].metadata["confidence"] = compute_confidence(paper_data["paper"],semantic_scholar_data)
 
                 enriched_count += 1
                 print(f"  ✅ Enriched: {paper.title[:60]}...")
@@ -217,7 +188,8 @@ class SemanticScholarClient:
             else:
                 failed_count += 1
                 print(f"  ❌ No abstract found for: {paper.title[:60]}...")
-            
+                print(f"  ❌ No abstract found for: {paper.title[:60]}...")
+
             enriched_papers.append(enhanced_paper_data)
             
             # Save progress every 50 papers
