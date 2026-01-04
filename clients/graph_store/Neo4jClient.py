@@ -165,7 +165,7 @@ class Neo4jClient:
         query = '''
         MERGE (v:Venue {id: $id})
         SET v.name = $name,
-            v.venue_type = $venue_type,
+            v.type = $type,
             v.issn = $issn,
             v.impact_factor = $impact_factor,
             v.publisher = $publisher
@@ -174,7 +174,7 @@ class Neo4jClient:
         await tx.run(query, {
             "id": venue.id,
             "name": venue.name,
-            "venue_type": venue.venue_type.value if venue.venue_type else None,
+            "type": venue.type.value if venue.type else None,
             "issn": venue.issn,
             "impact_factor": venue.impact_factor,
             "publisher": venue.publisher

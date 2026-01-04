@@ -53,14 +53,24 @@ class IngestionHandler():
                         "paper"].publication_date else None,
                     "doi": paper_data["paper"].doi,
                     "metadata": paper_data["paper"].metadata,
-                    "venue": paper_data["paper"].venue,
+                    "pmid": paper_data["paper"].pmid,
                     "ingested_at": paper_data["paper"].ingested_at.isoformat()
+                },
+                "venue": {
+                    "id": paper_data["venue"].id,
+                    "name": paper_data["venue"].name,
+                    "type": paper_data["venue"].type.name,
+                    "issn": paper_data["venue"].issn,
+                    "impact_factor": paper_data["venue"].impact_factor,
+                    "publisher": paper_data["venue"].publisher,
+                    "metadata": paper_data["venue"].metadata,
                 },
                 "authors": [
                     {
                         "id": author.id,
                         "name": author.name,
-                        "orcid": author.orcid
+                        "orcid": author.orcid,
+                        "metadata": author.metadata,
                     } for author in paper_data["authors"]
                 ],
                 "citations": paper_data["citations"],
@@ -210,7 +220,7 @@ class IngestionHandler():
             bool: Success status
         """
         return asyncio.run(self.upload_papers_to_neo4j(papers_data))
-    
+
     def enrich_papers_with_semantic_scholar(self, papers_data: List[Dict], save_to_file: bool = True) -> List[Dict]:
         """
         Enrich papers data with abstracts and additional information from Semantic Scholar.
@@ -223,114 +233,92 @@ class IngestionHandler():
             List of enriched paper data
         """
         print(f"Starting paper enrichment with Semantic Scholar...")
-        
+
         # Use the Semantic Scholar client to enrich papers
         enriched_papers = self.semantic_scholar_client.enrich_papers_with_abstracts(papers_data)
-        
+
         # Save to file if requested
         if save_to_file and enriched_papers:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"enriched_openalex_papers_{timestamp}.json"
-            self._save_enriched_papers_to_json(enriched_papers, filename)
-        
-        return enriched_papers
-    
-    def _save_enriched_papers_to_json(self, papers_data: List[Dict], filename: str):
-        """Save enriched papers data to a JSON file."""
-        # Convert dataclass objects to dictionaries for JSON serialization
-        json_data = []
+            self.save_papers_to_json(enriched_papers, filename)
 
-        for paper_data in papers_data:
-            json_paper = {
-                "paper": {
-                    "id": paper_data["paper"].id,
-                    "title": paper_data["paper"].title,
-                    "abstract": paper_data["paper"].abstract,
-                    "publication_date": paper_data["paper"].publication_date.isoformat() if paper_data["paper"].publication_date else None,
-                    "doi": paper_data["paper"].doi,
-                    "ingested_at": paper_data["paper"].ingested_at.isoformat(),
-                    "metadata": paper_data["paper"].metadata
-                },
-                "authors": [
-                    {
-                        "id": author.id,
-                        "name": author.name,
-                        "orcid": author.orcid
-                    } for author in paper_data["authors"]
-                ],
-                "citations": paper_data["citations"],
-                "cited_by_count": paper_data["cited_by_count"]
-            }
-            
-            # Add Semantic Scholar enrichment data if available
-            if "semantic_scholar" in paper_data:
-                json_paper["semantic_scholar"] = paper_data["semantic_scholar"]
-            
-            json_data.append(json_paper)
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(json_data, f, indent=2, ensure_ascii=False)
-        
-        print(f"Saved {len(json_data)} enriched papers to {filename}")
-    
+        return enriched_papers
+
     def load_papers_from_json(self, filename: str) -> List[Dict]:
         """
-        Load papers data from JSON file and convert back to proper format.
-        
-        Args:
-            filename: JSON file containing papers data
-            
-        Returns:
-            List of paper data dictionaries
+        Load papers data from JSON file and reconstruct full domain objects.
         """
         print(f"Loading papers data from {filename}...")
-        
+
         try:
-            with open(filename, 'r', encoding='utf-8') as f:
+            with open(filename, "r", encoding="utf-8") as f:
                 json_data = json.load(f)
-            
+
             papers_data = []
+
             for item in json_data:
-                # Reconstruct Paper object
-                paper_data = item["paper"]
+                # ---------- Paper ----------
+                p = item["paper"]
                 paper = Paper(
-                    id=paper_data["id"],
-                    title=paper_data["title"],
-                    abstract=paper_data["abstract"],
-                    publication_date=datetime.fromisoformat(paper_data["publication_date"]) if paper_data["publication_date"] else None,
-                    doi=paper_data["doi"],
-                    source=paper_data["source"],
-                    ingested_at=datetime.fromisoformat(paper_data["ingested_at"]),
-                    last_updated=datetime.now()
+                    id=p["id"],
+                    title=p["title"],
+                    abstract=p["abstract"],
+                    publication_date=(
+                        datetime.fromisoformat(p["publication_date"])
+                        if p["publication_date"] else None
+                    ),
+                    doi=p["doi"],
+                    pmid=p.get("pmid"),
+                    metadata=p.get("metadata", {}),
+                    ingested_at=datetime.fromisoformat(p["ingested_at"]),
+                    last_updated=datetime.now(),
                 )
-                
-                # Reconstruct Author objects
-                authors = []
-                for author_data in item["authors"]:
-                    author = Author(
-                        id=author_data["id"],
-                        name=author_data["name"],
-                        orcid=author_data["orcid"]
+
+                # ---------- Venue ----------
+                v = item.get("venue")
+                venue = None
+                if v:
+                    venue_type = (
+                        VenueType[v["type"]] if v.get("type") else None
                     )
-                    authors.append(author)
-                
-                # Reconstruct full paper data structure
+
+                    venue = Venue(
+                        id=v["id"],
+                        name=v["name"],
+                        type=venue_type,
+                        issn=v.get("issn"),
+                        impact_factor=v.get("impact_factor"),
+                        publisher=v.get("publisher"),
+                        metadata=v.get("metadata", {}),
+                    )
+
+                # ---------- Authors ----------
+                authors = []
+                for a in item.get("authors", []):
+                    authors.append(
+                        Author(
+                            id=a["id"],
+                            name=a["name"],
+                            orcid=a.get("orcid"),
+                            metadata=a.get("metadata", {}),
+                        )
+                    )
+
+                # ---------- Final reconstructed structure ----------
                 reconstructed_data = {
                     "paper": paper,
+                    "venue": venue,
                     "authors": authors,
-                    "citations": item["citations"],
-                    "cited_by_count": item["cited_by_count"]
+                    "citations": item.get("citations", []),
+                    "cited_by_count": item.get("cited_by_count", 0),
                 }
-                
-                # Add Semantic Scholar data if available
-                if "semantic_scholar" in item:
-                    reconstructed_data["semantic_scholar"] = item["semantic_scholar"]
-                
+
                 papers_data.append(reconstructed_data)
-            
+
             print(f"Loaded {len(papers_data)} papers from JSON file")
             return papers_data
-            
+
         except Exception as e:
             print(f"Error loading papers from {filename}: {e}")
             return []

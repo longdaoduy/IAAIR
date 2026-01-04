@@ -366,7 +366,7 @@ async def get_document(
             ],
             "venue": {
                 "name": document.venue.name,
-                "type": document.venue.venue_type.value,
+                "type": document.venue.type.value,
                 "impact_factor": document.venue.impact_factor
             } if document.venue else None,
             "publication_date": document.publication_date.isoformat() if document.publication_date else None,

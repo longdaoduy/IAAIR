@@ -81,7 +81,7 @@ class OpenAlexClient:
 
             abstract = work.get('abstract', '') or ''
             doi = work.get('doi', '').replace('https://doi.org/', '') if work.get('doi') else None
-            
+
             # Extract PMID from external IDs
             pmid = None
             external_ids = work.get('ids', {})
@@ -161,41 +161,41 @@ class OpenAlexClient:
                 locations = work.get('locations', [])
                 if locations:
                     host_venue = locations[0]  # Use first location
-            
+
             if not host_venue or not host_venue.get('source'):
                 return None
-            
+
             source = host_venue['source']
             venue_name = source.get('display_name', '').strip()
             if not venue_name:
                 return None
-            
+
             # Determine venue type based on OpenAlex type
-            venue_type = VenueType.JOURNAL  # default
+            type = VenueType.JOURNAL  # default
             openalex_type = source.get('type', '').lower()
-            
+
             if 'conference' in openalex_type or 'proceedings' in openalex_type:
-                venue_type = VenueType.CONFERENCE
+                type = VenueType.CONFERENCE
             elif 'journal' in openalex_type:
-                venue_type = VenueType.JOURNAL
+                type = VenueType.JOURNAL
             elif 'repository' in openalex_type and 'arxiv' in venue_name.lower():
-                venue_type = VenueType.ARXIV
+                type = VenueType.ARXIV
             elif 'book' in openalex_type:
-                venue_type = VenueType.BOOK
-            
+                type = VenueType.BOOK
+
             venue = Venue(
                 id=source.get('id', '').replace('https://openalex.org/', ''),
                 name=venue_name,
-                venue_type=venue_type,
+                type=type,
                 issn=source.get('issn_l') or (source.get('issn', [None])[0] if source.get('issn') else None),
                 publisher=source.get('host_organization_name'),
                 metadata={
                     'openalex_id': source.get('id', '').replace('https://openalex.org/', ''),
                 }
             )
-            
+
             return venue
-            
+
         except Exception as e:
             print(f"Error extracting venue data: {e}")
             return None
@@ -257,7 +257,7 @@ class OpenAlexClient:
 
                 # Extract citations
                 citations = self.extract_citations(work)
-                
+
                 # Extract venue
                 venue = self.extract_venue(work)
 

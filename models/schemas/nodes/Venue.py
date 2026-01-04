@@ -24,7 +24,7 @@ class Venue:
     """Represents a publication venue."""
     id: str
     name: str
-    venue_type: VenueType
+    type: VenueType
     issn: Optional[str] = None
     impact_factor: Optional[float] = None
     publisher: Optional[str] = None
