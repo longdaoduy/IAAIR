@@ -11,22 +11,20 @@ from typing import List, Dict, Optional, Any, Union
 from enum import Enum
 import uuid
 
-
-# class VenueType(Enum):
-#     """Types of publication venues."""
-#     JOURNAL = "journal"
-#     CONFERENCE = "conference"
-#     WORKSHOP = "workshop"
-#     ARXIV = "arxiv"
-#     BOOK = "book"
-
+class VenueType(Enum):
+    """Types of publication venues."""
+    JOURNAL = "journal"
+    CONFERENCE = "conference"
+    WORKSHOP = "workshop"
+    ARXIV = "arxiv"
+    BOOK = "book"
 
 @dataclass
 class Venue:
     """Represents a publication venue."""
     id: str
     name: str
-    # venue_type: VenueType
+    venue_type: VenueType
     issn: Optional[str] = None
     impact_factor: Optional[float] = None
     publisher: Optional[str] = None

@@ -15,6 +15,7 @@ from tqdm import tqdm
 from models.configurators.OpenAlexConfig import OpenAlexConfig
 from models.schemas.nodes.Paper import Paper
 from models.schemas.nodes.Author import Author
+from models.schemas.nodes.Venue import Venue, VenueType
 
 
 class OpenAlexClient:
@@ -141,6 +142,51 @@ class OpenAlexClient:
 
         return citations
 
+    def extract_venue(self, work: Dict) -> Optional[Venue]:
+        """Extract venue information from OpenAlex work response."""
+        try:
+            host_venue = work.get('primary_location', {}) or work.get('best_oa_location', {})
+            if not host_venue:
+                # Try locations array
+                locations = work.get('locations', [])
+                if locations:
+                    host_venue = locations[0]  # Use first location
+            
+            if not host_venue or not host_venue.get('source'):
+                return None
+            
+            source = host_venue['source']
+            venue_name = source.get('display_name', '').strip()
+            if not venue_name:
+                return None
+            
+            # Determine venue type based on OpenAlex type
+            venue_type = VenueType.JOURNAL  # default
+            openalex_type = source.get('type', '').lower()
+            
+            if 'conference' in openalex_type or 'proceedings' in openalex_type:
+                venue_type = VenueType.CONFERENCE
+            elif 'journal' in openalex_type:
+                venue_type = VenueType.JOURNAL
+            elif 'repository' in openalex_type and 'arxiv' in venue_name.lower():
+                venue_type = VenueType.ARXIV
+            elif 'book' in openalex_type:
+                venue_type = VenueType.BOOK
+            
+            venue = Venue(
+                id=source.get('id', '').replace('https://openalex.org/', ''),
+                name=venue_name,
+                venue_type=venue_type,
+                issn=source.get('issn_l') or (source.get('issn', [None])[0] if source.get('issn') else None),
+                publisher=source.get('host_organization_name')
+            )
+            
+            return venue
+            
+        except Exception as e:
+            print(f"Error extracting venue data: {e}")
+            return None
+
     def fetch_papers(self, count: int = 1000, filters: Dict = None) -> List[Dict]:
         """
         Fetch papers from OpenAlex API.
@@ -159,6 +205,7 @@ class OpenAlexClient:
         base_params = {
             "per-page": per_page,
             "filter": "has_doi:true",
+            "select": "id,title,abstract,publication_year,doi,authorships,referenced_works,cited_by_count,primary_location,best_oa_location,locations"
         }
 
         # Add custom filters if provided
@@ -197,12 +244,16 @@ class OpenAlexClient:
 
                 # Extract citations
                 citations = self.extract_citations(work)
+                
+                # Extract venue
+                venue = self.extract_venue(work)
 
                 # Store all data together
                 paper_data = {
                     "paper": paper,
                     "authors": authors,
                     "citations": citations,
+                    "venue": venue,
                     "cited_by_count": work.get('cited_by_count', 0)
                 }
 
