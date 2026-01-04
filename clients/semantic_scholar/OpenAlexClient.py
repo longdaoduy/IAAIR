@@ -19,7 +19,7 @@ from models.schemas.nodes.Author import Author
 
 class OpenAlexClient:
     """Client for interacting with OpenAlex API."""
-    
+
     def __init__(self):
         self.config = OpenAlexConfig()
 
@@ -96,6 +96,7 @@ class OpenAlexClient:
                 abstract=abstract,
                 publication_date=pub_date,
                 doi=doi,
+                source="OpenAlex",
                 metadata={
                     'openalex_id': work.get('id', '').replace('https://openalex.org/', ''),
                 }
@@ -120,7 +121,8 @@ class OpenAlexClient:
             author = Author(
                 id=author_data.get('id', '').replace('https://openalex.org/', ''),
                 name=author_data.get('display_name', ''),
-                orcid=author_data.get('orcid', '').replace('https://orcid.org/', '') if author_data.get('orcid') else None
+                orcid=author_data.get('orcid', '').replace('https://orcid.org/', '') if author_data.get(
+                    'orcid') else None
             )
 
             authors.append(author)

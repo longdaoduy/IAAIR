@@ -15,6 +15,7 @@ class Paper:
     id: str
     title: str
     abstract: str
+    source: str
 
     # Publication details
     publication_date: Optional[datetime] = None
