@@ -124,11 +124,13 @@ class Neo4jClient:
             p.abstract = $abstract,
             p.publication_date = $publication_date,
             p.doi = $doi,
+            p.pmid = $pmid,
             p.arxiv_id = $arxiv_id,
             p.source = $source,
             p.ingested_at = $ingested_at,
             p.last_updated = $last_updated,
-            p.cited_by_count = $cited_by_count
+            p.cited_by_count = $cited_by_count,
+            p.metadata = $metadata
         '''
 
         await tx.run(query, {
@@ -137,11 +139,13 @@ class Neo4jClient:
             "abstract": paper.abstract,
             "publication_date": paper.publication_date.isoformat() if paper.publication_date else None,
             "doi": paper.doi,
+            "pmid": getattr(paper, 'pmid', None),
             "arxiv_id": getattr(paper, 'arxiv_id', None),
             "source": paper.source,
             "ingested_at": paper.ingested_at.isoformat(),
             "last_updated": paper.last_updated.isoformat(),
-            "cited_by_count": cited_by_count
+            "cited_by_count": cited_by_count,
+            "metadata": paper.metadata
         })
 
     async def _create_author_node(self, tx, author: Author):
