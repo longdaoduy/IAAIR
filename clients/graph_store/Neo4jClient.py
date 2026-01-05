@@ -6,6 +6,7 @@ citations, author collaborations, and concept hierarchies.
 """
 
 import logging
+import json
 from typing import List, Dict, Any, Optional
 from neo4j import AsyncGraphDatabase, AsyncDriver
 
@@ -44,10 +45,58 @@ class Neo4jClient:
             # Verify connectivity
             await self.driver.verify_connectivity()
             logger.info("Successfully connected to Neo4j")
+            
+            # Create unique constraints and indexes
+            # await self.create_constraints()
+            # await self.create_indexes()
 
         except Exception as e:
             logger.error(f"Failed to connect to Neo4j: {e}")
             raise
+
+    async def create_constraints(self):
+        """Create unique constraints for node IDs to prevent duplicates."""
+        constraints = [
+            "CREATE CONSTRAINT paper_id_unique IF NOT EXISTS FOR (p:Paper) REQUIRE p.id IS UNIQUE",
+            "CREATE CONSTRAINT author_id_unique IF NOT EXISTS FOR (a:Author) REQUIRE a.id IS UNIQUE", 
+            "CREATE CONSTRAINT venue_id_unique IF NOT EXISTS FOR (v:Venue) REQUIRE v.id IS UNIQUE"
+        ]
+        
+        async with self.driver.session() as session:
+            for constraint in constraints:
+                try:
+                    await session.run(constraint)
+                    logger.debug(f"Created constraint: {constraint}")
+                except Exception as e:
+                    # Constraint might already exist, log but don't fail
+                    logger.debug(f"Constraint already exists or failed: {e}")
+
+    async def create_indexes(self):
+        """Create indexes for better query performance."""
+        indexes = [
+            "CREATE INDEX paper_doi_index IF NOT EXISTS FOR (p:Paper) ON (p.doi)",
+            "CREATE INDEX paper_pmid_index IF NOT EXISTS FOR (p:Paper) ON (p.pmid)",
+            "CREATE INDEX paper_title_index IF NOT EXISTS FOR (p:Paper) ON (p.title)",
+            "CREATE INDEX author_name_index IF NOT EXISTS FOR (a:Author) ON (a.name)",
+            "CREATE INDEX author_orcid_index IF NOT EXISTS FOR (a:Author) ON (a.orcid)",
+            "CREATE INDEX venue_name_index IF NOT EXISTS FOR (v:Venue) ON (v.name)",
+            "CREATE INDEX venue_issn_index IF NOT EXISTS FOR (v:Venue) ON (v.issn)"
+        ]
+        
+        async with self.driver.session() as session:
+            for index in indexes:
+                try:
+                    await session.run(index)
+                    logger.debug(f"Created index: {index}")
+                except Exception as e:
+                    logger.debug(f"Index already exists or failed: {e}")
+
+    async def initialize_database(self):
+        """Initialize database with constraints and indexes. Call this once per database setup."""
+        logger.info("Initializing database schema...")
+        await self.create_constraints()
+        await self.create_indexes()
+        logger.info("Database schema initialization complete")
 
     async def close(self):
         """Close the Neo4j driver connection."""
@@ -145,7 +194,7 @@ class Neo4jClient:
             "ingested_at": paper.ingested_at.isoformat(),
             "last_updated": paper.last_updated.isoformat(),
             "cited_by_count": cited_by_count,
-            "metadata": paper.metadata
+            "metadata": json.dumps(paper.metadata) if paper.metadata else "{}"
         })
 
     async def _create_author_node(self, tx, author: Author):
@@ -154,14 +203,20 @@ class Neo4jClient:
         MERGE (a:Author {id: $id})
         SET a.name = $name,
             a.orcid = $orcid,
-            a.h_index = $h_index
+            a.h_index = $h_index,
+            a.ingested_at = $ingested_at,
+            a.last_updated = $last_updated,
+            a.metadata = $metadata
         '''
 
         await tx.run(query, {
             "id": author.id,
             "name": author.name,
             "orcid": author.orcid,
-            "h_index": author.h_index
+            "h_index": author.h_index,
+            "ingested_at": author.ingested_at.isoformat(),
+            "last_updated": author.last_updated.isoformat(),
+            "metadata": json.dumps(author.metadata) if author.metadata else "{}"
         })
 
     async def _create_venue_node(self, tx, venue: Venue):
@@ -172,7 +227,10 @@ class Neo4jClient:
             v.type = $type,
             v.issn = $issn,
             v.impact_factor = $impact_factor,
-            v.publisher = $publisher
+            v.publisher = $publisher,
+            v.ingested_at = $ingested_at,
+            v.last_updated = $last_updated,
+            v.metadata = $metadata
         '''
 
         await tx.run(query, {
@@ -181,7 +239,10 @@ class Neo4jClient:
             "type": venue.type.value if venue.type else None,
             "issn": venue.issn,
             "impact_factor": venue.impact_factor,
-            "publisher": venue.publisher
+            "publisher": venue.publisher,
+            "ingested_at": venue.ingested_at.isoformat(),
+            "last_updated": venue.last_updated.isoformat(),
+            "metadata": json.dumps(venue.metadata) if venue.metadata else "{}"
         })
 
     async def _create_authorship_relationship(self, tx, document_id: str, author_id: str):

@@ -15,7 +15,7 @@ async def main():
     ingestion_handler = IngestionHandler()
     
     # Load papers from JSON file using IngestionHandler's method
-    json_filename = "/home/dnhoa/IAAIR/IAAIR/enriched_openalex_papers_20260105_224138.json"
+    json_filename = "enriched_openalex_papers_20260105_231437.json"
     
     try:
         # Use IngestionHandler's load_papers_from_json method
