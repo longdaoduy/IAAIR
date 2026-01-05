@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import json
 import asyncio
-from models.configurators.GraphDBConfig import GraphDBConfig
+from models.schemas.nodes import Paper, Author, Venue,VenueType
 from clients.graph_store.Neo4jClient import Neo4jClient
 from clients.semantic_scholar.SemanticScholarClient import SemanticScholarClient
 from clients.semantic_scholar.OpenAlexClient import OpenAlexClient
@@ -49,15 +49,16 @@ class IngestionHandler():
                     "id": paper_data["paper"].id,
                     "title": paper_data["paper"].title,
                     "abstract": paper_data["paper"].abstract,
+                    "doi": paper_data["paper"].doi,
                     "publication_date": paper_data["paper"].publication_date.isoformat() if paper_data[
                         "paper"].publication_date else None,
-                    "doi": paper_data["paper"].doi,
+                    "source": paper_data["paper"].source,
                     "metadata": paper_data["paper"].metadata,
                     "pmid": paper_data["paper"].pmid,
                     "ingested_at": paper_data["paper"].ingested_at.isoformat()
                 },
                 "venue": {
-                    "id": paper_data[""].id,
+                    "id": paper_data["venue"].id,
                     "name": paper_data["venue"].name,
                     "type": paper_data["venue"].type.name,
                     "issn": paper_data["venue"].issn,
@@ -270,6 +271,7 @@ class IngestionHandler():
                     ),
                     doi=p["doi"],
                     pmid=p.get("pmid"),
+                    source=p.get("source"),
                     metadata=p.get("metadata", {}),
                     ingested_at=datetime.fromisoformat(p["ingested_at"]),
                     last_updated=datetime.now(),

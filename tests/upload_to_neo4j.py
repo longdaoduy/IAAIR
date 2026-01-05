@@ -6,82 +6,84 @@ This script loads papers data from the JSON file created by IngestionHandler
 and uploads it to the Neo4j graph database.
 """
 
-import json
 import asyncio
-from datetime import datetime
 from models.pipelines.ingestions.IngestionHandler import IngestionHandler
-from models.schemas.nodes.Paper import Paper
-from models.schemas.nodes.Author import Author
-
-def load_papers_from_json(filename: str):
-    """Load papers data from JSON file and convert back to proper format."""
-    print(f"Loading papers data from {filename}...")
-    
-    with open(filename, 'r', encoding='utf-8') as f:
-        json_data = json.load(f)
-    
-    papers_data = []
-    for item in json_data:
-        # Reconstruct Paper object
-        paper_data = item["paper"]
-        paper = Paper(
-            id=paper_data["id"],
-            title=paper_data["title"],
-            abstract=paper_data["abstract"],
-            publication_date=datetime.fromisoformat(paper_data["publication_date"]) if paper_data["publication_date"] else None,
-            doi=paper_data["doi"],
-            source=paper_data["source"],
-            ingested_at=datetime.fromisoformat(paper_data["ingested_at"]),
-            last_updated=datetime.now()
-        )
-        
-        # Reconstruct Author objects
-        authors = []
-        for author_data in item["authors"]:
-            author = Author(
-                id=author_data["id"],
-                name=author_data["name"],
-                orcid=author_data["orcid"]
-            )
-            authors.append(author)
-        
-        # Reconstruct full paper data structure
-        reconstructed_data = {
-            "paper": paper,
-            "authors": authors,
-            "citations": item["citations"],
-            "cited_by_count": item["cited_by_count"]
-        }
-        
-        papers_data.append(reconstructed_data)
-    
-    print(f"Loaded {len(papers_data)} papers from JSON file")
-    return papers_data
 
 async def main():
-    """Main function to upload papers to Neo4j."""
+    """Main function to upload papers to Neo4j with all relationships."""
     # Initialize IngestionHandler instance
-    openalex = IngestionHandler()
+    ingestion_handler = IngestionHandler()
     
-    # Load papers from JSON file (assuming it exists)
-    json_filename = "/home/dnhoa/IAAIR/IAAIR/openalex_papers_20260103_113509.json"
+    # Load papers from JSON file using IngestionHandler's method
+    json_filename = "/home/dnhoa/IAAIR/IAAIR/enriched_openalex_papers_20260105_224138.json"
     
     try:
-        papers_data = load_papers_from_json(json_filename)
+        # Use IngestionHandler's load_papers_from_json method
+        papers_data = ingestion_handler.load_papers_from_json(json_filename)
         
-        # Upload to Neo4j
-        success = await openalex.upload_papers_to_neo4j(papers_data)
+        if not papers_data:
+            print("❌ No papers data loaded from file")
+            return
         
-        if success:
-            print("✅ Papers successfully uploaded to Neo4j!")
-        else:
-            print("❌ Failed to upload papers to Neo4j")
+        # Initialize Neo4j client
+        client = await ingestion_handler._initialize_neo4j_client()
+        
+        print(f"Starting upload of {len(papers_data)} papers to Neo4j...")
+        
+        # Keep track of uploaded entities
+        uploaded_papers = 0
+        uploaded_authors = 0
+        uploaded_venues = 0
+        created_citations = 0
+        created_publications = 0
+        
+        for i, paper_data in enumerate(papers_data):
+            if i % 10 == 0:
+                print(f"Processing paper {i + 1}/{len(papers_data)}...")
             
+            try:
+                paper = paper_data["paper"]
+                authors = paper_data.get("authors", [])
+                venue = paper_data.get("venue")
+                citations = paper_data.get("citations", [])
+                
+                # Store paper with all its relationships
+                await client.store_paper(
+                    paper=paper,
+                    authors=authors,
+                    venue=venue,
+                    citations=citations
+                )
+                
+                uploaded_papers += 1
+                uploaded_authors += len(authors)
+                if venue:
+                    uploaded_venues += 1
+                    created_publications += 1
+                created_citations += len(citations)
+                
+            except Exception as e:
+                print(f"Error processing paper {paper_data['paper'].id}: {e}")
+                continue
+        
+        print(f"\n=== Neo4j Upload Summary ===")
+        print(f"Papers uploaded: {uploaded_papers}")
+        print(f"Authors uploaded: {uploaded_authors}")
+        print(f"Venues uploaded: {uploaded_venues}")
+        print(f"Citation relationships created: {created_citations}")
+        print(f"Publishing relationships created: {created_publications}")
+        print("✅ Successfully uploaded papers with all relationships to Neo4j!")
+        
     except FileNotFoundError:
         print(f"❌ JSON file '{json_filename}' not found.")
         print("Please run the OpenAlex ingestion first or update the filename.")
     except Exception as e:
         print(f"❌ Error: {e}")
+    finally:
+        # Clean up Neo4j connection
+        if ingestion_handler.neo4j_client:
+            await ingestion_handler.neo4j_client.close()
+            ingestion_handler.neo4j_client = None
 
 def main_sync():
     """Synchronous wrapper for the main function."""

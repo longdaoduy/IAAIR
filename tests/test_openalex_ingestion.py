@@ -17,7 +17,7 @@ def main():
     
     # Test with a smaller number first (1 paper for quick testing)
     print("Testing with 1 paper first...\n")
-    test_papers = openalex.pull_OpenAlex_Paper(count=1, save_to_file=True)
+    test_papers = openalex.pull_OpenAlex_Paper(count=5, save_to_file=True)
     
     if test_papers:
         print(f"✅ Successfully fetched {len(test_papers)} papers")
@@ -27,12 +27,13 @@ def main():
             sample = test_papers[0]
             print("\n=== Sample Paper Data ===")
             print(f"Title: {sample['paper'].title}")
+            print(f"Source: {sample['paper'].source}")
             print(f"Year: {sample['paper'].publication_date.year if sample['paper'].publication_date else 'Unknown'}")
             print(f"DOI: {sample['paper'].doi}")
             print(f"Abstract: {sample['paper'].abstract[:200] if sample['paper'].abstract else 'No abstract'}...")
             print(f"Authors: {[author.name for author in sample['authors']]}")
             print(f"Citations: {len(sample['citations'])} referenced works")
-        
+
         # Test Semantic Scholar enrichment
         print("\n" + "="*50)
         print("Testing Semantic Scholar enrichment...")
