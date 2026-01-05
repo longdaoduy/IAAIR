@@ -57,7 +57,7 @@ class IngestionHandler():
                     "ingested_at": paper_data["paper"].ingested_at.isoformat()
                 },
                 "venue": {
-                    "id": paper_data[""].id,
+                    "id": paper_data["venue"].id,
                     "name": paper_data["venue"].name,
                     "type": paper_data["venue"].type.name,
                     "issn": paper_data["venue"].issn,

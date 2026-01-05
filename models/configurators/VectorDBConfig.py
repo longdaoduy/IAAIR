@@ -10,14 +10,20 @@ from dataclasses import dataclass
 
 @dataclass
 class VectorDBConfig:
-    """Vector database configuration (Milvus/Weaviate)."""
-    provider: str = "milvus"  # "milvus" or "weaviate"
-    username : str = "db_c605f97af57afe9"
-    password : str = "Cm3&Xz<+cJ},p|%+"
+    """Vector database configuration (Milvus/Weaviate/Zilliz)."""
+    provider: str = "milvus"  # "milvus", "weaviate", or "zilliz"
+    
+    # Authentication
+    username: str = "db_c605f97af57afe9"
+    password: str = "Cm3&Xz<+cJ},p|%+"
+    token: str = ""  # For Zilliz Cloud authentication
+    
+    # Connection
     host: str = "localhost"
     port: int = 19530
+    uri: str = ""  # For Zilliz Cloud URI
 
-    # Milvus specific
+    # Milvus/Zilliz specific
     collection_name: str = "scientific_papers"
     index_type: str = "IVF_FLAT"
     metric_type: str = "L2"
@@ -29,7 +35,11 @@ class VectorDBConfig:
     def from_env(cls) -> 'VectorDBConfig':
         return cls(
             provider=os.getenv("VECTOR_DB_PROVIDER", cls.provider),
+            username=os.getenv("VECTOR_DB_USERNAME", cls.username),
+            password=os.getenv("VECTOR_DB_PASSWORD", cls.password),
+            token=os.getenv("ZILLIZ_TOKEN", cls.token),
             host=os.getenv("VECTOR_DB_HOST", cls.host),
             port=int(os.getenv("VECTOR_DB_PORT", cls.port)),
+            uri=os.getenv("ZILLIZ_URI", cls.uri),
             collection_name=os.getenv("VECTOR_COLLECTION_NAME", cls.collection_name),
         )
