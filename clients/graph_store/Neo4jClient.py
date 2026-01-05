@@ -47,8 +47,8 @@ class Neo4jClient:
             logger.info("Successfully connected to Neo4j")
             
             # Create unique constraints and indexes
-            # await self.create_constraints()
-            # await self.create_indexes()
+            await self.create_constraints()
+            await self.create_indexes()
 
         except Exception as e:
             logger.error(f"Failed to connect to Neo4j: {e}")
@@ -61,6 +61,9 @@ class Neo4jClient:
             "CREATE CONSTRAINT author_id_unique IF NOT EXISTS FOR (a:Author) REQUIRE a.id IS UNIQUE", 
             "CREATE CONSTRAINT venue_id_unique IF NOT EXISTS FOR (v:Venue) REQUIRE v.id IS UNIQUE"
         ]
+        
+        # Note: Neo4j doesn't support unique constraints on relationships directly,
+        # but we handle this in the MERGE logic for relationships
         
         async with self.driver.session() as session:
             for constraint in constraints:
@@ -272,16 +275,20 @@ class Neo4jClient:
         })
 
     async def _create_citation_relationship(self, tx, citation: CitedBy):
-        """Create citation relationship between documents."""
+        """Create citation relationship between documents, avoiding duplicates."""
         query = '''
         MATCH (citing:Paper {id: $citing_id})
         MATCH (cited:Paper {id: $cited_id})
-        MERGE (citing)-[c:CITES {
-            context: $context,
-            intent: $intent,
-            confidence: $confidence,
-            created_at: $created_at
-        }]->(cited)
+        MERGE (citing)-[c:CITES]->(cited)
+        ON CREATE SET c.context = $context,
+                     c.intent = $intent,
+                     c.confidence = $confidence,
+                     c.created_at = $created_at
+        ON MATCH SET c.context = $context,
+                    c.intent = $intent,
+                    c.confidence = $confidence,
+                    c.last_updated = $created_at
+        RETURN c
         '''
 
         await tx.run(query, {
@@ -294,12 +301,21 @@ class Neo4jClient:
         })
 
     async def _create_simple_citation_relationship(self, tx, citing_paper_id: str, cited_paper_id: str):
-        """Create simple citation relationship between papers using IDs."""
+        """Create simple citation relationship between papers using IDs, avoiding duplicates."""
         from datetime import datetime
+        
+        # First check if the cited paper exists, create stub if not
+        await tx.run("""
+            MERGE (cited:Paper {id: $cited_id})
+        """, {"cited_id": cited_paper_id})
+        
+        # Create the citation relationship only if it doesn't exist
         query = '''
         MATCH (citing:Paper {id: $citing_id})
         MATCH (cited:Paper {id: $cited_id})
-        MERGE (citing)-[:CITES {created_at: $created_at}]->(cited)
+        MERGE (citing)-[r:CITES]->(cited)
+        ON CREATE SET r.created_at = $created_at
+        RETURN r
         '''
 
         await tx.run(query, {
