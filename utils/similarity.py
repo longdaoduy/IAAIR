@@ -39,7 +39,7 @@ def author_overlap(authors_a, authors_b, threshold=0.5) -> bool:
     return len(overlap) / max(len(set_a), 1) >= threshold
 
 
-def compute_confidence(openalex_paper, s2_paper) -> dict:
+def compute_confidence(paper_data, s2_paper) -> float:
     """
     Returns:
     {
@@ -48,22 +48,16 @@ def compute_confidence(openalex_paper, s2_paper) -> dict:
         "match_type": "id" | "metadata" | "none"
     }
     """
+
+    openalex_paper = paper_data["paper"]
     # ---------- STEP 1: Global ID matching ----------
     # DOI
     if openalex_paper.doi.lower() == s2_paper["doi"].lower():
-        return {
-            "same_paper": True,
-            "confidence": 0.98,
-            "match_type": "doi",
-        }
+        return 0.98
 
     # PMID
     if openalex_paper.pmid == s2_paper["pmid"]:
-        return {
-            "same_paper": True,
-            "confidence": 0.97,
-            "match_type": "pmid",
-        }
+        return 0.97
 
     # ---------- STEP 2: Metadata matching ----------
     title_score = title_similarity(
@@ -78,20 +72,12 @@ def compute_confidence(openalex_paper, s2_paper) -> dict:
     )
 
     same_authors = author_overlap(
-        openalex_paper.get("authors", []),
+        paper_data.get("authors", []),
         [a.get("name") for a in s2_paper.get("authors", [])],
     )
 
     if title_score >= 0.95 and same_year and same_authors:
-        return {
-            "same_paper": True,
-            "confidence": round(0.85 + 0.1 * title_score, 3),
-            "match_type": "metadata",
-        }
+        return round(0.85 + 0.1 * title_score, 3)
 
     # ---------- NO MATCH ----------
-    return {
-        "same_paper": False,
-        "confidence": round(title_score * 0.5, 3),
-        "match_type": "none",
-    }
+    return round(title_score * 0.5, 3)

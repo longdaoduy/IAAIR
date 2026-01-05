@@ -180,7 +180,7 @@ class SemanticScholarClient:
                 }
 
                 enhanced_paper_data["paper"].metadata.update(semantic_scholar_data)
-                enhanced_paper_data["paper"].metadata["confidence"] = compute_confidence(paper_data["paper"],semantic_scholar_data)
+                enhanced_paper_data["paper"].metadata["confidence"] = compute_confidence(paper_data,semantic_scholar_data)
 
                 enriched_count += 1
                 print(f"  ✅ Enriched: {paper.title[:60]}...")

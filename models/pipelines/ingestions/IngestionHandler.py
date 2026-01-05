@@ -57,14 +57,14 @@ class IngestionHandler():
                     "ingested_at": paper_data["paper"].ingested_at.isoformat()
                 },
                 "venue": {
-                    "id": paper_data["venue"].id,
+                    "id": paper_data[""].id,
                     "name": paper_data["venue"].name,
                     "type": paper_data["venue"].type.name,
                     "issn": paper_data["venue"].issn,
                     "impact_factor": paper_data["venue"].impact_factor,
                     "publisher": paper_data["venue"].publisher,
                     "metadata": paper_data["venue"].metadata,
-                },
+                } if paper_data.get("venue") else {},
                 "authors": [
                     {
                         "id": author.id,
