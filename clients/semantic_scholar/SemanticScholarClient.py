@@ -174,6 +174,7 @@ class SemanticScholarClient:
             if not s2_paper and paper.title:
                 s2_paper = self.get_paper_by_title(paper.title)
             if not s2_paper:
+                enriched_papers.append(enhanced_paper_data)
                 failed_count += 1
                 continue
             paper.abstract = s2_paper["abstract"]
