@@ -17,7 +17,7 @@ def main():
     handler = IngestionHandler()
     
     # Look for the most recent OpenAlex papers file
-    json_filename = "openalex_papers_20260101_093658.json"
+    json_filename = "openalex_papers_20260106_122219.json"
     
     # Check if file exists
     if not os.path.exists(json_filename):
