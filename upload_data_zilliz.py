@@ -10,7 +10,7 @@ import os
 import glob
 from typing import List, Dict, Optional, Any
 from datetime import datetime
-from pathlib import Path
+from google.colab import userdata
 from tqdm import tqdm
 
 from pymilvus import (
@@ -33,52 +33,32 @@ class ZillizUploadService:
         self.config = config or VectorDBConfig.from_env()
         self.collection = None
         self.is_connected = False
-        
+
     def connect(self) -> bool:
-        """Connect to Zilliz Cloud using authentication token.
-        
-        Returns:
-            True if connection successful, False otherwise
-        """
         try:
-            # Get authentication from environment or config
-            token = os.getenv("ZILLIZ_TOKEN") or getattr(self.config, 'token', None)
-            uri = os.getenv("ZILLIZ_URI") or getattr(self.config, 'uri', None)
-            
-            if not token or not uri:
-                # Fallback to username/password authentication
-                username = getattr(self.config, 'username', None) 
-                password = getattr(self.config, 'password', None)
-                host = getattr(self.config, 'host', 'localhost')
-                port = getattr(self.config, 'port', 19530)
-                
-                if username and password:
-                    print(f"🔐 Connecting to Zilliz with username/password: {host}:{port}")
-                    connections.connect(
-                        alias="default",
-                        host=host,
-                        port=port,
-                        user=username,
-                        password=password
-                    )
-                else:
-                    raise ValueError("No valid authentication method found. Please set ZILLIZ_TOKEN and ZILLIZ_URI, or provide username/password in config.")
-            else:
-                print(f"🔐 Connecting to Zilliz Cloud with token authentication: {uri}")
-                connections.connect(
-                    alias="default",
-                    uri=uri,
-                    token=token
-                )
-            
+            print("Connecting to Zilliz Cloud...")
+            token = "077c916c3ea903b26c6158ec923a657b8c674d5a46e1561b57eb6e54d5467a12dec4f58d87d54c752e548cf1f283de84d224b1f3"
+            uri = "https://in03-c605f97af57afe9.serverless.aws-eu-central-1.cloud.zilliz.com"
+
+            if not isinstance(uri, str) or not isinstance(token, str):
+                raise RuntimeError("ZILLIZ_URI or ZILLIZ_TOKEN invalid")
+            print(uri)
+            print(token)
+
+            connections.connect(
+                alias="default",
+                uri=uri,
+                token=token
+            )
+
             self.is_connected = True
-            print("✅ Successfully connected to Zilliz Cloud")
+            print("✅ Connected to Zilliz Cloud")
             return True
-            
+
         except Exception as e:
             print(f"❌ Failed to connect to Zilliz: {e}")
             return False
-    
+
     def create_collection_schema(self, embedding_dim: int) -> CollectionSchema:
         """Create collection schema for paper embeddings.
         
@@ -90,10 +70,8 @@ class ZillizUploadService:
         """
         fields = [
             FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=100, is_primary=True),
-            FieldSchema(name="paper_id", dtype=DataType.VARCHAR, max_length=100),
-            FieldSchema(name="title", dtype=DataType.VARCHAR, max_length=1000),
-            FieldSchema(name="embedding_source", dtype=DataType.VARCHAR, max_length=50),
-            FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim)
+            FieldSchema(name="title_embedding", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim),
+            FieldSchema(name="abstract_embedding", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim)
         ]
         
         schema = CollectionSchema(
@@ -142,9 +120,13 @@ class ZillizUploadService:
                 "params": {"nlist": self.config.nlist}
             }
             
-            print(f"🔍 Creating index with params: {index_params}")
+            print(f"🔍 Creating indexes with params: {index_params}")
             self.collection.create_index(
-                field_name="embedding",
+                field_name="title_embedding",
+                index_params=index_params
+            )
+            self.collection.create_index(
+                field_name="abstract_embedding",
                 index_params=index_params
             )
             
@@ -216,23 +198,32 @@ class ZillizUploadService:
         for i in range(0, len(embeddings), batch_size):
             batch = embeddings[i:i + batch_size]
             
-            # Prepare field data
+            # Prepare field data for simplified schema
             ids = []
-            paper_ids = []
-            titles = []
-            embedding_sources = []
-            embedding_vectors = []
+            title_embeddings = []
+            abstract_embeddings = []
             
             for item in batch:
                 # Generate unique ID
-                unique_id = f"{item['paper_id']}_{datetime.now().strftime('%Y%m%d')}"
+                unique_id = item['paper_id']
                 ids.append(unique_id)
-                paper_ids.append(item['paper_id'])
-                titles.append(item.get('title', '')[:1000])  # Truncate if too long
-                embedding_sources.append(item.get('embedding_source', 'unknown'))
-                embedding_vectors.append(item['embedding'])
+                
+                # Handle different embedding formats
+                if 'title_embedding' in item and 'abstract_embedding' in item:
+                    # Already separated embeddings
+                    title_embeddings.append(item['title_embedding'])
+                    abstract_embeddings.append(item['abstract_embedding'])
+                elif 'embedding' in item:
+                    # Single embedding - use for both title and abstract
+                    title_embeddings.append(item['embedding'])
+                    abstract_embeddings.append(item['embedding'])
+                else:
+                    # Default to zero vectors if no embeddings
+                    dim = 768  # Default SciBERT dimension
+                    title_embeddings.append([0.0] * dim)
+                    abstract_embeddings.append([0.0] * dim)
             
-            batch_data = [ids, paper_ids, titles, embedding_sources, embedding_vectors]
+            batch_data = [ids, title_embeddings, abstract_embeddings]
             batches.append(batch_data)
         
         return batches
@@ -256,7 +247,15 @@ class ZillizUploadService:
                 return False
             
             # Get embedding dimension
-            embedding_dim = len(embeddings[0]['embedding'])
+            first_item = embeddings[0]
+            if 'title_embedding' in first_item:
+                embedding_dim = len(first_item['title_embedding'])
+            elif 'abstract_embedding' in first_item:
+                embedding_dim = len(first_item['abstract_embedding'])
+            elif 'embedding' in first_item:
+                embedding_dim = len(first_item['embedding'])
+            else:
+                embedding_dim = 768  # Default SciBERT dimension
             print(f"📏 Embedding dimension: {embedding_dim}")
             
             # Create collection
@@ -329,7 +328,7 @@ class ZillizUploadService:
                 # Use zero vector for test search (just to verify search works)
                 results = self.collection.search(
                     data=[[0.0] * 768],  # Assume 768-dim embeddings
-                    anns_field="embedding",
+                    anns_field="abstract_embedding",  # Use abstract_embedding field
                     param=search_params,
                     limit=1
                 )
