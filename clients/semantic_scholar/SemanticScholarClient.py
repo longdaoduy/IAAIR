@@ -12,79 +12,90 @@ import json
 from typing import Dict, List, Optional
 from utils.similarity import compute_confidence
 from models.configurators.SemanticScholarConfig import SemanticScholarConfig
-
+from tqdm import tqdm
 
 class SemanticScholarClient:
     """Client for interacting with Semantic Scholar API."""
     
     def __init__(self):
         self.config = SemanticScholarConfig()
-    
-    def make_request(self, endpoint: str, params: Dict = None, delay: bool = True) -> Dict:
-        """
-        Make a request to the Semantic Scholar API with error handling and rate limiting.
 
-        Args:
-            endpoint: API endpoint (e.g., 'paper/search', 'paper/batch')
-            params: Query parameters
-            delay: Whether to add delay for rate limiting
-
-        Returns:
-            JSON response as dictionary
-        """
+    def make_request(
+            self,
+            endpoint: str,
+            params: Dict = None,
+            delay: bool = True,
+            max_retries: int = 3,
+    ) -> Dict:
         if params is None:
             params = {}
 
-        # Build URL - handle both full URLs and endpoint paths
-        if endpoint.startswith('http'):
+        # Build URL
+        if endpoint.startswith("http"):
             url = endpoint
         else:
-            # Ensure proper URL construction with /v1/ in the path
-            base_url = self.config.BASE_URL.rstrip('/')
-            endpoint = endpoint.lstrip('/')
+            base_url = self.config.BASE_URL.rstrip("/")
+            endpoint = endpoint.lstrip("/")
             url = f"{base_url}/{endpoint}"
 
-        # Prepare headers with correct API key format
         headers = {
             "x-api-key": self.config.API_KEY,
             "Accept": "application/json",
-            "User-Agent": "KnowledgeFabric/1.0"
+            "User-Agent": "KnowledgeFabric/1.0",
         }
 
-        try:
-            # Rate limiting
-            if delay:
-                time.sleep(self.config.request_delay)
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Base rate limit
+                if delay:
+                    time.sleep(self.config.request_delay)
 
-            # For paper search, manually construct URL to preserve spaces in query
-            if "paper/search" in endpoint and "query" in params:
-                query = params["query"]
-                other_params = {k: v for k, v in params.items() if k != "query"}
-                
-                # Build query string manually without encoding the query
-                param_parts = [f"query={query}"]
-                for key, value in other_params.items():
-                    param_parts.append(f"{key}={value}")
-                
-                full_url = f"{url}?{'&'.join(param_parts)}"
-                print(full_url)
-                response = requests.get(full_url, headers=headers)
-            else:
-                # Make regular request for other endpoints
-                response = requests.get(url, headers=headers, params=params)
-            
-            response.raise_for_status()
-            return response.json()
+                # Special handling for paper/search
+                if "paper/search" in endpoint and "query" in params:
+                    query = params["query"]
+                    other_params = {k: v for k, v in params.items() if k != "query"}
 
-        except requests.exceptions.RequestException as e:
-            print(f"Error making request to {url}: {e}")
-            if hasattr(e, 'response') and e.response:
-                print(f"Status code: {e.response.status_code}")
-                print(f"Response text: {e.response.text[:200]}...")
-                if e.response.status_code == 429:
-                    print("Rate limit exceeded. Waiting longer...")
-                    time.sleep(10)  # Wait 10 seconds on rate limit
-            return None
+                    param_parts = [f"query={query}"]
+                    for k, v in other_params.items():
+                        param_parts.append(f"{k}={v}")
+
+                    full_url = f"{url}?{'&'.join(param_parts)}"
+                    response = requests.get(full_url, headers=headers)
+                else:
+                    response = requests.get(url, headers=headers, params=params)
+
+                # ---- SUCCESS ----
+                if response.status_code == 200:
+                    return response.json()
+
+                # ---- RATE LIMIT ----
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    wait_time = (
+                        int(retry_after)
+                        if retry_after and retry_after.isdigit()
+                        else min(2 ** attempt, 10)
+                    )
+
+                    print(
+                        f"[429] Rate limited. Retry {attempt}/{max_retries} "
+                        f"after {wait_time}s"
+                    )
+                    time.sleep(wait_time)
+                    continue
+
+                # ---- OTHER ERRORS ----
+                response.raise_for_status()
+
+            except requests.exceptions.RequestException as e:
+                print(f"Request error ({attempt}/{max_retries}) to {url}: {e}")
+
+                if attempt >= max_retries:
+                    return None
+
+                time.sleep(min(2 ** attempt, 10))
+
+        return None
 
     def get_paper_by_title(self, title: str, fields: List[str] = None, limit: int = 1) -> Optional[Dict]:
         """
@@ -140,7 +151,7 @@ class SemanticScholarClient:
         enriched_count = 0
         failed_count = 0
         
-        for i, paper_data in enumerate(papers_data):
+        for i, paper_data in tqdm(enumerate(papers_data)):
             if i % 10 == 0:
                 print(f"Processing paper {i+1}/{len(papers_data)} (enriched: {enriched_count}, failed: {failed_count})")
             
@@ -162,33 +173,29 @@ class SemanticScholarClient:
             # If DOI search failed, try by title
             if not s2_paper and paper.title:
                 s2_paper = self.get_paper_by_title(paper.title)
-            
+            paper.abstract = s2_paper["abstract"]
+            enhanced_paper_data["paper"] = paper
+
+            # Store additional Semantic Scholar metadata
+            semantic_scholar_data = {
+                "semantic_scholar_id": s2_paper.get("paperId"),
+                "citationCount": s2_paper.get("citationCount", 0),
+                "title": s2_paper.get("title"),
+                "doi": s2_paper.get("externalIds").get("DOI"),
+                "mag": s2_paper.get("externalIds").get("MAG"),
+                "pmid": s2_paper.get("externalIds").get("PMID"),
+            }
+
+            enhanced_paper_data["paper"].metadata.update(semantic_scholar_data)
+            enhanced_paper_data["paper"].metadata["confidence"] = compute_confidence(paper_data, semantic_scholar_data)
+
             # Enrich the paper if we found it in Semantic Scholar
             if s2_paper and s2_paper.get("abstract"):
                 # Update the abstract
-                paper.abstract = s2_paper["abstract"]
-                enhanced_paper_data["paper"] = paper
-                
-                # Store additional Semantic Scholar metadata
-                semantic_scholar_data = {
-                    "semantic_scholar_id": s2_paper.get("paperId"),
-                    "citationCount": s2_paper.get("citationCount", 0),
-                    "title": s2_paper.get("title"),
-                    "doi": s2_paper.get("externalIds").get("DOI"),
-                    "mag": s2_paper.get("externalIds").get("MAG"),
-                    "pmid": s2_paper.get("externalIds").get("PMID"),
-                }
-
-                enhanced_paper_data["paper"].metadata.update(semantic_scholar_data)
-                enhanced_paper_data["paper"].metadata["confidence"] = compute_confidence(paper_data,semantic_scholar_data)
-
                 enriched_count += 1
-                print(f"  ✅ Enriched: {paper.title[:60]}...")
-                
+
             else:
                 failed_count += 1
-                print(f"  ❌ No abstract found for: {paper.title[:60]}...")
-                print(f"  ❌ No abstract found for: {paper.title[:60]}...")
 
             enriched_papers.append(enhanced_paper_data)
             
@@ -219,7 +226,8 @@ class SemanticScholarClient:
                         "publication_date": paper_data["paper"].publication_date.isoformat() if paper_data["paper"].publication_date else None,
                         "doi": paper_data["paper"].doi,
                         "source": paper_data["paper"].source,
-                        "ingested_at": paper_data["paper"].ingested_at.isoformat()
+                        "ingested_at": paper_data["paper"].ingested_at.isoformat(),
+                        "metadata": paper_data["paper"].metadata,
                     },
                     "authors": [
                         {

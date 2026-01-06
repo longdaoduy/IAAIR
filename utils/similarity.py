@@ -41,34 +41,42 @@ def author_overlap(authors_a, authors_b, threshold=0.5) -> bool:
 
 def compute_confidence(paper_data, s2_paper) -> float:
     """
-    Returns:
-    {
-        "same_paper": bool,
-        "confidence": float,
-        "match_type": "id" | "metadata" | "none"
-    }
+    Compute confidence score between OpenAlex Paper object and Semantic Scholar dict.
+    Returns: float in [0, 1]
     """
 
     openalex_paper = paper_data["paper"]
+
     # ---------- STEP 1: Global ID matching ----------
     # DOI
-    if openalex_paper.doi.lower() == s2_paper["doi"].lower():
+    if (
+        openalex_paper.doi
+        and s2_paper.get("doi")
+        and openalex_paper.doi.lower() == s2_paper["doi"].lower()
+    ):
         return 0.98
 
     # PMID
-    if openalex_paper.pmid == s2_paper["pmid"]:
+    if (
+        openalex_paper.pmid
+        and s2_paper.get("pmid")
+        and openalex_paper.pmid == s2_paper["pmid"]
+    ):
         return 0.97
 
     # ---------- STEP 2: Metadata matching ----------
     title_score = title_similarity(
-        openalex_paper.title,
-        s2_paper.get("title"),
+        openalex_paper.title.lower(),
+        s2_paper.get("title").lower(),
     )
 
+    openalex_year = getattr(openalex_paper, "year", None)
+    s2_year = s2_paper.get("year")
+
     same_year = (
-        openalex_paper.get("year")
-        and s2_paper.get("year")
-        and openalex_paper["year"] == s2_paper["year"]
+        isinstance(openalex_year, int)
+        and isinstance(s2_year, int)
+        and openalex_year == s2_year
     )
 
     same_authors = author_overlap(
@@ -79,5 +87,5 @@ def compute_confidence(paper_data, s2_paper) -> float:
     if title_score >= 0.95 and same_year and same_authors:
         return round(0.85 + 0.1 * title_score, 3)
 
-    # ---------- NO MATCH ----------
+    # ---------- NO STRONG MATCH ----------
     return round(title_score * 0.5, 3)

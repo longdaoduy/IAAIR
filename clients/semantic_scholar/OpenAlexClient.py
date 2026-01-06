@@ -127,12 +127,12 @@ class OpenAlexClient:
                 continue
 
             author = Author(
-                id=author_data.get('id', '').replace('https://openalex.org/', ''),
+                id=(author_data.get('id') or '').replace('https://openalex.org/', ''),
                 name=author_data.get('display_name', ''),
                 orcid=author_data.get('orcid', '').replace('https://orcid.org/', '') if author_data.get(
                     'orcid') else None,
                 metadata={
-                    'openalex_id': author_data.get('id', '').replace('https://openalex.org/', ''),
+                    'openalex_id': (author_data.get('id') or '').replace('https://openalex.org/', '')
                 }
             )
 
