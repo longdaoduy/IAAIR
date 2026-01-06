@@ -51,11 +51,8 @@ class MilvusClient(VectorClient):
         # Define collection schema
         fields = [
             FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=100, is_primary=True),
-            FieldSchema(name="title", dtype=DataType.VARCHAR, max_length=1000),
-            FieldSchema(name="abstract", dtype=DataType.VARCHAR, max_length=5000),
             FieldSchema(name="title_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),
-            FieldSchema(name="abstract_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),
-            FieldSchema(name="metadata", dtype=DataType.JSON)
+            FieldSchema(name="abstract_embedding", dtype=DataType.FLOAT_VECTOR, dim=768)
         ]
 
         schema = CollectionSchema(fields, "Scientific papers vector_store store")
@@ -94,19 +91,8 @@ class MilvusClient(VectorClient):
 
         data = [{
             "id": document.id,
-            "title": document.title,
-            "abstract": document.abstract,
             "title_embedding": document.title_embedding,
-            "abstract_embedding": document.abstract_embedding,
-            "metadata": {
-                "document_type": document.document_type.value if document.document_type else None,
-                "publication_date": document.publication_date.isoformat() if document.publication_date else None,
-                "doi": document.doi,
-                "authors": [author.name for author in document.authors],
-                "venue": document.venue.name if document.venue else None,
-                "keywords": document.keywords,
-                "subjects": document.subjects
-            }
+            "abstract_embedding": document.abstract_embedding
         }]
 
         self.collection.insert(data)
@@ -123,7 +109,7 @@ class MilvusClient(VectorClient):
             anns_field=search_field,
             param=search_params,
             limit=limit,
-            output_fields=["id", "title", "abstract", "metadata"]
+            output_fields=["id"]
         )
 
         search_results = []
@@ -133,8 +119,8 @@ class MilvusClient(VectorClient):
                 doc_data = hit.entity
                 document = Document(
                     id=doc_data["id"],
-                    title=doc_data["title"],
-                    abstract=doc_data["abstract"]
+                    title="",  # Not stored in vector DB
+                    abstract=""  # Not stored in vector DB
                 )
 
                 search_result = SearchResult(
