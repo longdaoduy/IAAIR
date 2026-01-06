@@ -173,7 +173,10 @@ class SemanticScholarClient:
             # If DOI search failed, try by title
             if not s2_paper and paper.title:
                 s2_paper = self.get_paper_by_title(paper.title)
-            paper.abstract = s2_paper.get("abstract")
+            if not s2_paper:
+                failed_count += 1
+                continue
+            paper.abstract = s2_paper["abstract"]
             enhanced_paper_data["paper"] = paper
 
             # Store additional Semantic Scholar metadata
