@@ -7,21 +7,18 @@ stored in Zilliz Cloud. It supports searching by abstract or title text
 and returns topically relevant papers with latency measurements.
 """
 
-import os
 import sys
-import json
 import time
 from pathlib import Path
-from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from scibert_embedding import SciBERTEmbeddingService
-from upload_data_zilliz import ZillizUploadService
-from pymilvus import connections, Collection
+from models.pipelines.handlers.EmbeddingHandler import EmbeddingHandler
+from models.pipelines.handlers.ZillizHandler import ZillizHandler
+from pymilvus import Collection
 from models.configurators.VectorDBConfig import VectorDBConfig
 from clients.graph_store.Neo4jClient import Neo4jClient
 
@@ -48,11 +45,11 @@ class ZillizSearchTest:
             
             # Initialize SciBERT embedding service
             print("   Loading SciBERT model...")
-            self.embedding_service = SciBERTEmbeddingService()
+            self.embedding_service = EmbeddingHandler()
             
             # Initialize Zilliz service
             print("   Connecting to Zilliz...")
-            self.zilliz_service = ZillizUploadService()
+            self.zilliz_service = ZillizHandler()
             if not self.zilliz_service.connect():
                 print("❌ Failed to connect to Zilliz")
                 return False

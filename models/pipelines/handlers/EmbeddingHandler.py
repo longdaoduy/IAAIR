@@ -19,7 +19,7 @@ from datetime import datetime
 from models.configurators.SciBERTConfig import SciBERTConfig
 
 
-class SciBERTEmbeddingService:
+class EmbeddingHandler:
     """Service for generating SciBERT embeddings from academic papers."""
     
     def __init__(self, config: Optional[SciBERTConfig] = None):
@@ -52,8 +52,6 @@ class SciBERTEmbeddingService:
         
         print(f"✅ Model loaded successfully on device: {self.device}")
 
-    def _mean_pooling(self, model_output, attention_mask):
-        """Apply mean pooling to get sentence-level embeddings."""
     def _mean_pooling(self, model_output, attention_mask):
         """Apply mean pooling to get sentence-level embeddings."""
         token_embeddings = model_output.last_hidden_state  # (batch, seq_len, hidden)
@@ -256,23 +254,3 @@ class SciBERTEmbeddingService:
         print(f"   Output saved to: {output_file}")
         
         return output_file
-
-
-def main():
-    """Main function to run embedding generation."""
-    print("Starting SciBERT Embedding Generation")
-    
-    # Initialize service
-    service = SciBERTEmbeddingService()
-    
-    # Process papers
-    try:
-        output_file = service.process_papers()
-        print(f"✅ Embedding generation completed successfully: {output_file}")
-    except Exception as e:
-        print(f"❌ Error during embedding generation: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    main()

@@ -6,7 +6,7 @@ This script demonstrates how to use the IngestionHandler class to fetch
 500-1000 papers from OpenAlex with title, year, authors, DOI, and citations.
 """
 
-from models.pipelines.ingestions.IngestionHandler import IngestionHandler
+from models.pipelines.handlers.IngestionHandler import IngestionHandler
 
 def main():
     """Test the OpenAlex paper ingestion functionality."""

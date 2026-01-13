@@ -21,7 +21,7 @@ from pymilvus import (
 from models.configurators.VectorDBConfig import VectorDBConfig
 
 
-class ZillizUploadService:
+class ZillizHandler:
     """Service for uploading embeddings to Zilliz Cloud."""
     
     def __init__(self, config: Optional[VectorDBConfig] = None):
@@ -359,7 +359,7 @@ def main():
     print("🚀 Starting Zilliz Upload Service")
     
     # Initialize service
-    service = ZillizUploadService()
+    service = ZillizHandler()
     
     try:
         # Connect to Zilliz

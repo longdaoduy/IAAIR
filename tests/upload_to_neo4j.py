@@ -7,7 +7,7 @@ and uploads it to the Neo4j graph database.
 """
 
 import asyncio
-from models.pipelines.ingestions.IngestionHandler import IngestionHandler
+from models.pipelines.handlers.IngestionHandler import IngestionHandler
 
 async def main():
     """Main function to upload papers to Neo4j with all relationships."""

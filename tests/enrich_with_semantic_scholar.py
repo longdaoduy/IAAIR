@@ -7,8 +7,7 @@ and enriches it with abstracts and additional metadata from Semantic Scholar API
 """
 
 import os
-import sys
-from models.pipelines.ingestions.IngestionHandler import IngestionHandler
+from models.pipelines.handlers.IngestionHandler import IngestionHandler
 
 
 def main():

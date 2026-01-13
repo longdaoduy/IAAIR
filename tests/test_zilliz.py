@@ -17,15 +17,14 @@ import json
 import time
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from models.pipelines.ingestions.IngestionHandler import IngestionHandler
-from scibert_embedding import SciBERTEmbeddingService
-from upload_data_zilliz import ZillizUploadService
+from models.pipelines.handlers.IngestionHandler import IngestionHandler
+from models.pipelines.handlers.EmbeddingHandler import EmbeddingHandler
+from models.pipelines.handlers.ZillizHandler import ZillizHandler
 
 
 class ZillizPipelineTest:
@@ -147,7 +146,7 @@ class ZillizPipelineTest:
                 return False
             
             # Initialize SciBERT service
-            embedding_service = SciBERTEmbeddingService()
+            embedding_service = EmbeddingHandler()
             
             print("Processing papers for embedding generation...")
             self.embeddings_file = embedding_service.process_papers(
@@ -191,7 +190,7 @@ class ZillizPipelineTest:
                 return False
             
             # Initialize Zilliz service
-            zilliz_service = ZillizUploadService()
+            zilliz_service = ZillizHandler()
             
             # Connect to Zilliz
             if not zilliz_service.connect():
@@ -241,7 +240,7 @@ class ZillizPipelineTest:
             
             # Initialize connection
             config = VectorDBConfig.from_env()
-            zilliz_service = ZillizUploadService()
+            zilliz_service = ZillizHandler()
             
             if not zilliz_service.connect():
                 print("❌ Failed to connect to Zilliz for search test")

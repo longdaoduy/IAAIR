@@ -1,5 +1,5 @@
 """Ingestion module initialization."""
 
-from .IngestionHandler import IngestionHandler
+from models.pipelines.handlers.IngestionHandler import IngestionHandler
 
 __all__ = ["IngestionHandler"]
