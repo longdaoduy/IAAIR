@@ -36,8 +36,8 @@ class ZillizHandler:
     def connect(self) -> bool:
         try:
             print("Connecting to Zilliz Cloud...")
-            token = "077c916c3ea903b26c6158ec923a657b8c674d5a46e1561b57eb6e54d5467a12dec4f58d87d54c752e548cf1f283de84d224b1f3"
-            uri = "https://in03-c605f97af57afe9.serverless.aws-eu-central-1.cloud.zilliz.com"
+            token = self.config.token
+            uri = self.config.uri
 
             if not isinstance(uri, str) or not isinstance(token, str):
                 raise RuntimeError("ZILLIZ_URI or ZILLIZ_TOKEN invalid")
