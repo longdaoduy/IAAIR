@@ -9,13 +9,12 @@ import json
 import os
 import glob
 from typing import List, Dict, Optional, Any
-from datetime import datetime
-from google.colab import userdata
+# from google.colab import userdata
 from tqdm import tqdm
 
 from pymilvus import (
     connections, Collection, CollectionSchema, FieldSchema, DataType,
-    utility, MilvusException
+    utility
 )
 
 from models.configurators.VectorDBConfig import VectorDBConfig
@@ -300,6 +299,67 @@ class ZillizHandler:
         except Exception as e:
             print(f"❌ Upload failed: {e}")
             return False
+    
+    def search_similar_papers(self, query_text: str, top_k: int = 10) -> List[Dict]:
+        """Search for similar papers using semantic similarity.
+        
+        Args:
+            query_text: Text query to search for similar papers
+            top_k: Number of top results to return
+            
+        Returns:
+            List of similar papers with scores and IDs
+        """
+        try:
+            if not self.collection:
+                print("❌ No collection available for search")
+                return []
+            
+            # Generate embedding for the query text
+            from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
+            embedding_handler = EmbeddingHandler()
+            
+            # Generate query embedding
+            query_embedding = embedding_handler.generate_embedding(query_text)
+            if query_embedding is None:
+                print("❌ Failed to generate query embedding")
+                return []
+            
+            # Perform similarity search
+            search_params = {
+                "metric_type": self.config.metric_type, 
+                "params": {"nprobe": min(32, max(1, top_k))}
+            }
+            
+            # Load collection for search
+            self.collection.load()
+            
+            results = self.collection.search(
+                data=[query_embedding],
+                anns_field="abstract_embedding",
+                param=search_params,
+                limit=top_k,
+                output_fields=["paper_id", "title", "abstract"]
+            )
+            
+            # Format results
+            formatted_results = []
+            if results and len(results[0]) > 0:
+                for hit in results[0]:
+                    formatted_results.append({
+                        "paper_id": hit.entity.get("paper_id"),
+                        "title": hit.entity.get("title"),
+                        "abstract": hit.entity.get("abstract"),
+                        "similarity_score": float(hit.score),
+                        "distance": float(hit.distance)
+                    })
+            
+            print(f"🔍 Found {len(formatted_results)} similar papers")
+            return formatted_results
+            
+        except Exception as e:
+            print(f"❌ Search failed: {e}")
+            return []
     
     def verify_upload(self) -> bool:
         """Verify the uploaded data.

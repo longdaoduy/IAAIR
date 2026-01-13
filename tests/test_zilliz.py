@@ -22,9 +22,9 @@ from datetime import datetime
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from models.pipelines.handlers.IngestionHandler import IngestionHandler
-from models.pipelines.handlers.EmbeddingHandler import EmbeddingHandler
-from models.pipelines.handlers.ZillizHandler import ZillizHandler
+from pipelines.ingestions.handlers import IngestionHandler
+from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
+from pipelines.ingestions.handlers import ZillizHandler
 
 
 class ZillizPipelineTest:

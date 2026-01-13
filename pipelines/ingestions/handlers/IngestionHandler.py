@@ -1,30 +1,15 @@
-from typing import Dict, List, Optional, Any
+from typing import Dict, List
 from datetime import datetime
 import json
-import asyncio
 from models.schemas.nodes import Paper, Author, Venue,VenueType
-from clients.graph_store.Neo4jClient import Neo4jClient
 from clients.semantic_scholar.SemanticScholarClient import SemanticScholarClient
 from clients.semantic_scholar.OpenAlexClient import OpenAlexClient
-
 
 class IngestionHandler():
     def __init__(self):
         self.nums_papers_to_pull = 1
-        self.neo4j_client = None
         self.semantic_scholar_client = SemanticScholarClient()
         self.openalex_client = OpenAlexClient()
-
-    async def _initialize_neo4j_client(self):
-        """Initialize and connect to Neo4j client."""
-        if self.neo4j_client is None:
-            self.neo4j_client = Neo4jClient()
-            await self.neo4j_client.connect()
-        return self.neo4j_client
-
-    def test_api_connection(self):
-        """Test the API connection with a simple request"""
-        return self.openalex_client.test_connection()
 
     def fetch_papers(self, count: int = 1000, filters: Dict = None) -> List[Dict]:
         """Fetch papers from OpenAlex API.
@@ -116,15 +101,6 @@ class IngestionHandler():
             filename = f"openalex_papers_{timestamp}.json"
             self.save_papers_to_json(papers_data, filename)
 
-        # Upload to Neo4j if requested
-        if upload_to_neo4j and papers_data:
-            print("\nUploading papers to Neo4j...")
-            success = self.upload_papers_to_neo4j_sync(papers_data)
-            if success:
-                print("✅ Papers successfully uploaded to Neo4j!")
-            else:
-                print("❌ Failed to upload papers to Neo4j")
-
         # Print summary
         print(f"\n=== Ingestion Summary ===")
         print(f"Papers fetched: {len(papers_data)}")
@@ -136,91 +112,6 @@ class IngestionHandler():
             print(f"Average citations per paper: {total_citations / len(papers_data):.1f}")
 
         return papers_data
-
-    async def upload_papers_to_neo4j(self, papers_data: List[Dict]) -> bool:
-        """
-        Upload papers data to Neo4j database.
-        
-        Args:
-            papers_data: List of paper data dictionaries from fetch_papers()
-            
-        Returns:
-            bool: Success status
-        """
-        if not papers_data:
-            print("No papers data to upload")
-            return False
-
-        print(f"Starting upload of {len(papers_data)} papers to Neo4j...")
-
-        try:
-            # Initialize Neo4j client
-            client = await self._initialize_neo4j_client()
-
-            # Keep track of uploaded entities
-            uploaded_papers = 0
-            uploaded_authors = 0
-            created_citations = 0
-
-            for i, paper_data in enumerate(papers_data):
-                if i % 10 == 0:
-                    print(f"Processing paper {i + 1}/{len(papers_data)}...")
-
-                try:
-                    # Use the Neo4j client's store_paper method
-                    paper = paper_data["paper"]
-                    authors = paper_data["authors"]
-                    citations = [cid for cid in paper_data["citations"]
-                                 if self._paper_exists_in_dataset(cid, papers_data)]
-
-                    # Store paper with all its relationships
-                    await client.store_paper(
-                        paper=paper,
-                        authors=authors,
-                        venue=None,  # No venue data from OpenAlex for now
-                        citations=citations
-                    )
-
-                    uploaded_papers += 1
-                    uploaded_authors += len(authors)
-                    created_citations += len(citations)
-
-                except Exception as e:
-                    print(f"Error processing paper {paper.id}: {e}")
-                    continue
-
-            print(f"\n=== Neo4j Upload Summary ===")
-            print(f"Papers uploaded: {uploaded_papers}")
-            print(f"Authors uploaded: {uploaded_authors}")
-            print(f"Citation relationships created: {created_citations}")
-            print("✅ Successfully uploaded papers to Neo4j!")
-
-            return True
-
-        except Exception as e:
-            print(f"❌ Failed to upload papers to Neo4j: {e}")
-            return False
-
-        finally:
-            if self.neo4j_client:
-                await self.neo4j_client.close()
-                self.neo4j_client = None
-
-    def _paper_exists_in_dataset(self, paper_id: str, papers_data: List[Dict]) -> bool:
-        """Check if a paper ID exists in the current dataset."""
-        return any(pd["paper"].id == paper_id for pd in papers_data)
-
-    def upload_papers_to_neo4j_sync(self, papers_data: List[Dict]) -> bool:
-        """
-        Synchronous wrapper for uploading papers to Neo4j.
-        
-        Args:
-            papers_data: List of paper data dictionaries from fetch_papers()
-            
-        Returns:
-            bool: Success status
-        """
-        return asyncio.run(self.upload_papers_to_neo4j(papers_data))
 
     def enrich_papers_with_semantic_scholar(self, papers_data: List[Dict], save_to_file: bool = True) -> List[Dict]:
         """
