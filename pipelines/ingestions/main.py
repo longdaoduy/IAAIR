@@ -127,7 +127,7 @@ async def pull_papers(request: PaperRequest, background_tasks: BackgroundTasks):
         neo4j_success = True
         if request.include_neo4j:
             logger.info("Step 3: Uploading to Neo4j...")
-            neo4j_success = neo4j_handler.upload_papers_to_neo4j_sync(enriched_papers)
+            neo4j_success = await neo4j_handler.upload_papers_to_neo4j(enriched_papers)
         
         # Step 4: Generate embeddings and upload to Zilliz (if requested)
         zilliz_success = True
@@ -214,7 +214,7 @@ async def semantic_search(request: SearchRequest):
             paper_ids = [paper["paper_id"] for paper in similar_papers if paper.get("paper_id")]
             
             if paper_ids:
-                detailed_papers = neo4j_handler.get_papers_by_ids_sync(paper_ids)
+                detailed_papers = await neo4j_handler.get_papers_by_ids(paper_ids)
                 
                 # Create a lookup dict for detailed paper data
                 detailed_lookup = {paper["id"]: paper for paper in detailed_papers}

@@ -300,7 +300,7 @@ class ZillizHandler:
             print(f"❌ Upload failed: {e}")
             return False
     
-    def search_similar_papers(self, query_text: str, top_k: int = 10) -> List[Dict]:
+    def search_similar_papers(self, query_text: str, top_k: int = 1) -> List[Dict]:
         """Search for similar papers using semantic similarity.
         
         Args:
@@ -312,8 +312,8 @@ class ZillizHandler:
         """
         try:
             if not self.collection:
-                print("❌ No collection available for search")
-                return []
+                self.collection = Collection(self.config.collection_name)
+                self.collection.load()
             
             # Generate embedding for the query text
             from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
@@ -339,7 +339,7 @@ class ZillizHandler:
                 anns_field="abstract_embedding",
                 param=search_params,
                 limit=top_k,
-                output_fields=["paper_id", "title", "abstract"]
+                output_fields=["id"]
             )
             
             # Format results
@@ -347,9 +347,9 @@ class ZillizHandler:
             if results and len(results[0]) > 0:
                 for hit in results[0]:
                     formatted_results.append({
-                        "paper_id": hit.entity.get("paper_id"),
-                        "title": hit.entity.get("title"),
-                        "abstract": hit.entity.get("abstract"),
+                        "paper_id": hit.entity.get("id"),
+                        "title": None,  # Not stored in vector DB
+                        "abstract": None,  # Not stored in vector DB
                         "similarity_score": float(hit.score),
                         "distance": float(hit.distance)
                     })

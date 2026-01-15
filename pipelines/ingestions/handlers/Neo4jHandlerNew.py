@@ -1,22 +1,41 @@
-from typing import Dict, List, Optional
-import asyncio
+"""
+Neo4j Handler for paper ingestion pipeline.
 
-from models.schemas.nodes import Paper, Author, Venue
+This module provides a high-level interface for uploading papers to Neo4j
+and retrieving paper information.
+"""
+
+import asyncio
+import logging
+from typing import List, Dict, Optional, Any
+from datetime import datetime
+
 from clients.graph_store.Neo4jClient import Neo4jClient
+from models.schemas.nodes.Paper import Paper
+from models.schemas.nodes.Author import Author
+from models.schemas.nodes.Venue import Venue
+
+logger = logging.getLogger(__name__)
 
 
 class Neo4jHandler:
-    """Handler for Neo4j database operations related to paper ingestion."""
+    """Handler for Neo4j database operations in the ingestion pipeline."""
     
     def __init__(self):
-        self.neo4j_client = None
+        """Initialize Neo4j handler."""
+        self.neo4j_client: Optional[Neo4jClient] = None
 
-    async def _initialize_neo4j_client(self):
-        """Initialize and connect to Neo4j client."""
-        if self.neo4j_client is None:
-            self.neo4j_client = Neo4jClient()
-            await self.neo4j_client.connect()
-        return self.neo4j_client
+    async def _initialize_neo4j_client(self) -> Optional[Neo4jClient]:
+        """Initialize Neo4j client connection."""
+        try:
+            if not self.neo4j_client:
+                self.neo4j_client = Neo4jClient()
+                await self.neo4j_client.connect()
+            return self.neo4j_client
+        except Exception as e:
+            print(f"❌ Failed to initialize Neo4j client: {e}")
+            self.neo4j_client = None
+            return None
 
     async def upload_papers_to_neo4j(self, papers_data: List[Dict]) -> bool:
         """
@@ -37,6 +56,8 @@ class Neo4jHandler:
         try:
             # Initialize Neo4j client
             client = await self._initialize_neo4j_client()
+            if not client:
+                return False
 
             # Keep track of uploaded entities
             uploaded_papers = 0
@@ -58,7 +79,7 @@ class Neo4jHandler:
                     await client.store_paper(
                         paper=paper,
                         authors=authors,
-                        venue=paper_data.get("venue"),
+                        venue=None,  # No venue data from OpenAlex for now
                         citations=citations
                     )
 
@@ -87,6 +108,18 @@ class Neo4jHandler:
                 await self.neo4j_client.close()
                 self.neo4j_client = None
 
+    def upload_papers_to_neo4j_sync(self, papers_data: List[Dict]) -> bool:
+        """
+        Synchronous wrapper for uploading papers to Neo4j.
+        
+        Args:
+            papers_data: List of paper data dictionaries from fetch_papers()
+            
+        Returns:
+            bool: Success status
+        """
+        return asyncio.run(self.upload_papers_to_neo4j(papers_data))
+
     def _paper_exists_in_dataset(self, paper_id: str, papers_data: List[Dict]) -> bool:
         """Check if a paper ID exists in the current dataset."""
         return any(pd["paper"].id == paper_id for pd in papers_data)
@@ -94,10 +127,10 @@ class Neo4jHandler:
     async def get_papers_by_ids(self, paper_ids: List[str]) -> List[Dict]:
         """
         Retrieve detailed information for papers by their IDs.
-
+        
         Args:
             paper_ids: List of paper IDs to retrieve
-
+            
         Returns:
             List of paper dictionaries with detailed information
         """
@@ -115,8 +148,12 @@ class Neo4jHandler:
             return papers
 
         except Exception as e:
-            print(f"Failed to get papers by IDs: {e}")
+            logger.error(f"Failed to get papers by IDs: {e}")
             return []
+
+    def get_papers_by_ids_sync(self, paper_ids: List[str]) -> List[Dict]:
+        """Synchronous wrapper for getting papers by IDs."""
+        return asyncio.run(self.get_papers_by_ids(paper_ids))
 
     async def close(self):
         """Close the Neo4j client connection."""

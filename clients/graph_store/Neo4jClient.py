@@ -431,3 +431,71 @@ class Neo4jClient:
                 "center_author": author_id,
                 "collaborators": collaborators
             }
+
+    async def get_papers_by_ids(self, paper_ids: List[str]) -> List[Dict[str, Any]]:
+        """
+        Retrieve detailed information for papers by their IDs.
+        
+        Args:
+            paper_ids: List of paper IDs to retrieve
+            
+        Returns:
+            List of paper dictionaries with detailed information
+        """
+        if not paper_ids:
+            return []
+
+        async with self.driver.session() as session:
+            # Build query to get papers with authors and venue information
+            query = '''
+            MATCH (p:Paper)
+            WHERE p.id IN $paper_ids
+            OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+            OPTIONAL MATCH (p)-[:CITES]->(cited:Paper)
+            
+            WITH p, 
+                 collect(DISTINCT {
+                     id: a.id,
+                     name: a.name,
+                     orcid: a.orcid
+                 }) as authors,
+                 v,
+                 count(DISTINCT cited) as citations_count
+                 
+            RETURN p.id as id,
+                   p.title as title,
+                   p.abstract as abstract,
+                   p.doi as doi,
+                   p.publication_date as publication_date,
+                   p.source as source,
+                   p.cited_by_count as cited_by_count,
+                   authors,
+                   {
+                       id: v.id,
+                       name: v.name,
+                       type: v.type
+                   } as venue,
+                   citations_count
+            '''
+
+            result = await session.run(query, {"paper_ids": paper_ids})
+            
+            papers = []
+            async for record in result:
+                paper_data = {
+                    "id": record["id"],
+                    "title": record["title"],
+                    "abstract": record["abstract"],
+                    "doi": record["doi"],
+                    "publication_date": record["publication_date"],
+                    "source": record["source"],
+                    "cited_by_count": record["cited_by_count"] or 0,
+                    "authors": [author for author in record["authors"] if author["id"]],  # Filter out null authors
+                    "venue": record["venue"] if record["venue"]["id"] else None,
+                    "citations": [],  # We have citations_count but not the actual citations list
+                    "citations_count": record["citations_count"] or 0
+                }
+                papers.append(paper_data)
+
+            return papers
