@@ -21,6 +21,7 @@ from pipelines.ingestions.handlers import IngestionHandler
 from pipelines.ingestions.handlers import Neo4jHandler
 from pipelines.ingestions.handlers import MilvusClient
 from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
+from pipelines.retrieval.CypherSubgraphAPI import router as graph_router
 import uvicorn
 
 # Setup logging
@@ -32,6 +33,9 @@ app = FastAPI(
     description="API for ingesting academic papers from OpenAlex, enriching with Semantic Scholar, and uploading to Neo4j and Zilliz",
     version="1.0.0"
 )
+
+# Include graph query router
+app.include_router(graph_router)
 
 class PaperRequest(BaseModel):
     """Request model for paper ingestion."""
@@ -83,6 +87,17 @@ async def root():
         "endpoints": {
             "/pull-papers": "POST - Pull papers from OpenAlex and process through pipeline",
             "/search": "POST - Semantic search for similar papers",
+            "/graph": "Graph query endpoints for Neo4j Cypher queries",
+            "/graph/stats": "GET - Database statistics",
+            "/graph/query": "POST - Execute custom Cypher queries",
+            "/graph/papers/by-author": "POST - Find papers by author",
+            "/graph/papers/citations": "POST - Find paper citations",
+            "/graph/authors/coauthors": "POST - Find coauthors",
+            "/graph/venues/papers": "POST - Find papers in venue",
+            "/graph/papers/most-cited": "GET - Find most cited papers",
+            "/graph/authors/network": "POST - Find collaboration network",
+            "/graph/analysis/trends": "POST - Analyze research trends",
+            "/graph/papers/citation-path": "POST - Find citation paths",
             "/health": "GET - Health check endpoint",
             "/docs": "GET - API documentation"
         }

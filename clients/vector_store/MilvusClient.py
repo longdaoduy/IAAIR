@@ -9,7 +9,6 @@ import json
 import os
 import glob
 from typing import List, Dict, Optional, Any
-# from google.colab import userdata
 from tqdm import tqdm
 
 from pymilvus import (
@@ -20,8 +19,6 @@ from pymilvus import (
 from models.configurators.VectorDBConfig import VectorDBConfig
 from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
 from sklearn.feature_extraction.text import TfidfVectorizer
-import numpy as np
-from scipy.sparse import csr_matrix
 
 
 class MilvusClient:
