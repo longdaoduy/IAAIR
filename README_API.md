@@ -219,7 +219,7 @@ The API uses several handler classes that can be configured:
 
 - `IngestionHandler`: Manages OpenAlex and Semantic Scholar integration
 - `Neo4jHandler`: Handles graph database operations
-- `ZillizHandler`: Manages vector database operations  
+- `MilvusClient`: Manages vector database operations  
 - `EmbeddingHandler`: Processes SciBERT embeddings
 
 ## Usage Examples

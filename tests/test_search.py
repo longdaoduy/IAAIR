@@ -17,7 +17,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
-from pipelines.ingestions.handlers import ZillizHandler
+from pipelines.ingestions.handlers import MilvusClient
 from pymilvus import Collection
 from models.configurators.VectorDBConfig import VectorDBConfig
 from clients.graph_store.Neo4jClient import Neo4jClient
@@ -49,7 +49,7 @@ class ZillizSearchTest:
             
             # Initialize Zilliz service
             print("   Connecting to Zilliz...")
-            self.zilliz_service = ZillizHandler()
+            self.zilliz_service = MilvusClient()
             if not self.zilliz_service.connect():
                 print("❌ Failed to connect to Zilliz")
                 return False

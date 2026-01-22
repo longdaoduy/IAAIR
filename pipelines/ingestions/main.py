@@ -19,7 +19,7 @@ import logging
 
 from pipelines.ingestions.handlers import IngestionHandler
 from pipelines.ingestions.handlers import Neo4jHandler
-from pipelines.ingestions.handlers import ZillizHandler
+from pipelines.ingestions.handlers import MilvusClient
 from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
 import uvicorn
 
@@ -69,7 +69,7 @@ class SearchResponse(BaseModel):
 # Global handlers (consider using dependency injection in production)
 ingestion_handler = IngestionHandler()
 neo4j_handler = Neo4jHandler()
-zilliz_handler = ZillizHandler()
+zilliz_handler = MilvusClient()
 embedding_handler = EmbeddingHandler()
 
 @app.get("/")
@@ -311,22 +311,6 @@ async def generate_and_upload_embeddings(papers_data: List[Dict], timestamp: dat
     except Exception as e:
         logger.error(f"Error in embedding generation and upload: {e}")
         return False
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services on startup."""
-    logger.info("Starting IAAIR Paper Ingestion API...")
-    # Perform any initialization here if needed
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown."""
-    logger.info("Shutting down IAAIR Paper Ingestion API...")
-    # Cleanup connections if needed
-    try:
-        await neo4j_handler.close()
-    except:
-        pass
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

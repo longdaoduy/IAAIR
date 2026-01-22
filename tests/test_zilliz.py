@@ -24,7 +24,7 @@ sys.path.insert(0, str(project_root))
 
 from pipelines.ingestions.handlers import IngestionHandler
 from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
-from pipelines.ingestions.handlers import ZillizHandler
+from pipelines.ingestions.handlers import MilvusClient
 
 
 class ZillizPipelineTest:
@@ -190,7 +190,7 @@ class ZillizPipelineTest:
                 return False
             
             # Initialize Zilliz service
-            zilliz_service = ZillizHandler()
+            zilliz_service = MilvusClient()
             
             # Connect to Zilliz
             if not zilliz_service.connect():
@@ -240,7 +240,7 @@ class ZillizPipelineTest:
             
             # Initialize connection
             config = VectorDBConfig.from_env()
-            zilliz_service = ZillizHandler()
+            zilliz_service = MilvusClient()
             
             if not zilliz_service.connect():
                 print("❌ Failed to connect to Zilliz for search test")
