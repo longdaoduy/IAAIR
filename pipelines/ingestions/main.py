@@ -37,8 +37,8 @@ class PaperRequest(BaseModel):
     """Request model for paper ingestion."""
     num_papers: int = Field(..., gt=0, le=1000, description="Number of papers to pull (1-1000)")
     filters: Optional[Dict[str, Any]] = Field(None, description="Optional filters for OpenAlex API")
-    include_neo4j: bool = Field(True, description="Whether to upload to Neo4j")
-    include_zilliz: bool = Field(True, description="Whether to upload to Zilliz")
+    include_neo4j: bool = Field(False, description="Whether to upload to Neo4j")
+    include_zilliz: bool = Field(False, description="Whether to upload to Zilliz")
 
 class PaperResponse(BaseModel):
     """Response model for paper ingestion."""
@@ -89,7 +89,7 @@ async def root():
     }
 
 @app.post("/pull-papers", response_model=PaperResponse)
-async def pull_papers(request: PaperRequest, background_tasks: BackgroundTasks):
+async def pull_papers(request: PaperRequest):
     """
     Pull papers from OpenAlex, enrich with Semantic Scholar, and upload to databases.
     

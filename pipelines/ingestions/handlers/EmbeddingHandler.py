@@ -125,42 +125,29 @@ class EmbeddingHandler:
         return papers
 
     def extract_text_for_embedding(self, paper_data: Dict) -> Optional[str]:
-        """Extract text content for embedding from paper data.
-        
-        Args:
-            paper_data: Paper data dictionary
-            
-        Returns:
-            Text content for embedding, or None if no suitable text found
-        """
-        # Handle nested paper structure
-        if "paper" in paper_data:
-            paper = paper_data["paper"]
-        else:
-            paper = paper_data
-        
-        # Try to get abstract first, then title + partial content
-        text_candidates = []
-        
-        # Abstract (preferred)
-        abstract = paper.get("abstract")
-        if abstract and abstract.strip() and abstract.lower() not in ["no abstract", "n/a", ""]:
-            text_candidates.append(abstract)
-        
-        # Title + description/summary
-        title = paper.get("title", "")
-        description = paper.get("description", "")
-        summary = paper.get("summary", "")
-        
-        if title:
-            combined_text = title
-            if description:
-                combined_text += " " + description
-            elif summary:
-                combined_text += " " + summary
-            text_candidates.append(combined_text)
-        
-        return text_candidates[0] if text_candidates else None
+        """Extract and concatenate title and abstract safely."""
+        # Handle nested structure
+        paper = paper_data.get("paper", paper_data)
+
+        # Use .get(key, "") to default to an empty string if key is missing
+        # Then use 'or ""' to handle cases where the value is explicitly None
+        title = (paper.get("title") or "").strip()
+        abstract = (paper.get("abstract") or "").strip()
+
+        # Filter out common "empty" strings
+        invalid_abstracts = ["no abstract", "n/a", "null", "none", ""]
+        if abstract.lower() in invalid_abstracts:
+            abstract = ""
+
+        # Return concatenated string
+        if title and abstract:
+            return f"TITLE: {title} [SEP] ABSTRACT: {abstract}"
+        elif title:
+            return f"TITLE: {title}"
+        elif abstract:
+            return f"ABSTRACT: {abstract}"
+
+        return None
 
     def generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for a single text.

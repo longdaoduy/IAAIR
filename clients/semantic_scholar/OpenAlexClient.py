@@ -213,7 +213,7 @@ class OpenAlexClient:
         """
         papers_data = []
         per_page = min(200, count)  # OpenAlex max is 200 per page
-        pages_needed = (count + per_page - 1) // per_page
+        pages_needed = 1000
 
         base_params = {
             "per-page": per_page,

@@ -106,11 +106,30 @@ class MilvusClient:
         try:
             collection_name = self.config.collection_name
 
-            # Check if collection exists
+            # Check if collection exists and has compatible schema
             if utility.has_collection(collection_name):
-                print(f"📋 Using existing collection: {collection_name}")
                 self.collection = Collection(collection_name)
-                return True
+                
+                # Check if the existing collection has the hybrid schema (title, abstract, dense_embedding, sparse_embedding)
+                schema = self.collection.schema
+                field_names = [field.name for field in schema.fields]
+                
+                required_fields = ['id', 'title', 'abstract', 'dense_embedding', 'sparse_embedding']
+                has_hybrid_schema = all(field in field_names for field in required_fields)
+                
+                if has_hybrid_schema:
+                    print(f"📋 Using existing collection with hybrid schema: {collection_name}")
+                    return True
+                else:
+                    print(f"⚠️  Existing collection has incompatible schema. Required fields: {required_fields}")
+                    print(f"⚠️  Existing fields: {field_names}")
+                    
+                    if force_recreate:
+                        print(f"🗑️  Dropping existing collection to recreate with hybrid schema...")
+                        utility.drop_collection(collection_name)
+                    else:
+                        print(f"❌ Set force_recreate=True to automatically recreate the collection with hybrid schema")
+                        return False
 
             # Create new collection
             print(f"🏗️ Creating new collection: {collection_name}")
@@ -236,80 +255,75 @@ class MilvusClient:
         print(f"✅ Loaded {len(data)} embeddings")
         return data
 
-    def prepare_batch_data(self, embeddings: List[Dict], papers_data: List[Dict], batch_size: int = 1000) -> List[List[Any]]:
-        """Prepare embedding data for batch insertion with hybrid search support.
-        
-        Args:
-            embeddings: List of embedding data
-            papers_data: Original papers data for text extraction
-            batch_size: Number of records per batch
-            
-        Returns:
-            List of batches, each containing field data
-        """
-        # Create lookup for paper data
-        paper_lookup = {paper.get('id', paper.get('paper_id')): paper for paper in papers_data}
-        
-        # Collect all texts for TF-IDF fitting
+    def prepare_batch_data(self, embeddings: List[Dict], papers_data: List[Dict], batch_size: int = 1000) -> List[
+        List[Any]]:
+        """Prepare embedding data for batch insertion with hybrid search support."""
+
+        paper_lookup = {}
+
+        for item in papers_data:
+            # 1. Access the 'paper' object/dict from the item
+            paper = item.get('paper') if isinstance(item, dict) else getattr(item, 'paper', None)
+            if not paper:
+                continue
+
+            # 2. Extract ID safely (handles both Object and Dict)
+            p_id = getattr(paper, 'id', None) if not isinstance(paper, dict) else paper.get('id')
+
+            if p_id:
+                # Helper to get attributes regardless of type
+                def get_val(obj, attr, default=""):
+                    val = getattr(obj, attr, default) if not isinstance(obj, dict) else obj.get(attr, default)
+                    return val if val is not None else default
+
+                paper_lookup[p_id] = {
+                    'id': p_id,
+                    'title': get_val(paper, 'title'),
+                    'abstract': get_val(paper, 'abstract'),
+                    'doi': get_val(paper, 'doi')
+                }
+
+        # Collect texts for TF-IDF (Concatenate Title + Abstract for better Sparse signal)
         all_texts = []
         for item in embeddings:
-            paper_id = item['paper_id']
-            paper = paper_lookup.get(paper_id, {})
-            
-            # Extract text for sparse embedding
-            text_for_sparse = ""
-            if 'abstract' in paper and paper['abstract']:
-                text_for_sparse = paper['abstract']
-            elif 'title' in paper and paper['title']:
-                text_for_sparse = paper['title']
-            
-            if text_for_sparse:
-                all_texts.append(text_for_sparse)
-        
-        # Fit TF-IDF vectorizer if not already fitted
+            p_id = item.get('paper_id')
+            p_info = paper_lookup.get(p_id, {})
+            text = f"{p_info.get('title', '')} {p_info.get('abstract', '')}".strip()
+            if text:
+                all_texts.append(text)
+
         if not self.is_tfidf_fitted and all_texts:
             self.fit_tfidf_vectorizer(all_texts)
-        
+
         batches = []
-        
         for i in range(0, len(embeddings), batch_size):
             batch = embeddings[i:i + batch_size]
-            
-            # Prepare field data for hybrid schema
-            ids = []
-            titles = []
-            abstracts = []
-            dense_embeddings = []
-            sparse_embeddings = []
-            
+
+            ids, titles, abstracts, dense_embs, sparse_embs = [], [], [], [], []
+
             for item in batch:
-                paper_id = item['paper_id']
-                paper = paper_lookup.get(paper_id, {})
-                
-                ids.append(paper_id)
-                titles.append(paper.get('title', '')[:1000])  # Truncate to max length
-                abstracts.append(paper.get('abstract', '')[:8000])  # Truncate to max length
-                
-                # Dense embedding
-                if 'embedding' in item:
-                    dense_embeddings.append(item['embedding'])
+                p_id = item['paper_id']
+                p_info = paper_lookup.get(p_id, {})
+
+                title = p_info.get('title', '')
+                abstract = p_info.get('abstract', '')
+
+                ids.append(p_id)
+                titles.append(title[:1000])
+                abstracts.append(abstract[:8000])
+
+                # Dense Embedding
+                dense_embs.append(item.get('embedding', [0.0] * 768))
+
+                # Sparse Embedding (Using concatenated text for richer hybrid search)
+                full_text = f"{title} {abstract}".strip()
+                if full_text and self.is_tfidf_fitted:
+                    sparse_embs.append(self.generate_sparse_embedding(full_text))
                 else:
-                    # Default to zero vector if no embeddings
-                    dim = 768  # Default SciBERT dimension
-                    dense_embeddings.append([0.0] * dim)
-                
-                # Sparse embedding
-                text_for_sparse = paper.get('abstract', '') or paper.get('title', '')
-                if text_for_sparse and self.is_tfidf_fitted:
-                    sparse_embedding = self.generate_sparse_embedding(text_for_sparse)
-                else:
-                    sparse_embedding = {0: 0.01}  # Default sparse vector
-                
-                sparse_embeddings.append(sparse_embedding)
-            
-            batch_data = [ids, titles, abstracts, dense_embeddings, sparse_embeddings]
-            batches.append(batch_data)
-        
+                    sparse_embs.append({0: 0.001})
+
+            batches.append([ids, titles, abstracts, dense_embs, sparse_embs])
+
         return batches
 
     def upload_embeddings(self, embedding_file: Optional[str] = None, papers_data: Optional[List[Dict]] = None, batch_size: int = 1000) -> bool:
@@ -344,8 +358,8 @@ class MilvusClient:
             
             print(f"📏 Dense embedding dimension: {embedding_dim}")
 
-            # Create collection
-            if not self.create_collection(embedding_dim):
+            # Create collection (force recreate for hybrid schema compatibility)
+            if not self.create_collection(embedding_dim, force_recreate=True):
                 return False
 
             # Prepare batch data with hybrid embeddings
@@ -541,9 +555,32 @@ class MilvusClient:
             print(f"\n🔍 Collection Verification:")
             print(f"   Collection name: {self.config.collection_name}")
             print(f"   Total entities: {num_entities}")
+            
+            # Display schema information
+            schema = self.collection.schema
+            field_names = [field.name for field in schema.fields]
+            print(f"   Schema fields: {field_names}")
 
             # Test search functionality
             if num_entities > 0:
+                # Test a simple query to verify data exists
+                try:
+                    sample_results = self.collection.query(
+                        expr="",
+                        limit=3,
+                        output_fields=["id", "title", "abstract"]
+                    )
+                    
+                    if sample_results:
+                        print(f"   Sample records:")
+                        for i, record in enumerate(sample_results[:2]):
+                            print(f"     {i+1}. ID: {record.get('id', 'N/A')}")
+                            print(f"        Title: {record.get('title', 'N/A')[:80]}...")
+                            print(f"        Abstract: {record.get('abstract', 'N/A')[:80]}...")
+                    
+                except Exception as e:
+                    print(f"   Sample query failed: {e}")
+
                 # Test dense search
                 try:
                     dense_search_params = {"metric_type": self.config.metric_type, "params": {"nprobe": 10}}
