@@ -56,6 +56,7 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Text query to search for similar papers")
     top_k: int = Field(10, gt=0, le=50, description="Number of top results to return (1-50)")
     include_details: bool = Field(True, description="Whether to include detailed paper information from Neo4j")
+    use_hybrid: bool = Field(True, description="Whether to use hybrid search (dense + sparse) or dense-only search")
 
 class SearchResponse(BaseModel):
     """Response model for semantic search."""
@@ -172,13 +173,18 @@ async def pull_papers(request: PaperRequest, background_tasks: BackgroundTasks):
 @app.post("/search", response_model=SearchResponse)
 async def semantic_search(request: SearchRequest):
     """
-    Perform semantic search for similar papers.
+    Perform semantic or hybrid search for similar papers.
     
     This endpoint:
-    1. Generates embedding for the query text
-    2. Searches Zilliz for semantically similar papers
-    3. Retrieves detailed information from Neo4j (if requested)
-    4. Returns ranked results with similarity scores
+    1. Generates dense embedding for the query text
+    2. Optionally generates sparse embedding for hybrid search
+    3. Searches Zilliz using hybrid search (dense + sparse) or dense-only search
+    4. Retrieves detailed information from Neo4j (if requested)
+    5. Returns ranked results with similarity scores
+    
+    Hybrid search combines:
+    - Dense embeddings (SciBERT) for semantic similarity
+    - Sparse embeddings (TF-IDF) for keyword/lexical matching
     """
     start_time = datetime.now()
     
@@ -192,7 +198,8 @@ async def semantic_search(request: SearchRequest):
         # Search for similar papers in Zilliz
         similar_papers = zilliz_handler.search_similar_papers(
             query_text=request.query,
-            top_k=request.top_k
+            top_k=request.top_k,
+            use_hybrid=request.use_hybrid
         )
         
         if not similar_papers:
@@ -296,8 +303,11 @@ async def generate_and_upload_embeddings(papers_data: List[Dict], timestamp: dat
             logger.error("Failed to connect to Zilliz")
             return False
         
-        # Upload embeddings using the generated embedding file
-        upload_success = zilliz_handler.upload_embeddings(embedding_file=output_filename)
+        # Upload embeddings using the generated embedding file with papers data for hybrid search
+        upload_success = zilliz_handler.upload_embeddings(
+            embedding_file=output_filename,
+            papers_data=papers_data  # Pass papers data for sparse embeddings
+        )
         
         # Cleanup temporary files
         try:

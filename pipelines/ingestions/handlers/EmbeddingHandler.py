@@ -12,8 +12,7 @@ from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
 import os
 import glob
-from pathlib import Path
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional
 from datetime import datetime
 
 from models.configurators.SciBERTConfig import SciBERTConfig
