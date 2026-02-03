@@ -14,14 +14,14 @@ class VectorDBConfig:
     provider: str = "milvus"  # "milvus", "weaviate", or "zilliz"
     
     # Authentication
-    username: str = "db_c605f97af57afe9"
-    password: str = "Cm3&Xz<+cJ},p|%+"
-    token: str = "077c916c3ea903b26c6158ec923a657b8c674d5a46e1561b57eb6e54d5467a12dec4f58d87d54c752e548cf1f283de84d224b1f3"  # For Zilliz Cloud authentication
+    username: str = "db_fc2099952a50820"
+    password: str = "Uv6;GF<K>oOb0BwF"
+    token: str = "9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8"  # For Zilliz Cloud authentication
     
     # Connection
     host: str = "localhost"
     port: int = 19530
-    uri: str = "https://in03-c605f97af57afe9.serverless.aws-eu-central-1.cloud.zilliz.com"
+    uri: str = "https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com"
 
     # Milvus/Zilliz specific
     collection_name: str = "scientific_papers"
