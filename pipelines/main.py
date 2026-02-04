@@ -15,16 +15,13 @@ This unified API provides comprehensive endpoints for:
    - Hybrid search capabilities
 """
 
-from typing import Dict, List, Optional, Any, Union, Tuple
+from typing import Dict, List
 from datetime import datetime
 import logging
 import os
 import asyncio
-import numpy as np
-from enum import Enum
-from fastapi import FastAPI, HTTPException, BackgroundTasks, APIRouter, Query, Path
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, validator
 
 # Import handlers
 from pipelines.ingestions.handlers import IngestionHandler
@@ -32,6 +29,25 @@ from pipelines.ingestions.handlers import Neo4jHandler
 from pipelines.ingestions.handlers import MilvusClient
 from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
 from pipelines.retrieval.GraphQueryHandler import GraphQueryHandler
+from models.engines.RoutingDecisionEngine import RoutingDecisionEngine
+from models.engines.ResultFusion import ResultFusion
+from models.engines.ScientificReranker import ScientificReranker
+from models.engines.AttributionTracker import AttributionTracker
+from models.entities.ingestion.PaperRequest import PaperRequest
+from models.entities.ingestion.PaperResponse import PaperResponse
+from models.entities.retrieval.HybridSearchRequest import HybridSearchRequest
+from models.entities.retrieval.GraphQueryRequest import GraphQueryRequest
+from models.entities.retrieval.GraphQueryResponse import GraphQueryResponse
+from models.entities.retrieval.SearchRequest import SearchRequest
+from models.entities.retrieval.SearchResponse import SearchResponse
+from models.entities.retrieval.HybridSearchResponse import HybridSearchResponse
+from models.entities.retrieval.RoutingStrategy import RoutingStrategy
+from models.entities.retrieval.RoutingPerformanceResponse import RoutingPerformanceResponse
+from models.entities.retrieval.QueryAnalysisResponse import QueryAnalysisResponse
+from models.entities.retrieval.QueryAnalysisRequest import QueryAnalysisRequest
+from models.entities.retrieval.QueryType import QueryType
+from models.entities.retrieval.AttributionStatsResponse import AttributionStatsResponse
+
 import uvicorn
 
 # Setup logging
@@ -44,169 +60,6 @@ app = FastAPI(
     description="Unified API for academic paper ingestion, graph queries, and semantic search",
     version="2.0.0"
 )
-
-# ===============================================================================
-# PYDANTIC MODELS
-# ===============================================================================
-
-# Ingestion Models
-class PaperRequest(BaseModel):
-    """Request model for paper ingestion."""
-    num_papers: int = Field(..., gt=0, le=1000, description="Number of papers to pull (1-1000)")
-    filters: Optional[Dict[str, Any]] = Field(None, description="Optional filters for OpenAlex API")
-    include_neo4j: bool = Field(False, description="Whether to upload to Neo4j")
-    include_zilliz: bool = Field(False, description="Whether to upload to Zilliz")
-
-class PaperResponse(BaseModel):
-    """Response model for paper ingestion."""
-    success: bool
-    message: str
-    papers_processed: int
-    neo4j_uploaded: bool
-    zilliz_uploaded: bool
-    json_filename: str
-    timestamp: str
-    summary: Dict[str, Any]
-
-class SearchRequest(BaseModel):
-    """Request model for semantic search."""
-    query: str = Field(..., min_length=1, description="Text query to search for similar papers")
-    top_k: int = Field(10, gt=0, le=50, description="Number of top results to return (1-50)")
-    include_details: bool = Field(True, description="Whether to include detailed paper information from Neo4j")
-    use_hybrid: bool = Field(True, description="Whether to use hybrid search (dense + sparse) or dense-only search")
-
-class SearchResponse(BaseModel):
-    """Response model for semantic search."""
-    success: bool
-    message: str
-    query: str
-    results_found: int
-    search_time_seconds: float
-    results: List[Dict[str, Any]]
-
-# Graph Query Models
-class GraphQueryRequest(BaseModel):
-    """Request model for custom Cypher queries."""
-    query: str = Field(..., description="Cypher query to execute")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Query parameters")
-    limit: Optional[int] = Field(100, ge=1, le=1000, description="Maximum results to return")
-
-
-
-class GraphQueryResponse(BaseModel):
-    """Response model for graph queries."""
-    success: bool
-    message: str
-    query_time_seconds: float
-    results_count: int
-    results: List[Dict[str, Any]]
-    query_info: Optional[Dict[str, Any]] = None
-
-# Hybrid Fusion Models
-class RoutingStrategy(str, Enum):
-    """Routing strategies for hybrid fusion."""
-    VECTOR_FIRST = "vector_first"  # Vector search -> Graph refinement
-    GRAPH_FIRST = "graph_first"    # Graph search -> Vector similarity
-    PARALLEL = "parallel"          # Both in parallel with fusion
-    ADAPTIVE = "adaptive"          # Auto-select based on query analysis
-
-class QueryType(str, Enum):
-    """Query classification types."""
-    SEMANTIC = "semantic"          # Concept-based queries
-    STRUCTURAL = "structural"      # Relationship-based queries
-    HYBRID = "hybrid"             # Mixed semantic and structural
-    FACTUAL = "factual"           # Specific fact retrieval
-
-class HybridSearchRequest(BaseModel):
-    """Request model for hybrid search with fusion."""
-    query: str = Field(..., min_length=1, description="Search query")
-    top_k: int = Field(10, gt=0, le=100, description="Number of results to return")
-    routing_strategy: RoutingStrategy = Field(RoutingStrategy.ADAPTIVE, description="Routing strategy")
-    enable_reranking: bool = Field(True, description="Enable neural reranking")
-    enable_attribution: bool = Field(True, description="Track source attribution")
-    fusion_weights: Optional[Dict[str, float]] = Field(None, description="Custom fusion weights")
-    include_provenance: bool = Field(False, description="Include detailed provenance")
-
-class AttributionSpan(BaseModel):
-    """Attribution span with source tracking."""
-    text: str
-    source_id: str
-    source_type: str  # 'paper', 'abstract', 'citation'
-    confidence: float = Field(..., ge=0.0, le=1.0)
-    char_start: int
-    char_end: int
-    supporting_passages: List[str] = []
-
-class SearchResult(BaseModel):
-    """Enhanced search result with attribution and provenance."""
-    paper_id: str
-    title: str
-    abstract: Optional[str] = None
-    authors: List[str] = []
-    venue: Optional[str] = None
-    publication_date: Optional[str] = None
-    doi: Optional[str] = None
-    # Scoring and ranking
-    relevance_score: float = Field(..., ge=0.0, description="Composite relevance score")
-    vector_score: Optional[float] = None
-    graph_score: Optional[float] = None
-    rerank_score: Optional[float] = None
-    # Attribution and provenance
-    attributions: List[AttributionSpan] = []
-    source_path: List[str] = []  # Retrieval path for provenance
-    confidence_scores: Dict[str, float] = {}
-
-class HybridSearchResponse(BaseModel):
-    """Response model for hybrid search."""
-    success: bool
-    message: str
-    query: str
-    query_type: QueryType
-    routing_used: RoutingStrategy
-    results_found: int
-    search_time_seconds: float
-    fusion_time_seconds: Optional[float] = None
-    reranking_time_seconds: Optional[float] = None
-    results: List[SearchResult]
-    fusion_stats: Dict[str, Any] = {}
-    attribution_stats: Dict[str, Any] = {}
-
-class QueryAnalysisRequest(BaseModel):
-    """Request for query classification analysis."""
-    query: str = Field(..., min_length=1, description="Query to analyze")
-    include_routing_suggestion: bool = Field(True, description="Include routing strategy suggestion")
-
-class QueryAnalysisResponse(BaseModel):
-    """Response for query analysis."""
-    success: bool
-    query: str
-    query_type: QueryType
-    confidence: float
-    suggested_routing: RoutingStrategy
-    analysis_details: Dict[str, Any]
-
-class RoutingPerformanceResponse(BaseModel):
-    """Response for routing performance metrics."""
-    success: bool
-    timestamp: str
-    performance_metrics: Dict[str, Dict[str, float]]
-    recommendations: List[str]
-
-class AttributionStatsResponse(BaseModel):
-    """Response for attribution statistics."""
-    success: bool
-    timestamp: str
-    total_queries_tracked: int
-    attribution_accuracy: float
-    high_confidence_rate: float
-    source_type_distribution: Dict[str, int]
-    average_attributions_per_result: float
-
-
-
-# ===============================================================================
-# GLOBAL HANDLERS
-# ===============================================================================
 
 # Initialize handlers
 ingestion_handler = IngestionHandler()
@@ -221,290 +74,6 @@ def get_query_handler():
     if query_handler is None:
         query_handler = GraphQueryHandler()
     return query_handler
-
-# ===============================================================================
-# HYBRID FUSION SYSTEM
-# ===============================================================================
-
-class QueryClassifier:
-    """Classify queries to determine optimal routing strategy."""
-    
-    def __init__(self):
-        # Keywords indicating different query types
-        self.semantic_keywords = {'similar', 'related', 'about', 'concerning', 'regarding'}
-        self.structural_keywords = {'cited', 'authored', 'collaborated', 'published', 'references'}
-        self.factual_keywords = {'who', 'what', 'when', 'where', 'which', 'how many'}
-    
-    def classify_query(self, query: str) -> Tuple[QueryType, float]:
-        """Classify query and return confidence score."""
-        query_lower = query.lower()
-        
-        # Count keyword matches
-        semantic_score = sum(1 for kw in self.semantic_keywords if kw in query_lower)
-        structural_score = sum(1 for kw in self.structural_keywords if kw in query_lower)
-        factual_score = sum(1 for kw in self.factual_keywords if kw in query_lower)
-        
-        # Simple heuristic-based classification
-        scores = {
-            QueryType.SEMANTIC: semantic_score + (0.5 if len(query.split()) > 5 else 0),
-            QueryType.STRUCTURAL: structural_score + (0.3 if any(op in query_lower for op in ['and', 'or', 'not']) else 0),
-            QueryType.FACTUAL: factual_score + (0.4 if query_lower.startswith(tuple(self.factual_keywords)) else 0)
-        }
-        
-        max_type = max(scores, key=scores.get)
-        max_score = scores[max_type]
-        
-        # If no clear winner, classify as hybrid
-        if max_score < 1.0 or sum(scores.values()) > 1.5:
-            return QueryType.HYBRID, 0.6
-        
-        confidence = min(max_score / 2.0, 1.0)
-        return max_type, confidence
-
-class RoutingDecisionEngine:
-    """Decide optimal routing strategy based on query and system state."""
-    
-    def __init__(self):
-        self.query_classifier = QueryClassifier()
-        self.performance_history = {}  # Track routing performance
-    
-    def decide_routing(self, query: str, request: HybridSearchRequest) -> RoutingStrategy:
-        """Decide routing strategy based on query analysis."""
-        if request.routing_strategy != RoutingStrategy.ADAPTIVE:
-            return request.routing_strategy
-        
-        query_type, confidence = self.query_classifier.classify_query(query)
-        
-        # Routing decision logic
-        if query_type == QueryType.SEMANTIC and confidence > 0.7:
-            return RoutingStrategy.VECTOR_FIRST
-        elif query_type == QueryType.STRUCTURAL and confidence > 0.7:
-            return RoutingStrategy.GRAPH_FIRST
-        else:
-            return RoutingStrategy.PARALLEL
-    
-    def update_performance(self, strategy: RoutingStrategy, query_type: QueryType, 
-                          latency: float, relevance_score: float):
-        """Update performance tracking for adaptive routing."""
-        key = f"{strategy}_{query_type}"
-        if key not in self.performance_history:
-            self.performance_history[key] = {'latencies': [], 'relevance_scores': []}
-        
-        self.performance_history[key]['latencies'].append(latency)
-        self.performance_history[key]['relevance_scores'].append(relevance_score)
-        
-        # Keep only recent history (last 100 queries)
-        for metric_list in self.performance_history[key].values():
-            if len(metric_list) > 100:
-                metric_list.pop(0)
-
-class ResultFusion:
-    """Fuse results from different retrieval strategies."""
-    
-    def __init__(self):
-        self.default_weights = {
-            'vector_score': 0.4,
-            'graph_score': 0.3,
-            'rerank_score': 0.3
-        }
-    
-    def fuse_results(self, vector_results: List[Dict], graph_results: List[Dict],
-                    fusion_weights: Optional[Dict[str, float]] = None) -> List[SearchResult]:
-        """Fuse results from vector and graph search."""
-        weights = fusion_weights or self.default_weights
-        
-        # Create result index by paper_id
-        all_results = {}
-        
-        # Process vector results
-        for result in vector_results:
-            paper_id = result.get('paper_id')
-            if paper_id:
-                    all_results[paper_id] = {
-                        'paper_id': paper_id,
-                        'title': result.get('title', ''),
-                        'abstract': result.get('abstract'),
-                        'authors': result.get('authors', []),
-                        'venue': result.get('venue'),
-                        'publication_date': result.get('publication_date'),
-                        'doi': result.get('doi'),
-                        'vector_score': min(result.get('similarity_score', 0.0), 1.0),  # Normalize to [0,1]
-                        'graph_score': 0.0,
-                        'source_path': ['vector_search']
-                    }        # Process graph results and merge
-        for result in graph_results:
-            paper_id = result.get('paper_id') or result.get('id')
-            if paper_id:
-                if paper_id in all_results:
-                    all_results[paper_id]['graph_score'] = min(result.get('relevance_score', 0.5), 1.0)  # Normalize to [0,1]
-                    all_results[paper_id]['source_path'].append('graph_search')
-                else:
-                    all_results[paper_id] = {
-                        'paper_id': paper_id,
-                        'title': result.get('title', ''),
-                        'abstract': result.get('abstract'),
-                        'authors': result.get('authors', []),
-                        'venue': result.get('venue'),
-                        'publication_date': result.get('publication_date'),
-                        'doi': result.get('doi'),
-                        'vector_score': 0.0,
-                        'graph_score': min(result.get('relevance_score', 0.5), 1.0),  # Normalize to [0,1]
-                        'source_path': ['graph_search']
-                    }
-        
-        # Calculate fusion scores
-        fused_results = []
-        for result_data in all_results.values():
-            # Calculate weighted fusion score
-            raw_relevance_score = (
-                weights['vector_score'] * result_data['vector_score'] +
-                weights['graph_score'] * result_data['graph_score']
-            )
-            
-            # Normalize the final score to ensure it's reasonable (optional cap at 1.0)
-            relevance_score = min(raw_relevance_score, 1.0)
-            
-            search_result = SearchResult(
-                paper_id=result_data['paper_id'],
-                title=result_data['title'],
-                abstract=result_data['abstract'],
-                authors=result_data['authors'],
-                venue=result_data['venue'],
-                publication_date=result_data['publication_date'],
-                doi=result_data['doi'],
-                relevance_score=relevance_score,
-                vector_score=result_data['vector_score'],
-                graph_score=result_data['graph_score'],
-                source_path=result_data['source_path'],
-                attributions=[],
-                confidence_scores={
-                    'vector_confidence': result_data['vector_score'],
-                    'graph_confidence': result_data['graph_score'],
-                    'raw_fusion_score': raw_relevance_score  # Keep track of original score
-                }
-            )
-            fused_results.append(search_result)
-        
-        # Sort by relevance score
-        fused_results.sort(key=lambda x: x.relevance_score, reverse=True)
-        return fused_results
-
-class ScientificReranker:
-    """Rerank results using scientific domain knowledge."""
-    
-    def __init__(self):
-        # Scientific relevance factors
-        self.citation_weight = 0.3
-        self.recency_weight = 0.2
-        self.venue_weight = 0.2
-        self.author_weight = 0.15
-        self.semantic_weight = 0.15
-    
-    async def rerank_results(self, results: List[SearchResult], query: str) -> List[SearchResult]:
-        """Rerank results using scientific relevance factors."""
-        for result in results:
-            # Calculate domain-specific scores
-            citation_score = self._calculate_citation_score(result)
-            recency_score = self._calculate_recency_score(result)
-            venue_score = self._calculate_venue_score(result)
-            author_score = self._calculate_author_score(result)
-            semantic_score = result.relevance_score  # Use existing relevance
-            
-            # Weighted combination
-            rerank_score = (
-                self.citation_weight * citation_score +
-                self.recency_weight * recency_score +
-                self.venue_weight * venue_score +
-                self.author_weight * author_score +
-                self.semantic_weight * semantic_score
-            )
-            
-            result.rerank_score = rerank_score
-            result.confidence_scores.update({
-                'citation_score': citation_score,
-                'recency_score': recency_score,
-                'venue_score': venue_score,
-                'author_score': author_score
-            })
-        
-        # Sort by rerank score
-        results.sort(key=lambda x: x.rerank_score or 0, reverse=True)
-        return results
-    
-    def _calculate_citation_score(self, result: SearchResult) -> float:
-        """Calculate citation-based relevance score."""
-        # Placeholder - would use actual citation counts
-        return 0.5
-    
-    def _calculate_recency_score(self, result: SearchResult) -> float:
-        """Calculate recency-based relevance score."""
-        # Placeholder - would use publication date
-        return 0.5
-    
-    def _calculate_venue_score(self, result: SearchResult) -> float:
-        """Calculate venue-based relevance score."""
-        # Placeholder - would use venue impact factor
-        return 0.5
-    
-    def _calculate_author_score(self, result: SearchResult) -> float:
-        """Calculate author-based relevance score."""
-        # Placeholder - would use author h-index/reputation
-        return 0.5
-
-class AttributionTracker:
-    """Track source attribution for retrieved content."""
-    
-    def __init__(self):
-        self.confidence_threshold = 0.7
-    
-    def track_attributions(self, results: List[SearchResult], query: str) -> List[SearchResult]:
-        """Add attribution tracking to search results."""
-        for result in results:
-            # Create basic attribution spans
-            attributions = self._create_attribution_spans(result, query)
-            result.attributions = attributions
-        
-        return results
-    
-    def _create_attribution_spans(self, result: SearchResult, query: str) -> List[AttributionSpan]:
-        """Create attribution spans for a result."""
-        attributions = []
-        
-        # Title attribution
-        if result.title:
-            attributions.append(AttributionSpan(
-                text=result.title,
-                source_id=result.paper_id,
-                source_type='paper',
-                confidence=0.9,
-                char_start=0,
-                char_end=len(result.title),
-                supporting_passages=[result.title]
-            ))
-        
-        # Abstract attribution (if available)
-        if result.abstract:
-            # Simple span creation - would be more sophisticated in practice
-            abstract_words = result.abstract.split()
-            query_words = set(query.lower().split())
-            
-            for i, word in enumerate(abstract_words):
-                if word.lower() in query_words:
-                    # Create span around matching word (simplified)
-                    start_pos = sum(len(w) + 1 for w in abstract_words[:i])
-                    end_pos = start_pos + len(word)
-                    
-                    attributions.append(AttributionSpan(
-                        text=word,
-                        source_id=result.paper_id,
-                        source_type='abstract',
-                        confidence=0.8,
-                        char_start=start_pos,
-                        char_end=end_pos,
-                        supporting_passages=[result.abstract[:100] + '...']
-                    ))
-        
-        return attributions
 
 # Global hybrid system components
 routing_engine = RoutingDecisionEngine()
