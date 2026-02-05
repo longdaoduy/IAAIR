@@ -15,13 +15,15 @@ This unified API provides comprehensive endpoints for:
    - Hybrid search capabilities
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional, Any, Union, Tuple
 from datetime import datetime
 import logging
 import os
 import asyncio
-from fastapi import FastAPI, HTTPException
+import numpy as np
+from fastapi import FastAPI, HTTPException, BackgroundTasks, APIRouter, Query, Path
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, validator
 
 # Import handlers
 from pipelines.ingestions.handlers import IngestionHandler
@@ -543,7 +545,7 @@ async def _execute_graph_refinement(paper_ids: List[str], query: str) -> List[Di
         cypher_query = f"""
         MATCH (seed:Paper)
         WHERE seed.id IN $paper_ids
-        MATCH (related:Paper)-[:CITED_BY|:CITES*1..2]-(seed)
+        MATCH (related:Paper)-[:CITES*1..2]-(seed)
         WHERE related.title CONTAINS $query OR related.abstract CONTAINS $query
         RETURN DISTINCT related.id as paper_id, related.title as title, 
                related.abstract as abstract, related.doi as doi,
