@@ -1,0 +1,174 @@
+nohup: ignoring input
+INFO:     Started server process [16132]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:✅ Connected to Neo4j database
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 1 results in 1.58s
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+INFO:     127.0.0.1:57886 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 1 results in 0.29s
+INFO:     127.0.0.1:43826 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 9.66s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:36892 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 1 results in 2.41s
+INFO:     127.0.0.1:47936 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 6.29s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:33292 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 5.75s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:35030 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 6.08s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:39062 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 6.35s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:41304 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 5.67s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:47584 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48746 - "POST /analytics/query-classification HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55588 - "POST /graph-search HTTP/1.1" 404 Not Found
+ERROR:pipelines.retrieval.GraphQueryHandler:❌ Cypher query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: Invalid input 'who': expected 'ALTER', 'ORDER BY', 'CALL', 'USING PERIODIC COMMIT', 'CREATE', 'LOAD CSV', 'START DATABASE', 'STOP DATABASE', 'DEALLOCATE', 'DELETE', 'DENY', 'DETACH', 'DROP', 'DRYRUN', 'FINISH', 'FOREACH', 'GRANT', 'INSERT', 'LIMIT', 'MATCH', 'MERGE', 'NODETACH', 'OFFSET', 'OPTIONAL', 'REALLOCATE', 'REMOVE', 'RENAME', 'RETURN', 'REVOKE', 'ENABLE SERVER', 'SET', 'SHOW', 'SKIP', 'TERMINATE', 'UNWIND', 'USE' or 'WITH' (line 1, column 1 (offset: 0))
+"who is the author of paper have id = W2036113194 LIMIT 100"
+ ^} {gql_status: 42001} {gql_status_description: error: syntax error or access rule violation - invalid syntax}
+ERROR:pipelines.main:Query execution error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: Invalid input 'who': expected 'ALTER', 'ORDER BY', 'CALL', 'USING PERIODIC COMMIT', 'CREATE', 'LOAD CSV', 'START DATABASE', 'STOP DATABASE', 'DEALLOCATE', 'DELETE', 'DENY', 'DETACH', 'DROP', 'DRYRUN', 'FINISH', 'FOREACH', 'GRANT', 'INSERT', 'LIMIT', 'MATCH', 'MERGE', 'NODETACH', 'OFFSET', 'OPTIONAL', 'REALLOCATE', 'REMOVE', 'RENAME', 'RETURN', 'REVOKE', 'ENABLE SERVER', 'SET', 'SHOW', 'SKIP', 'TERMINATE', 'UNWIND', 'USE' or 'WITH' (line 1, column 1 (offset: 0))
+"who is the author of paper have id = W2036113194 LIMIT 100"
+ ^} {gql_status: 42001} {gql_status_description: error: syntax error or access rule violation - invalid syntax}
+INFO:     127.0.0.1:58342 - "POST /graph/query HTTP/1.1" 400 Bad Request
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 7.36s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:60000 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 6.75s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:36900 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41850 - "POST /graph-search HTTP/1.1" 404 Not Found
+INFO:pipelines.main:Starting hybrid search for query: 'W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.80), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 1 results in 1.24s
+INFO:     127.0.0.1:38284 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 6.62s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:38806 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 6.02s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:59582 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:pipelines.main:Starting hybrid search for query: 'who is the author of paper have id = W2036113194'
+INFO:pipelines.main:Query classified as structural (confidence: 0.95), using graph_first routing
+INFO:pipelines.retrieval.GraphQueryHandler:📊 Query executed successfully, returned 1 records
+INFO:pipelines.main:Hybrid search completed. Found 10 results in 7.90s
+Connecting to Zilliz Cloud...
+https://in03-fc2099952a50820.serverless.aws-eu-central-1.cloud.zilliz.com
+9c756b29aa107040710292568a81291acca3afa7f6c4582b843180b94c207e43dea5bb284ba4867dfb24591a235003630d78c0c8
+✅ Connected to Zilliz Cloud
+Loading SciBERT model: allenai/scibert_scivocab_uncased
+✅ Model loaded successfully on device: cuda
+🔍 Dense search found 10 similar papers
+INFO:     127.0.0.1:38396 - "POST /hybrid-search HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [16132]

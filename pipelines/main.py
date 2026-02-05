@@ -411,10 +411,23 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
             # Graph search first, then vector similarity
             graph_results = await _execute_graph_search(request.query, request.top_k * 2)
-            if graph_results:
-                # Use graph results to inform vector search
+            
+            # Check if this is a specific paper ID query BEFORE checking if graph_results exist
+            if _is_paper_id_query(request.query):
+                # For paper ID queries, return only the graph results, no vector search
+                logger.info("Paper ID query detected - using only graph search results")
+                vector_results = []
+                if graph_results:
+                    graph_results = graph_results[:1]  # Limit to single exact match
+                    logger.info(f"GRAPH_FIRST paper ID: graph_results count: {len(graph_results)}, vector_results count: {len(vector_results)}")
+                else:
+                    logger.warning("Graph search returned no results for paper ID query")
+            elif graph_results and not _is_paper_id_query(request.query):
+                # Use graph results to inform vector search for general queries
                 paper_ids = [r.get('paper_id', r.get('id')) for r in graph_results[:request.top_k]]
                 vector_results = await _execute_vector_refinement(paper_ids, request.query)
+            else:
+                vector_results = []
             
         elif routing_strategy == RoutingStrategy.PARALLEL:
             # Execute both searches in parallel
@@ -424,6 +437,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
             vector_results, graph_results = await asyncio.gather(vector_task, graph_task)
         
         # Step 3: Result fusion
+        logger.info(f"Before fusion - vector_results: {len(vector_results or [])}, graph_results: {len(graph_results or [])}")
         fused_results = result_fusion.fuse_results(
             vector_results or [],
             graph_results or [],
@@ -510,31 +524,142 @@ async def _execute_vector_search(query: str, top_k: int) -> List[Dict]:
         return []
 
 async def _execute_graph_search(query: str, top_k: int) -> List[Dict]:
-    """Execute graph search using Cypher query."""
+    """Execute graph search using Cypher query with intelligent query parsing."""
     try:
         handler = get_query_handler()
         
-        # Simple graph search - would be more sophisticated in practice
-        cypher_query = f"""
-        MATCH (p:Paper)
-        WHERE p.title CONTAINS $query OR p.abstract CONTAINS $query
-        RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-               p.doi as doi, p.publication_date as publication_date,
-               [(p)<-[:AUTHORED]-(a:Author) | a.name] as authors,
-               [(p)-[:PUBLISHED_IN]->(v:Venue) | v.name][0] as venue
-        LIMIT $limit
-        """
+        # Parse the query intelligently based on patterns
+        cypher_query, parameters = _build_intelligent_cypher_query(query, top_k)
         
-        results = handler.execute_query(cypher_query, {"query": query, "limit": top_k})
+        # Debug logging
+        logger.info(f"Graph search query: {query}")
+        logger.info(f"Generated Cypher: {cypher_query}")
+        logger.info(f"Parameters: {parameters}")
         
-        # Add basic relevance scores
+        results = handler.execute_query(cypher_query, parameters)
+        logger.info(f"Graph search returned {len(results)} results")
+        
+        # Add basic relevance scores based on query type
         for result in results:
-            result['relevance_score'] = 0.5  # Placeholder score
+            result['relevance_score'] = 0.8 if _is_structured_query(query) else 0.5
         
         return results
     except Exception as e:
         logger.error(f"Graph search error: {e}")
         return []
+
+def _is_structured_query(query: str) -> bool:
+    """Check if this is a structured query (ID-based, author lookup, etc.)"""
+    import re
+    paper_id_pattern = re.compile(r'\b(W\d+|DOI:|doi:|pmid:|arxiv:)', re.IGNORECASE)
+    author_patterns = [
+        re.compile(r'who\s+is\s+the\s+author', re.IGNORECASE),
+        re.compile(r'authors?\s+of\s+paper', re.IGNORECASE),
+        re.compile(r'who\s+wrote', re.IGNORECASE),
+        re.compile(r'who\s+authored', re.IGNORECASE)
+    ]
+    
+    return (paper_id_pattern.search(query) or 
+            any(pattern.search(query) for pattern in author_patterns))
+
+def _is_paper_id_query(query: str) -> bool:
+    """Check if this query contains a specific paper ID"""
+    import re
+    # Enhanced pattern to match various paper ID formats and contexts
+    paper_id_pattern = re.compile(r'\b(W\d+|DOI:|doi:|pmid:|arxiv:)', re.IGNORECASE)
+    return bool(paper_id_pattern.search(query))
+
+def _build_intelligent_cypher_query(query: str, top_k: int) -> tuple:
+    """Build Cypher query based on intelligent query analysis."""
+    import re
+    
+    query_lower = query.lower()
+    
+    # Pattern 1: "who is the author of paper have id = W2036113194"
+    paper_id_match = re.search(r'(id\s*=\s*|with\s+id\s+|have\s+id\s+|paper\s+id\s+)(["\']?)(W\d+|DOI:[^\s]+|doi:[^\s]+)(\2)', query, re.IGNORECASE)
+    if paper_id_match and any(word in query_lower for word in ['author', 'wrote', 'written']):
+        paper_id = paper_id_match.group(3)
+        cypher_query = """
+        MATCH (p:Paper {id: $paper_id})
+        OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+        OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+        RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+               p.doi as doi, p.publication_date as publication_date,
+               collect(DISTINCT a.name) as authors,
+               v.name as venue
+        """
+        return cypher_query, {"paper_id": paper_id}
+    
+    # Pattern 2: Direct paper ID query
+    paper_id_match = re.search(r'\b(W\d+)\b', query)
+    if paper_id_match:
+        paper_id = paper_id_match.group(1)
+        cypher_query = """
+        MATCH (p:Paper {id: $paper_id})
+        OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+        OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+        RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+               p.doi as doi, p.publication_date as publication_date,
+               collect(DISTINCT a.name) as authors,
+               v.name as venue
+        """
+        return cypher_query, {"paper_id": paper_id}
+    
+    # Pattern 3: Author name query
+    author_query_patterns = [
+        r'papers?\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)',
+        r'authored?\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)',
+        r'written\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)'
+    ]
+    
+    for pattern in author_query_patterns:
+        match = re.search(pattern, query, re.IGNORECASE)
+        if match:
+            author_name = match.group(2).strip()
+            cypher_query = """
+            MATCH (a:Author)-[:AUTHORED]->(p:Paper)
+            WHERE toLower(a.name) CONTAINS toLower($author_name)
+            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+                   p.doi as doi, p.publication_date as publication_date,
+                   collect(DISTINCT a.name) as authors,
+                   v.name as venue
+            ORDER BY p.cited_by_count DESC
+            LIMIT $limit
+            """
+            return cypher_query, {"author_name": author_name, "limit": top_k}
+    
+    # Pattern 4: Citation-based queries
+    if any(word in query_lower for word in ['cited', 'citations', 'references']):
+        cypher_query = """
+        MATCH (p:Paper)
+        WHERE p.title CONTAINS $query OR p.abstract CONTAINS $query
+        OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+        OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+        OPTIONAL MATCH (p)-[:CITES]->(cited:Paper)
+        WITH p, collect(DISTINCT a.name) as authors, v, count(cited) as citations_made
+        RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+               p.doi as doi, p.publication_date as publication_date,
+               authors, v.name as venue, citations_made
+        ORDER BY p.cited_by_count DESC
+        LIMIT $limit
+        """
+        return cypher_query, {"query": query, "limit": top_k}
+    
+    # Default: Generic text search with improved author retrieval
+    cypher_query = """
+    MATCH (p:Paper)
+    WHERE p.title CONTAINS $query OR p.abstract CONTAINS $query
+    OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+    OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+    RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+           p.doi as doi, p.publication_date as publication_date,
+           collect(DISTINCT a.name) as authors,
+           v.name as venue
+    ORDER BY p.cited_by_count DESC
+    LIMIT $limit
+    """
+    return cypher_query, {"query": query, "limit": top_k}
 
 async def _execute_graph_refinement(paper_ids: List[str], query: str) -> List[Dict]:
     """Refine vector results using graph relationships."""
