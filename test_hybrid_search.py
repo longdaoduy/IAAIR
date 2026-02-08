@@ -5,13 +5,12 @@ This script tests the hybrid search implementation in MilvusClient.
 """
 
 import sys
-import os
+
 sys.path.append('/home/dnhoa/IAAIR/IAAIR')
 
 from clients.vector_store.MilvusClient import MilvusClient
-from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
-import json
-from datetime import datetime
+from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
+
 
 def test_hybrid_search():
     """Test hybrid search functionality."""
@@ -42,8 +41,8 @@ def test_hybrid_search():
         print("🔧 Initializing MilvusClient...")
         milvus_client = MilvusClient()
         
-        print("🔧 Initializing EmbeddingHandler...")
-        embedding_handler = EmbeddingHandler()
+        print("🔧 Initializing EmbeddingSciBERTHandler...")
+        embedding_handler = EmbeddingSciBERTHandler()
         
         print("✅ Clients initialized successfully")
         

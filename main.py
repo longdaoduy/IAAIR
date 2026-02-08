@@ -15,21 +15,20 @@ This unified API provides comprehensive endpoints for:
    - Hybrid search capabilities
 """
 
-from typing import Dict, List, Optional, Any, Union, Tuple
+from typing import Dict, List, Optional
 from datetime import datetime
 import logging
 import os
 import asyncio
-import numpy as np
-from fastapi import FastAPI, HTTPException, BackgroundTasks, APIRouter, Query, Path
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, validator
 
 # Import handlers
-from pipelines.ingestions.handlers import IngestionHandler
-from pipelines.ingestions.handlers import Neo4jHandler
-from pipelines.ingestions.handlers import MilvusClient
-from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
+from pipelines.ingestions import IngestionHandler
+from pipelines.ingestions import GraphNeo4jHandler
+from clients.vector_store.MilvusClient import MilvusClient
+from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
+from pipelines.retrievals.RetrievalHandler import RetrievalHandler
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
 from models.engines.RoutingDecisionEngine import RoutingDecisionEngine
 from models.engines.ResultFusion import ResultFusion
@@ -65,9 +64,9 @@ app = FastAPI(
 
 # Initialize handlers
 ingestion_handler = IngestionHandler()
-neo4j_handler = Neo4jHandler()
-zilliz_handler = MilvusClient()
-embedding_handler = EmbeddingHandler()
+neo4j_handler = GraphNeo4jHandler()
+vector_handler = MilvusClient()
+embedding_handler = EmbeddingSciBERTHandler()
 query_handler = None
 
 def get_query_handler():
@@ -82,6 +81,7 @@ routing_engine = RoutingDecisionEngine()
 result_fusion = ResultFusion()
 scientific_reranker = ScientificReranker()
 attribution_tracker = AttributionTracker()
+retrieval_handler = RetrievalHandler()
 
 # ===============================================================================
 # ROOT ENDPOINT
@@ -248,12 +248,12 @@ async def generate_and_upload_embeddings(papers_data: List[Dict], timestamp: dat
             return False
         
         # Connect to Zilliz and upload embeddings
-        if not zilliz_handler.connect():
+        if not vector_handler.connect():
             logger.error("Failed to connect to Zilliz")
             return False
         
         # Upload embeddings using the generated embedding file with papers data for hybrid search
-        upload_success = zilliz_handler.upload_embeddings(
+        upload_success = vector_handler.upload_embeddings(
             embedding_file=output_filename,
             papers_data=papers_data  # Pass papers data for sparse embeddings
         )
@@ -293,11 +293,11 @@ async def semantic_search(request: SearchRequest):
         logger.info(f"Starting semantic search for query: '{request.query}'")
         
         # Step 1: Connect to Zilliz and perform similarity search
-        if not zilliz_handler.connect():
+        if not vector_handler.connect():
             raise HTTPException(status_code=500, detail="Failed to connect to Zilliz vector database")
         
         # Search for similar papers in Zilliz
-        similar_papers = zilliz_handler.search_similar_papers(
+        similar_papers = vector_handler.search_similar_papers(
             query_text=request.query,
             top_k=request.top_k,
             use_hybrid=request.use_hybrid
@@ -383,8 +383,6 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
     6. AI-powered response generation using Gemini
     """
     start_time = datetime.now()
-    fusion_start = None
-    reranking_start = None
     
     try:
         logger.info(f"Starting hybrid search for query: '{request.query}'")
@@ -403,18 +401,18 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
         
         if routing_strategy == RoutingStrategy.VECTOR_FIRST:
             # Vector search first, then graph refinement
-            vector_results = await _execute_vector_search(request.query, request.top_k * 2)
+            vector_results = await retrieval_handler._execute_vector_search(request.query, request.top_k * 2)
             if vector_results:
                 # Use top vector results to inform graph search
                 paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
-                graph_results = await _execute_graph_refinement(paper_ids, request.query)
+                graph_results = await retrieval_handler._execute_graph_refinement(paper_ids, request.query)
             
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
             # Graph search first, then vector similarity
-            graph_results = await _execute_graph_search(request.query, request.top_k * 2)
+            graph_results = await retrieval_handler._execute_graph_search(request.query, request.top_k * 2)
             
             # Check if this is a specific paper ID query BEFORE checking if graph_results exist
-            if _is_paper_id_query(request.query):
+            if retrieval_handler._is_paper_id_query(request.query):
                 # For paper ID queries, return only the graph results, no vector search
                 logger.info("Paper ID query detected - using only graph search results")
                 vector_results = []
@@ -423,17 +421,17 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
                     logger.info(f"GRAPH_FIRST paper ID: graph_results count: {len(graph_results)}, vector_results count: {len(vector_results)}")
                 else:
                     logger.warning("Graph search returned no results for paper ID query")
-            elif graph_results and not _is_paper_id_query(request.query):
+            elif graph_results and not retrieval_handler._is_paper_id_query(request.query):
                 # Use graph results to inform vector search for general queries
                 paper_ids = [r.get('paper_id', r.get('id')) for r in graph_results[:request.top_k]]
-                vector_results = await _execute_vector_refinement(paper_ids, request.query)
+                vector_results = await retrieval_handler._execute_vector_refinement(paper_ids, request.query)
             else:
                 vector_results = []
             
         elif routing_strategy == RoutingStrategy.PARALLEL:
             # Execute both searches in parallel
-            vector_task = _execute_vector_search(request.query, request.top_k)
-            graph_task = _execute_graph_search(request.query, request.top_k)
+            vector_task = retrieval_handler._execute_vector_search(request.query, request.top_k)
+            graph_task = retrieval_handler._execute_graph_search(request.query, request.top_k)
             
             vector_results, graph_results = await asyncio.gather(vector_task, graph_task)
         
@@ -486,7 +484,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
         response_generation_time = None
         if request.enable_ai_response and fused_results:
             response_start = datetime.now()
-            ai_response = await _generate_ai_response(request.query, fused_results, query_type)
+            ai_response = await retrieval_handler._generate_ai_response(request.query, fused_results, query_type)
             response_generation_time = (datetime.now() - response_start).total_seconds()
         
         # Update routing performance tracking
@@ -515,321 +513,6 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
     except Exception as e:
         logger.error(f"Error during hybrid search: {e}")
         raise HTTPException(status_code=500, detail=f"Hybrid search failed: {str(e)}")
-
-# Helper functions for hybrid search
-async def _execute_vector_search(query: str, top_k: int) -> List[Dict]:
-    """Execute vector search."""
-    try:
-        if not zilliz_handler.connect():
-            logger.warning("Vector search failed: Could not connect to Zilliz")
-            return []
-        
-        results = zilliz_handler.search_similar_papers(
-            query_text=query,
-            top_k=top_k,
-            use_hybrid=True
-        )
-        return results or []
-    except Exception as e:
-        logger.error(f"Vector search error: {e}")
-        return []
-
-async def _execute_graph_search(query: str, top_k: int) -> List[Dict]:
-    """Execute graph search using Cypher query with intelligent query parsing."""
-    try:
-        handler = get_query_handler()
-        
-        # Parse the query intelligently based on patterns
-        cypher_query, parameters = _build_intelligent_cypher_query(query, top_k)
-        
-        # Debug logging
-        logger.info(f"Graph search query: {query}")
-        logger.info(f"Generated Cypher: {cypher_query}")
-        logger.info(f"Parameters: {parameters}")
-        
-        results = handler.execute_query(cypher_query, parameters)
-        logger.info(f"Graph search returned {len(results)} results")
-        
-        # Add basic relevance scores based on query type
-        for result in results:
-            result['relevance_score'] = 0.8 if _is_structured_query(query) else 0.5
-        
-        return results
-    except Exception as e:
-        logger.error(f"Graph search error: {e}")
-        return []
-
-def _is_structured_query(query: str) -> bool:
-    """Check if this is a structured query (ID-based, author lookup, etc.)"""
-    import re
-    paper_id_pattern = re.compile(r'\b(W\d+|DOI:|doi:|pmid:|arxiv:)', re.IGNORECASE)
-    author_patterns = [
-        re.compile(r'who\s+is\s+the\s+author', re.IGNORECASE),
-        re.compile(r'authors?\s+of\s+paper', re.IGNORECASE),
-        re.compile(r'who\s+wrote', re.IGNORECASE),
-        re.compile(r'who\s+authored', re.IGNORECASE)
-    ]
-    
-    return (paper_id_pattern.search(query) or 
-            any(pattern.search(query) for pattern in author_patterns))
-
-def _is_paper_id_query(query: str) -> bool:
-    """Check if this query contains a specific paper ID"""
-    import re
-    # Enhanced pattern to match various paper ID formats and contexts
-    paper_id_pattern = re.compile(r'\b(W\d+|DOI:|doi:|pmid:|arxiv:)', re.IGNORECASE)
-    return bool(paper_id_pattern.search(query))
-
-def _build_intelligent_cypher_query(query: str, top_k: int) -> tuple:
-    """Build Cypher query based on intelligent query analysis."""
-    import re
-    
-    query_lower = query.lower()
-    
-    # Pattern 1: "who is the author of paper have id = W2036113194"
-    paper_id_match = re.search(r'(id\s*=\s*|with\s+id\s+|have\s+id\s+|paper\s+id\s+)(["\']?)(W\d+|DOI:[^\s]+|doi:[^\s]+)(\2)', query, re.IGNORECASE)
-    if paper_id_match and any(word in query_lower for word in ['author', 'wrote', 'written']):
-        paper_id = paper_id_match.group(3)
-        cypher_query = """
-        MATCH (p:Paper {id: $paper_id})
-        OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-        OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-        RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-               p.doi as doi, p.publication_date as publication_date,
-               collect(DISTINCT a.name) as authors,
-               v.name as venue
-        """
-        return cypher_query, {"paper_id": paper_id}
-    
-    # Pattern 2: Direct paper ID query
-    paper_id_match = re.search(r'\b(W\d+)\b', query)
-    if paper_id_match:
-        paper_id = paper_id_match.group(1)
-        cypher_query = """
-        MATCH (p:Paper {id: $paper_id})
-        OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-        OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-        RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-               p.doi as doi, p.publication_date as publication_date,
-               collect(DISTINCT a.name) as authors,
-               v.name as venue
-        """
-        return cypher_query, {"paper_id": paper_id}
-    
-    # Pattern 3: Author name query
-    author_query_patterns = [
-        r'papers?\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)',
-        r'authored?\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)',
-        r'written\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)'
-    ]
-    
-    for pattern in author_query_patterns:
-        match = re.search(pattern, query, re.IGNORECASE)
-        if match:
-            author_name = match.group(2).strip()
-            cypher_query = """
-            MATCH (a:Author)-[:AUTHORED]->(p:Paper)
-            WHERE toLower(a.name) CONTAINS toLower($author_name)
-            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                   p.doi as doi, p.publication_date as publication_date,
-                   collect(DISTINCT a.name) as authors,
-                   v.name as venue
-            ORDER BY p.cited_by_count DESC
-            LIMIT $limit
-            """
-            return cypher_query, {"author_name": author_name, "limit": top_k}
-    
-    # Pattern 4: Citation-based queries
-    if any(word in query_lower for word in ['cited', 'citations', 'references']):
-        cypher_query = """
-        MATCH (p:Paper)
-        WHERE p.title CONTAINS $query OR p.abstract CONTAINS $query
-        OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-        OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-        OPTIONAL MATCH (p)-[:CITES]->(cited:Paper)
-        WITH p, collect(DISTINCT a.name) as authors, v, count(cited) as citations_made
-        RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-               p.doi as doi, p.publication_date as publication_date,
-               authors, v.name as venue, citations_made
-        ORDER BY p.cited_by_count DESC
-        LIMIT $limit
-        """
-        return cypher_query, {"query": query, "limit": top_k}
-    
-    # Default: Generic text search with improved author retrievals
-    cypher_query = """
-    MATCH (p:Paper)
-    WHERE p.title CONTAINS $query OR p.abstract CONTAINS $query
-    OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-    OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-    RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-           p.doi as doi, p.publication_date as publication_date,
-           collect(DISTINCT a.name) as authors,
-           v.name as venue
-    ORDER BY p.cited_by_count DESC
-    LIMIT $limit
-    """
-    return cypher_query, {"query": query, "limit": top_k}
-
-async def _execute_graph_refinement(paper_ids: List[str], query: str) -> List[Dict]:
-    """Refine vector results using graph relationships."""
-    try:
-        handler = get_query_handler()
-        
-        # Find related papers through citations and collaborations
-        cypher_query = f"""
-        MATCH (seed:Paper)
-        WHERE seed.id IN $paper_ids
-        MATCH (related:Paper)-[:CITES*1..2]-(seed)
-        WHERE related.title CONTAINS $query OR related.abstract CONTAINS $query
-        RETURN DISTINCT related.id as paper_id, related.title as title, 
-               related.abstract as abstract, related.doi as doi,
-               related.publication_date as publication_date,
-               [(related)<-[:AUTHORED]-(a:Author) | a.name] as authors,
-               [(related)-[:PUBLISHED_IN]->(v:Venue) | v.name][0] as venue
-        LIMIT 20
-        """
-        
-        results = handler.execute_query(cypher_query, {
-            "paper_ids": paper_ids,
-            "query": query
-        })
-        
-        # Add relevance scores based on graph distance
-        for result in results:
-            result['relevance_score'] = 0.7  # Higher score for graph-refined results
-        
-        return results
-    except Exception as e:
-        logger.error(f"Graph refinement error: {e}")
-        return []
-
-async def _execute_vector_refinement(paper_ids: List[str], query: str) -> List[Dict]:
-    """Refine graph results using vector similarity."""
-    try:
-        if not zilliz_handler.connect():
-            logger.warning("Vector refinement failed: Could not connect to Zilliz")
-            return []
-        
-        # Use paper IDs to find similar papers in vector space
-        # This would require additional implementation in MilvusClient
-        # For now, fall back to regular vector search
-        results = zilliz_handler.search_similar_papers(
-            query_text=query,
-            top_k=20,
-            use_hybrid=True
-        )
-        
-        # Filter to only include results related to the paper_ids
-        # This would need more sophisticated implementation
-        return results or []
-    except Exception as e:
-        logger.error(f"Vector refinement error: {e}")
-        return []
-
-async def _generate_ai_response(
-    query: str,
-    search_results: List,
-    query_type: QueryType
-) -> Optional[str]:
-    """Generate AI response using Gemini based on search results."""
-    try:
-        # Use the same Gemini model from routing engine
-        if not routing_engine.use_gemini:
-            logger.info("Gemini not available for response generation")
-            return None
-
-        # Prepare context from search results
-        context_papers = []
-        for result in search_results[:5]:  # Use top 5 results
-            context_papers.append({
-                "title": result.title,
-                "authors": getattr(result, "authors", []) or [],
-                "abstract": (getattr(result, "abstract", "") or "")[:500],
-                "relevance_score": getattr(result, "relevance_score", 0),
-                "venue": getattr(result, "venue", ""),
-                "publication_date": getattr(result, "publication_date", ""),
-            })
-
-        # Create specialized prompt based on query type
-        if query_type == QueryType.STRUCTURAL:
-            prompt = f"""
-Based on the academic search results below, provide a direct and precise answer to this query: "{query}"
-
-Search Results:
-{_format_papers_for_prompt(context_papers)}
-
-Provide a clear, factual answer focusing on:
-- Specific information requested (authors, dates, IDs, etc.)
-- Direct citations from the papers
-- Exact matches to the query
-
-Keep the response concise and focused on the specific question asked.
-"""
-        elif query_type == QueryType.SEMANTIC:
-            prompt = f"""
-Based on the academic search results below, provide a comprehensive answer to this query: "{query}"
-
-Search Results:
-{_format_papers_for_prompt(context_papers)}
-
-Provide a thoughtful analysis that:
-- Synthesizes key findings from the papers
-- Identifies common themes and patterns
-- Highlights significant research trends
-- Mentions specific papers and authors when relevant
-
-Structure your response to be informative and academically rigorous.
-"""
-        else:  # FACTUAL, HYBRID, or other types
-            prompt = f"""
-Based on the academic search results below, provide a well-structured answer to this query: "{query}"
-
-Search Results:
-{_format_papers_for_prompt(context_papers)}
-
-Provide a balanced response that:
-- Answers the specific question asked
-- Provides relevant context from the research
-- Cites specific papers and authors
-- Organizes information clearly
-
-Ensure your answer is accurate and based only on the provided search results.
-"""
-
-        # Generate response using Gemini
-        response = routing_engine.gemini_model.generate_content(prompt)
-        ai_answer = response.text.strip()
-
-        logger.info(f"Generated AI response of {len(ai_answer)} characters")
-        return ai_answer
-
-    except Exception as e:
-        logger.error(f"Error generating AI response: {e}")
-        return None
-
-
-def _format_papers_for_prompt(papers: List[Dict]) -> str:
-    """Format papers for inclusion in Gemini prompt."""
-    formatted_papers = []
-
-    for i, paper in enumerate(papers, 1):
-        authors = paper.get("authors", [])
-        authors_str = ", ".join(authors[:3])
-        if len(authors) > 3:
-            authors_str += " et al."
-
-        paper_text = f"""{i}. Title: {paper.get('title', 'N/A')}
-   Authors: {authors_str or 'N/A'}
-   Venue: {paper.get('venue', 'N/A')}
-   Date: {paper.get('publication_date', 'N/A')}
-   Relevance: {paper.get('relevance_score', 0):.2f}
-   Abstract: {paper.get('abstract', 'N/A')}"""
-
-        formatted_papers.append(paper_text)
-
-    return "\n\n".join(formatted_papers)
 
 # ===============================================================================
 # ANALYTICS AND MONITORING ENDPOINTS

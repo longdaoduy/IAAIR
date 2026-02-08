@@ -3,7 +3,7 @@ from typing import Dict, List
 from clients.graph_store.Neo4jClient import Neo4jClient
 
 
-class Neo4jHandler:
+class GraphNeo4jHandler:
     """Handler for Neo4j database operations related to paper ingestion."""
     
     def __init__(self):

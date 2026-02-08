@@ -218,9 +218,9 @@ SEMANTIC_SCHOLAR_API_KEY=your_api_key
 The API uses several handler classes that can be configured:
 
 - `IngestionHandler`: Manages OpenAlex and Semantic Scholar integration
-- `Neo4jHandler`: Handles graph database operations
+- `GraphNeo4jHandler`: Handles graph database operations
 - `MilvusClient`: Manages vector database operations  
-- `EmbeddingHandler`: Processes SciBERT embeddings
+- `EmbeddingSciBERTHandler`: Processes SciBERT embeddings
 
 ## Usage Examples
 

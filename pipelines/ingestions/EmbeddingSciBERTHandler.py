@@ -18,7 +18,7 @@ from datetime import datetime
 from models.configurators.SciBERTConfig import SciBERTConfig
 
 
-class EmbeddingHandler:
+class EmbeddingSciBERTHandler:
     """Service for generating SciBERT embeddings from academic papers."""
     
     def __init__(self, config: Optional[SciBERTConfig] = None):

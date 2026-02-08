@@ -12,15 +12,6 @@ class IngestionHandler():
         self.openalex_client = OpenAlexClient()
 
     def fetch_papers(self, count: int = 1000, filters: Dict = None) -> List[Dict]:
-        """Fetch papers from OpenAlex API.
-        
-        Args:
-            count: Number of papers to fetch (500-1000)
-            filters: Additional filters for the API request
-            
-        Returns:
-            List of dictionaries containing paper data with authors and citations
-        """
         return self.openalex_client.fetch_papers(count, filters)
 
     def save_papers_to_json(self, papers_data: List[Dict], filename: str = "openalex_papers.json"):

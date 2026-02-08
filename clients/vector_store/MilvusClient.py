@@ -17,7 +17,7 @@ from pymilvus import (
 )
 
 from models.configurators.VectorDBConfig import VectorDBConfig
-from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
+from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 
@@ -415,7 +415,7 @@ class MilvusClient:
                 self.collection.load()
 
             # Generate embedding for the query text
-            embedding_handler = EmbeddingHandler()
+            embedding_handler = EmbeddingSciBERTHandler()
             query_embedding = embedding_handler.generate_embedding(query_text)
             
             if query_embedding is None:

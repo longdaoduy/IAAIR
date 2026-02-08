@@ -23,7 +23,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from pipelines.ingestions.handlers import IngestionHandler
-from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
+from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
 from pipelines.ingestions.handlers import MilvusClient
 
 
@@ -146,7 +146,7 @@ class ZillizPipelineTest:
                 return False
             
             # Initialize SciBERT service
-            embedding_service = EmbeddingHandler()
+            embedding_service = EmbeddingSciBERTHandler()
             
             print("Processing papers for embedding generation...")
             self.embeddings_file = embedding_service.process_papers(

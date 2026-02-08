@@ -16,7 +16,7 @@ from typing import List, Dict, Optional, Tuple
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from pipelines.ingestions.handlers.EmbeddingHandler import EmbeddingHandler
+from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
 from pipelines.ingestions.handlers import MilvusClient
 from pymilvus import Collection
 from models.configurators.VectorDBConfig import VectorDBConfig
@@ -45,7 +45,7 @@ class ZillizSearchTest:
             
             # Initialize SciBERT embedding service
             print("   Loading SciBERT model...")
-            self.embedding_service = EmbeddingHandler()
+            self.embedding_service = EmbeddingSciBERTHandler()
             
             # Initialize Zilliz service
             print("   Connecting to Zilliz...")
