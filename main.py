@@ -24,11 +24,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 # Import handlers
-from pipelines.ingestions import IngestionHandler
-from pipelines.ingestions import GraphNeo4jHandler
-from clients.vector_store.MilvusClient import MilvusClient
+from pipelines.ingestions.IngestionHandler import IngestionHandler
+from pipelines.ingestions.GraphNeo4jHandler import GraphNeo4jHandler
+from clients.vector.MilvusClient import MilvusClient
 from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
-from pipelines.retrievals.RetrievalHandler import RetrievalHandler
+from pipelines.retrievals.HybridRetrievalHandler import HybridRetrievalHandler
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
 from models.engines.RoutingDecisionEngine import RoutingDecisionEngine
 from models.engines.ResultFusion import ResultFusion
@@ -81,7 +81,7 @@ routing_engine = RoutingDecisionEngine()
 result_fusion = ResultFusion()
 scientific_reranker = ScientificReranker()
 attribution_tracker = AttributionTracker()
-retrieval_handler = RetrievalHandler()
+retrieval_handler = HybridRetrievalHandler()
 
 # ===============================================================================
 # ROOT ENDPOINT
@@ -389,7 +389,13 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
         
         # Step 1: Query classification and routing decision
         query_type, confidence = routing_engine.query_classifier.classify_query(request.query)
-        routing_strategy = routing_engine.decide_routing(request.query, request)
+        routing_result = routing_engine.decide_routing(request.query, request)
+        
+        # Handle routing result (could be tuple with 3 values)
+        if isinstance(routing_result, tuple) and len(routing_result) == 3:
+            routing_strategy, _, _ = routing_result
+        else:
+            routing_strategy = routing_result
         
         logger.info(f"Query classified as {query_type} (confidence: {confidence:.2f}), using {routing_strategy} routing")
         

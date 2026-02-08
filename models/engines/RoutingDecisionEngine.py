@@ -41,6 +41,7 @@ class RoutingDecisionEngine:
     def _few_shot_route_decision(self, query: str, request: HybridSearchRequest) -> Optional[Tuple[RoutingStrategy, QueryType, float]]:
         """Use few-shot learning with Gemini to make intelligent routing decisions."""
         try:
+                
             # Get performance context
             performance_context = self._get_performance_context()
             
@@ -48,6 +49,10 @@ class RoutingDecisionEngine:
             prompt = self._build_few_shot_prompt(query, performance_context)
             
             response = self.gemini_model.generate_content(prompt)
+            
+            if not response or not hasattr(response, 'text') or not response.text:
+                logger.error("Empty or invalid response from Gemini model")
+                return None
             response_text = response.text.strip()
             
             # Parse the structured response

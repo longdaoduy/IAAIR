@@ -6,7 +6,7 @@ with intelligent query routing and AI response generation.
 """
 
 from typing import Dict, List, Optional, Any
-from clients.vector_store.MilvusClient import MilvusClient
+from clients.vector.MilvusClient import MilvusClient
 
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
 from models.entities.retrieval.QueryType import QueryType
@@ -16,7 +16,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
-class RetrievalHandler:
+class HybridRetrievalHandler:
     """Unified handler for vector and graph-based retrieval operations."""
 
     def __init__(self):

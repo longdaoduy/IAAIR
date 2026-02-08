@@ -1,6 +1,6 @@
 from typing import Dict, List
 
-from clients.graph_store.Neo4jClient import Neo4jClient
+from clients.graph.Neo4jClient import Neo4jClient
 
 
 class GraphNeo4jHandler:

@@ -1,5 +1,5 @@
 """Ingestion module initialization."""
 
-from pipelines.ingestions.handlers import IngestionHandler
+from .IngestionHandler import IngestionHandler
 
 __all__ = ["IngestionHandler"]

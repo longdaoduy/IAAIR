@@ -1,7 +1,7 @@
 """
 Neo4j Graph Store implementation for citation networks and concept relationships.
 
-Handles storage and querying of the scientific literature graph_store including
+Handles storage and querying of the scientific literature graph including
 citations, author collaborations, and concept hierarchies.
 """
 
@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 class Neo4jClient:
     """
-    Neo4j implementation of the graph_store store for scientific literature.
-    
+    Neo4j implementation of the graph store for scientific literature.
+
     Manages citation networks, author collaboration graphs, and
     concept hierarchies with optimized Cypher queries for retrievals.
     """
@@ -125,7 +125,7 @@ class Neo4jClient:
     async def store_paper(self, paper: Paper, authors: List[Author] = None, venue: Venue = None,
                           citations: List[str] = None):
         """
-        Store a paper and its relationships in the graph_store database.
+        Store a paper and its relationships in the graph database.
         
         Creates nodes for the paper, authors, venue, and citation relationships.
         """
@@ -155,7 +155,7 @@ class Neo4jClient:
 
                     # Commit the transaction
                     await tx.commit()
-                    logger.debug(f"Stored paper {paper.id} in graph_store database")
+                    logger.debug(f"Stored paper {paper.id} in graph database")
 
                 except Exception as e:
                     # Rollback the transaction on error
@@ -169,7 +169,7 @@ class Neo4jClient:
                 raise
 
     async def _create_paper_node(self, tx, paper: Paper, cited_by_count: int = 0):
-        """Create a paper node in the graph_store."""
+        """Create a paper node in the graph."""
         query = '''
         MERGE (p:Paper {id: $id})
         SET p.title = $title,
@@ -201,7 +201,7 @@ class Neo4jClient:
         })
 
     async def _create_author_node(self, tx, author: Author):
-        """Create an author node in the graph_store."""
+        """Create an author node in the graph."""
         query = '''
         MERGE (a:Author {id: $id})
         SET a.name = $name,
@@ -223,7 +223,7 @@ class Neo4jClient:
         })
 
     async def _create_venue_node(self, tx, venue: Venue):
-        """Create a venue node in the graph_store."""
+        """Create a venue node in the graph."""
         query = '''
         MERGE (v:Venue {id: $id})
         SET v.name = $name,
