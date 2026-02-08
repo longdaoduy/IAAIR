@@ -28,6 +28,7 @@ from pipelines.ingestions.IngestionHandler import IngestionHandler
 from pipelines.ingestions.GraphNeo4jHandler import GraphNeo4jHandler
 from clients.vector.MilvusClient import MilvusClient
 from clients.huggingface.SciBERTClient import SciBERTClient
+from clients.huggingface.DeepseekClient import DeepseekClient
 from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
 from pipelines.retrievals.HybridRetrievalHandler import HybridRetrievalHandler
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
@@ -68,15 +69,16 @@ ingestion_handler = IngestionHandler()
 neo4j_handler = GraphNeo4jHandler()
 vector_handler = MilvusClient()
 sciBERT_client = SciBERTClient()
-embedding_handler = EmbeddingSciBERTHandler(sciBERT_client)
+deepseek_client = None
 query_handler = GraphQueryHandler()
 
 # Global hybrid system components
+embedding_handler = EmbeddingSciBERTHandler(sciBERT_client)
 routing_engine = RoutingDecisionEngine()
 result_fusion = ResultFusion()
 scientific_reranker = ScientificReranker()
 attribution_tracker = AttributionTracker()
-retrieval_handler = HybridRetrievalHandler(vector_handler, query_handler, routing_engine, sciBERT_client)
+retrieval_handler = HybridRetrievalHandler(vector_handler, query_handler, deepseek_client, sciBERT_client)
 
 # ===============================================================================
 # ROOT ENDPOINT
@@ -286,13 +288,9 @@ async def semantic_search(request: SearchRequest):
     
     try:
         logger.info(f"Starting semantic search for query: '{request.query}'")
-        
-        # Step 1: Connect to Zilliz and perform similarity search
-        if not vector_handler.connect():
-            raise HTTPException(status_code=500, detail="Failed to connect to Zilliz vector database")
-        
+
         # Search for similar papers in Zilliz
-        similar_papers = vector_handler.search_similar_papers(
+        similar_papers = retrieval_handler.search_similar_papers(
             query_text=request.query,
             top_k=request.top_k,
             use_hybrid=request.use_hybrid
@@ -463,15 +461,15 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
         
         # Step 4: Reranking (if enabled)
         reranking_time = None
-        if request.enable_reranking and fused_results:
+        if request.enable_reranking and routing_strategy == RoutingStrategy.PARALLEL:
             reranking_start = datetime.now()
             fused_results = await scientific_reranker.rerank_results(fused_results, request.query)
             reranking_time = (datetime.now() - reranking_start).total_seconds()
         
-        # Step 5: Attribution tracking (if enabled)
-        if request.enable_attribution and fused_results:
-            fused_results = attribution_tracker.track_attributions(fused_results, request.query)
-        
+        # # Step 5: Attribution tracking (if enabled)
+        # if request.enable_attribution and fused_results:
+        #     fused_results = attribution_tracker.track_attributions(fused_results, request.query)
+        #
         # Step 6: Calculate statistics
         total_time = (datetime.now() - start_time).total_seconds()
         

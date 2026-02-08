@@ -10,9 +10,7 @@ from models.entities.retrieval.QueryType import QueryType
 import logging
 import re
 from clients.vector.MilvusClient import MilvusClient
-from pymilvus import ( Collection
-)
-
+from pymilvus import (Collection)
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +18,11 @@ logger = logging.getLogger(__name__)
 class HybridRetrievalHandler:
     """Unified handler for vector and graph-based retrieval operations."""
 
-    def __init__(self, milvus_client: MilvusClient, graph_handler, routing_engine, embedding_client):
+    def __init__(self, milvus_client: MilvusClient, graph_handler, llms_client, embedding_client):
         self.milvus_client = milvus_client
         self.embedding_client = embedding_client
         self.graph_handler = graph_handler
-        self.routing_engine = routing_engine
+        self.llms_client = llms_client
 
     async def _execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
         """Execute vector search."""
@@ -252,7 +250,7 @@ class HybridRetrievalHandler:
             # Use paper IDs to find similar papers in vector space
             # This would require additional implementation in MilvusClient
             # For now, fall back to regular vector search
-            results = self.milvus_client.search_similar_papers(
+            results = self.search_similar_papers(
                 query_text=query,
                 top_k=20,
                 use_hybrid=True
@@ -274,7 +272,7 @@ class HybridRetrievalHandler:
         """Generate AI response using Llama based on search results from vector and graph searches."""
         try:
             # Use the routing engine's Llama model for response generation
-            if not self.routing_engine.llama_model:
+            if not self.llms_client:
                 logger.info("Llama not available for response generation")
                 return None
 
@@ -357,8 +355,7 @@ Instructions:
 Answer:"""
 
             # Generate response using Llama
-            ai_answer = self.routing_engine.llama_config.generate_text(
-                client=self.routing_engine.llama_model,
+            ai_answer = self.llms_client.generate_content(
                 prompt=prompt
             )
 
