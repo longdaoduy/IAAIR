@@ -20,42 +20,58 @@ class ResultFusion:
         # Create result index by paper_id
         all_results = {}
 
-        # Process vector results
+        # 1. Process Vector Results
         for result in vector_results:
-            paper_id = result.get('paper_id')
-            if paper_id:
+            # Handle both potential key names
+            paper_id = result.get('paper_id') or result.get('id')
+            if not paper_id:
+                continue
+
+            all_results[paper_id] = {
+                'paper_id': paper_id,
+                'title': result.get('title') or 'Unknown Title',
+                'abstract': result.get('abstract'),
+                'authors': result.get('authors', []),
+                'venue': result.get('venue'),
+                'publication_date': result.get('publication_date'),
+                'doi': result.get('doi'),
+                'vector_score': min(result.get('similarity_score', 0.0), 1.0),
+                'graph_score': 0.0,
+                'source_path': ['vector_search']
+            }
+
+        # 2. Process Graph Results and Merge
+        for result in graph_results:
+            paper_id = result.get('paper_id') or result.get('id')
+            if not paper_id:
+                continue
+
+            if paper_id in all_results:
+                # ENHANCEMENT: Fill in missing info from Graph (metadata enrichment)
+                existing = all_results[paper_id]
+                # If vector search was missing metadata, use the graph's richer data
+                existing['authors'] = existing.get('authors') or result.get('authors', [])
+                existing['venue'] = existing.get('venue') or result.get('venue')
+                existing['doi'] = existing.get('doi') or result.get('doi')
+                existing['publication_date'] = existing.get('publication_date') or result.get('publication_date')
+
+                # Update scores and path
+                existing['graph_score'] = min(result.get('relevance_score', 0.5), 1.0)
+                existing['source_path'].append('graph_search')  # Removed duplicate append
+            else:
+                # 3. Handle papers found ONLY in Graph
                 all_results[paper_id] = {
                     'paper_id': paper_id,
-                    'title': result.get('title', ''),
+                    'title': result.get('title') or 'Unknown Title',
                     'abstract': result.get('abstract'),
                     'authors': result.get('authors', []),
                     'venue': result.get('venue'),
                     'publication_date': result.get('publication_date'),
                     'doi': result.get('doi'),
-                    'vector_score': min(result.get('similarity_score', 0.0), 1.0),  # Normalize to [0,1]
-                    'graph_score': 0.0,
-                    'source_path': ['vector_search']
-                }  # Process graph results and merge
-        for result in graph_results:
-            paper_id = result.get('paper_id') or result.get('id')
-            if paper_id:
-                if paper_id in all_results:
-                    all_results[paper_id]['graph_score'] = min(result.get('relevance_score', 0.5),
-                                                               1.0)  # Normalize to [0,1]
-                    all_results[paper_id]['source_path'].append('graph_search')
-                else:
-                    all_results[paper_id] = {
-                        'paper_id': paper_id,
-                        'title': result.get('title', ''),
-                        'abstract': result.get('abstract'),
-                        'authors': result.get('authors', []),
-                        'venue': result.get('venue'),
-                        'publication_date': result.get('publication_date'),
-                        'doi': result.get('doi'),
-                        'vector_score': 0.0,
-                        'graph_score': min(result.get('relevance_score', 0.5), 1.0),  # Normalize to [0,1]
-                        'source_path': ['graph_search']
-                    }
+                    'vector_score': 0.0,
+                    'graph_score': min(result.get('relevance_score', 0.5), 1.0),
+                    'source_path': ['graph_search']
+                }
 
         # Calculate fusion scores
         fused_results = []
@@ -71,9 +87,9 @@ class ResultFusion:
 
             search_result = SearchResult(
                 paper_id=result_data['paper_id'],
-                title=result_data['title'],
+                title=result_data['title'] or 'Unknown Title',
                 abstract=result_data['abstract'],
-                authors=result_data['authors'],
+                authors=result_data['authors'] or [],
                 venue=result_data['venue'],
                 publication_date=result_data['publication_date'],
                 doi=result_data['doi'],

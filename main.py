@@ -67,21 +67,14 @@ ingestion_handler = IngestionHandler()
 neo4j_handler = GraphNeo4jHandler()
 vector_handler = MilvusClient()
 embedding_handler = EmbeddingSciBERTHandler()
-query_handler = None
-
-def get_query_handler():
-    """Get or create graph query handler."""
-    global query_handler
-    if query_handler is None:
-        query_handler = GraphQueryHandler()
-    return query_handler
+query_handler = GraphQueryHandler()
 
 # Global hybrid system components
 routing_engine = RoutingDecisionEngine()
 result_fusion = ResultFusion()
 scientific_reranker = ScientificReranker()
 attribution_tracker = AttributionTracker()
-retrieval_handler = HybridRetrievalHandler()
+retrieval_handler = HybridRetrievalHandler(vector_handler, query_handler, routing_engine)
 
 # ===============================================================================
 # ROOT ENDPOINT
@@ -389,13 +382,21 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
         
         # Step 1: Query classification and routing decision
         query_type, confidence = routing_engine.query_classifier.classify_query(request.query)
-        routing_result = routing_engine.decide_routing(request.query, request)
         
-        # Handle routing result (could be tuple with 3 values)
-        if isinstance(routing_result, tuple) and len(routing_result) == 3:
-            routing_strategy, _, _ = routing_result
+        # Check if user specified a routing strategy explicitly
+        if request.routing_strategy != RoutingStrategy.ADAPTIVE:
+            # User provided specific routing strategy - use it
+            routing_strategy = request.routing_strategy
+            logger.info(f"Using user-specified routing strategy: {routing_strategy}")
         else:
-            routing_strategy = routing_result
+            # Use AI routing decision for adaptive strategy
+            routing_result = routing_engine.decide_routing(request.query, request)
+            
+            # Handle routing result (could be tuple with 3 values)
+            if isinstance(routing_result, tuple) and len(routing_result) == 3:
+                routing_strategy, _, _ = routing_result
+            else:
+                routing_strategy = routing_result
         
         logger.info(f"Query classified as {query_type} (confidence: {confidence:.2f}), using {routing_strategy} routing")
         
@@ -411,7 +412,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
             if vector_results:
                 # Use top vector results to inform graph search
                 paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
-                graph_results = await retrieval_handler._execute_graph_refinement(paper_ids, request.query)
+                graph_results = await retrieval_handler._execute_graph_refinement(paper_ids, request.query, request.top_k)
             
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
             # Graph search first, then vector similarity
@@ -439,10 +440,14 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
             vector_task = retrieval_handler._execute_vector_search(request.query, request.top_k)
             graph_task = retrieval_handler._execute_graph_search(request.query, request.top_k)
             
-            vector_results, graph_results = await asyncio.gather(vector_task, graph_task)
+            results = await asyncio.gather(vector_task, graph_task)
+            # Safely unpack results with fallbacks
+            vector_results = results[0] if results[0] is not None else []
+            graph_results = results[1] if results[1] is not None else []
         
         # Step 3: Result fusion
         logger.info(f"Before fusion - vector_results: {len(vector_results or [])}, graph_results: {len(graph_results or [])}")
+        logger.info(graph_results)
         fused_results = result_fusion.fuse_results(
             vector_results or [],
             graph_results or [],
@@ -664,15 +669,14 @@ async def execute_custom_query(request: GraphQueryRequest):
     start_time = datetime.now()
     
     try:
-        handler = get_query_handler()
-        
+
         # Add LIMIT clause if not present and limit is specified
         query = request.query.strip()
         if request.limit and not query.upper().endswith('LIMIT'):
             if not any(keyword in query.upper() for keyword in ['LIMIT', 'SKIP']):
                 query += f" LIMIT {request.limit}"
         
-        results = handler.execute_query(query, request.parameters)
+        results = query_handler.execute_query(query, request.parameters)
         
         query_time = (datetime.now() - start_time).total_seconds()
         

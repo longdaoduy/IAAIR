@@ -5,36 +5,21 @@ This module provides functionality to execute vector and graph searches,
 with intelligent query routing and AI response generation.
 """
 
-from typing import Dict, List, Optional, Any
-from clients.vector.MilvusClient import MilvusClient
-
-from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
+from typing import Dict, List, Optional
 from models.entities.retrieval.QueryType import QueryType
-from models.engines.RoutingDecisionEngine import RoutingDecisionEngine
 import logging
 import re
 
 logger = logging.getLogger(__name__)
 
+
 class HybridRetrievalHandler:
     """Unified handler for vector and graph-based retrieval operations."""
 
-    def __init__(self):
-        self.milvus_client = None
-        self.graph_handler = None
-        self.routing_engine = None
-        
-    async def initialize(self):
-        """Initialize all clients and handlers."""
-        if self.milvus_client is None:
-            self.milvus_client = MilvusClient()
-            await self.milvus_client.connect()
-            
-        if self.graph_handler is None:
-            self.graph_handler = GraphQueryHandler()
-            
-        if self.routing_engine is None:
-            self.routing_engine = RoutingDecisionEngine()
+    def __init__(self, vector_handler, graph_handler, routing_engine):
+        self.milvus_client = vector_handler
+        self.graph_handler = graph_handler
+        self.routing_engine = routing_engine
 
     async def _execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
         """Execute vector search."""
@@ -154,7 +139,6 @@ class HybridRetrievalHandler:
                        p.doi as doi, p.publication_date as publication_date,
                        collect(DISTINCT a.name) as authors,
                        v.name as venue
-                ORDER BY p.cited_by_count DESC
                 LIMIT $limit
                 """
                 return cypher_query, {"author_name": author_name, "limit": top_k}
@@ -171,7 +155,6 @@ class HybridRetrievalHandler:
             RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
                    p.doi as doi, p.publication_date as publication_date,
                    authors, v.name as venue, citations_made
-            ORDER BY p.cited_by_count DESC
             LIMIT $limit
             """
             return cypher_query, {"query": query, "limit": top_k}
@@ -186,12 +169,11 @@ class HybridRetrievalHandler:
                p.doi as doi, p.publication_date as publication_date,
                collect(DISTINCT a.name) as authors,
                v.name as venue
-        ORDER BY p.cited_by_count DESC
         LIMIT $limit
         """
         return cypher_query, {"query": query, "limit": top_k}
 
-    async def _execute_graph_refinement(self, paper_ids: List[str], query: str) -> List[Dict]:
+    async def _execute_graph_refinement(self, paper_ids: List[str], query: str, top_k: int) -> List[Dict]:
         """Refine vector results using graph relationships."""
         try:
             if not self.graph_handler:
@@ -200,26 +182,23 @@ class HybridRetrievalHandler:
 
             # Find related papers through citations and collaborations
             cypher_query = """
-            MATCH (seed:Paper)
-            WHERE seed.id IN $paper_ids
-            MATCH (related:Paper)-[:CITES*1..2]-(seed)
-            WHERE related.title CONTAINS $query OR related.abstract CONTAINS $query
-            RETURN DISTINCT related.id as paper_id, related.title as title, 
-                   related.abstract as abstract, related.doi as doi,
-                   related.publication_date as publication_date,
-                   [(related)<-[:AUTHORED]-(a:Author) | a.name] as authors,
-                   [(related)-[:PUBLISHED_IN]->(v:Venue) | v.name][0] as venue
-            LIMIT 20
+            MATCH (seed:Paper) 
+            WHERE seed.id IN $paper_ids 
+            MATCH (related:Paper)-[:CITES*0..2]-(seed) 
+            RETURN DISTINCT related.id as paper_id, related.title as title, related.abstract as abstract, related.doi as doi, related.publication_date as publication_date, [(related)<-[:AUTHORED]-(a:Author) | a.name] as authors, [(related)-[:PUBLISHED_IN]->(v:Venue) | v.name][0] as venue 
+            LIMIT $top_k
             """
+
+            logger.info(paper_ids)
 
             results = self.graph_handler.execute_query(cypher_query, {
                 "paper_ids": paper_ids,
-                "query": query
+                "top_k": top_k
             })
 
-            # Add relevance scores based on graph distance
-            for result in results:
-                result['relevance_score'] = 0.7  # Higher score for graph-refined results
+            # # Add relevance scores based on graph distance
+            # for result in results:
+            #     result['relevance_score'] = 0.7  # Higher score for graph-refined results
 
             return results
         except Exception as e:
@@ -255,74 +234,100 @@ class HybridRetrievalHandler:
             search_results: List,
             query_type: QueryType
     ) -> Optional[str]:
-        """Generate AI response using Gemini based on search results."""
+        """Generate AI response using Llama based on search results from vector and graph searches."""
         try:
-            # Use the routing engine's Gemini model for response generation
-            if not self.routing_engine or not self.routing_engine.use_gemini:
-                logger.info("Gemini not available for response generation")
+            # Use the routing engine's Llama model for response generation
+            if not self.routing_engine.llama_model:
+                logger.info("Llama not available for response generation")
                 return None
 
             # Prepare context from search results
             context_papers = []
             for result in search_results[:5]:  # Use top 5 results
-                context_papers.append({
-                    "title": getattr(result, "title", "") or "",
-                    "authors": getattr(result, "authors", []) or [],
-                    "abstract": (getattr(result, "abstract", "") or "")[:500],
-                    "relevance_score": getattr(result, "relevance_score", 0),
-                    "venue": getattr(result, "venue", "") or "",
-                    "publication_date": getattr(result, "publication_date", "") or "",
-                })
+                # Handle both dict and object types
+                if hasattr(result, '__dict__'):
+                    # It's an object, use getattr
+                    context_papers.append({
+                        "title": getattr(result, "title", "") or "",
+                        "authors": getattr(result, "authors", []) or [],
+                        "abstract": (getattr(result, "abstract", "") or "")[:500],
+                        "relevance_score": getattr(result, "relevance_score", 0),
+                        "venue": getattr(result, "venue", "") or "",
+                        "publication_date": getattr(result, "publication_date", "") or "",
+                        "paper_id": getattr(result, "paper_id", "") or getattr(result, "id", ""),
+                        "doi": getattr(result, "doi", "") or ""
+                    })
+                else:
+                    # It's a dict, use .get()
+                    context_papers.append({
+                        "title": result.get("title", "") or "",
+                        "authors": result.get("authors", []) or [],
+                        "abstract": (result.get("abstract", "") or "")[:500],
+                        "relevance_score": result.get("relevance_score", 0),
+                        "venue": result.get("venue", "") or "",
+                        "publication_date": result.get("publication_date", "") or "",
+                        "paper_id": result.get("paper_id", "") or result.get("id", ""),
+                        "doi": result.get("doi", "") or ""
+                    })
 
             # Create specialized prompt based on query type
             if query_type == QueryType.STRUCTURAL:
                 prompt = f"""
-Based on the academic search results below, provide a direct and precise answer to this query: "{query}"
+You are a helpful research assistant. Answer this question directly based on the search results provided: "{query}"
 
 Search Results:
 {self._format_papers_for_prompt(context_papers)}
 
-Provide a clear, factual answer focusing on:
-- Specific information requested (authors, dates, IDs, etc.)
-- Direct citations from the papers
-- Exact matches to the query
+Instructions:
+- Answer the question directly and concisely
+- Use specific information from the papers (authors, dates, titles, etc.)
+- If asking about authors, list them clearly
+- If asking about a specific paper, provide its details
+- Be factual and precise
 
-Keep the response concise and focused on the specific question asked.
-"""
+Answer:"""
             elif query_type == QueryType.SEMANTIC:
                 prompt = f"""
-Based on the academic search results below, provide a comprehensive answer to this query: "{query}"
+You are a helpful research assistant. Answer this question comprehensively based on the search results: "{query}"
 
 Search Results:
 {self._format_papers_for_prompt(context_papers)}
 
-Provide a thoughtful analysis that:
-- Synthesizes key findings from the papers
-- Identifies common themes and patterns
-- Highlights significant research trends
-- Mentions specific papers and authors when relevant
+Instructions:
+- Provide a thorough answer to the question
+- Synthesize information from multiple papers when relevant
+- Explain key concepts and findings
+- Mention specific papers and authors that support your answer
+- Organize your response clearly with main points
+- Connect different research findings when applicable
 
-Structure your response to be informative and academically rigorous.
-"""
+Answer:"""
             else:  # FACTUAL, HYBRID, or other types
                 prompt = f"""
-Based on the academic search results below, provide a well-structured answer to this query: "{query}"
+You are a helpful research assistant. Answer this question based on the search results provided: "{query}"
 
 Search Results:
 {self._format_papers_for_prompt(context_papers)}
 
-Provide a balanced response that:
-- Answers the specific question asked
-- Provides relevant context from the research
-- Cites specific papers and authors
-- Organizes information clearly
+Instructions:
+- Answer the question directly and clearly
+- Use information from the search results to support your answer
+- Cite specific papers and authors when relevant
+- If the question has multiple aspects, address each one
+- Be accurate and only use information from the provided results
+- Structure your answer logically
 
-Ensure your answer is accurate and based only on the provided search results.
-"""
+Answer:"""
 
-            # Generate response using Gemini
-            response = self.routing_engine.gemini_model.generate_content(prompt)
-            ai_answer = response.text.strip()
+            # Generate response using Llama
+            ai_answer = self.routing_engine.llama_config.generate_text(
+                client=self.routing_engine.llama_model,
+                prompt=prompt
+            )
+
+            if not ai_answer:
+                logger.error("Empty response from Llama for AI generation")
+                return None
 
             logger.info(f"Generated AI response of {len(ai_answer)} characters")
             return ai_answer
@@ -332,7 +337,7 @@ Ensure your answer is accurate and based only on the provided search results.
             return None
 
     def _format_papers_for_prompt(self, papers: List[Dict]) -> str:
-        """Format papers for inclusion in Gemini prompt."""
+        """Format papers for inclusion in response generation."""
         formatted_papers = []
 
         for i, paper in enumerate(papers, 1):

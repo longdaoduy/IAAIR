@@ -2,7 +2,7 @@ from models.entities.retrieval.RoutingStrategy import RoutingStrategy
 from models.entities.retrieval.QueryType import QueryType
 from models.entities.retrieval.HybridSearchRequest import HybridSearchRequest
 from models.engines.QueryClassifier import QueryClassifier
-from models.configurators.GeminiConfig import GeminiConfig
+from models.configurators.LlamaConfig import LlamaConfig
 import logging
 import json
 import os
@@ -15,32 +15,47 @@ from typing import Optional, Tuple
 logger = logging.getLogger(__name__)
 
 class RoutingDecisionEngine:
-    """Decide optimal routing strategy based on query and system state using Few-Shot Learning with Gemini AI."""
+    """Decide optimal routing strategy based on query and system state using Few-Shot Learning with Llama AI."""
 
     def __init__(self):
         self.query_classifier = QueryClassifier()  # Keep as fallback
         self.performance_history = {}  # Track routing performance
         
-        # Initialize Gemini for few-shot learning
-        self.gemini_config = GeminiConfig()
-        self.gemini_model = self.gemini_config.initialize_client()
-        self.use_gemini = self.gemini_model is not None
+        # Initialize Llama for few-shot learning
+        self.llama_config = LlamaConfig()
+        self.llama_model = self.llama_config.initialize_client()
+        self.use_llama = self.llama_model is not None
         
         # Load few-shot learning examples from file
         self.few_shot_examples = self._load_few_shot_examples()
 
     def decide_routing(self, query: str, request: HybridSearchRequest) -> RoutingStrategy:
-        """Decide routing strategy based on query analysis using Few-Shot Learning with Gemini AI."""
+        """Decide routing strategy based on query analysis using Few-Shot Learning with Llama AI."""
         routing_result = self._few_shot_route_decision(query, request)
 
+        if routing_result is None:
+            logger.warning("Few-shot routing failed, falling back to rule-based routing")
+            # Fallback to rule-based routing
+            query_type, confidence = self.query_classifier.classify_query(query)
+            if query_type == QueryType.STRUCTURAL:
+                return RoutingStrategy.GRAPH_FIRST
+            elif query_type == QueryType.SEMANTIC:
+                return RoutingStrategy.VECTOR_FIRST
+            else:
+                return RoutingStrategy.PARALLEL
+                
         strategy, query_type, confidence = routing_result
         logger.info(
             f"Few-shot learning selected: {strategy.value} (query_type: {query_type}, confidence: {confidence})")
         return strategy
 
     def _few_shot_route_decision(self, query: str, request: HybridSearchRequest) -> Optional[Tuple[RoutingStrategy, QueryType, float]]:
-        """Use few-shot learning with Gemini to make intelligent routing decisions."""
+        """Use few-shot learning with Llama to make intelligent routing decisions."""
         try:
+            # Check if Llama is available
+            if not self.use_llama or self.llama_model is None:
+                logger.warning("Llama model not available for few-shot routing")
+                return None
                 
             # Get performance context
             performance_context = self._get_performance_context()
@@ -48,12 +63,15 @@ class RoutingDecisionEngine:
             # Create few-shot learning prompt
             prompt = self._build_few_shot_prompt(query, performance_context)
             
-            response = self.gemini_model.generate_content(prompt)
+            # Use the Llama API to generate content
+            response_text = self.llama_config.generate_text(
+                client=self.llama_model,
+                prompt=prompt
+            )
             
-            if not response or not hasattr(response, 'text') or not response.text:
-                logger.error("Empty or invalid response from Gemini model")
+            if not response_text:
+                logger.error("Empty or invalid response from Llama model")
                 return None
-            response_text = response.text.strip()
             
             # Parse the structured response
             return self._parse_few_shot_response(response_text)
@@ -178,7 +196,7 @@ Guidelines:
     
     def get_query_classification(self, query: str) -> Tuple[QueryType, float]:
         """Get query classification using few-shot learning or fallback to rule-based."""
-        if self.use_gemini:
+        if self.use_llama:
             # Create a mock request for few-shot classification
             mock_request = HybridSearchRequest(
                 query=query,
@@ -194,7 +212,7 @@ Guidelines:
         return self.query_classifier.classify_query(query)
     
     def _get_performance_context(self) -> str:
-        """Get performance history context for Gemini."""
+        """Get performance history context for Llama."""
         if not self.performance_history:
             return "No performance history available"
             

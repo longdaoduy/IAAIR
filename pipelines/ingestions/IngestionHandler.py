@@ -7,7 +7,6 @@ from clients.semantic_scholar.OpenAlexClient import OpenAlexClient
 
 class IngestionHandler():
     def __init__(self):
-        self.nums_papers_to_pull = 1
         self.semantic_scholar_client = SemanticScholarClient()
         self.openalex_client = OpenAlexClient()
 
@@ -60,7 +59,7 @@ class IngestionHandler():
 
         print(f"Saved {len(json_data)} papers to {filename}")
 
-    def pull_OpenAlex_Paper(self, count: int = None, filters: Dict = None, save_to_file: bool = True,
+    def pull_OpenAlex_Paper(self, count: int, filters: Dict = None, save_to_file: bool = True,
                             upload_to_neo4j: bool = False) -> List[Dict]:
         """Main method to ingest papers from OpenAlex.
         
@@ -73,8 +72,6 @@ class IngestionHandler():
         Returns:
             List of paper data with authors and citations
         """
-        if count is None:
-            count = self.nums_papers_to_pull
 
         print(f"Starting paper ingestion from OpenAlex (target: {count} papers)")
 
