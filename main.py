@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse
 from pipelines.ingestions.IngestionHandler import IngestionHandler
 from pipelines.ingestions.GraphNeo4jHandler import GraphNeo4jHandler
 from clients.vector.MilvusClient import MilvusClient
+from clients.huggingface.SciBERTClient import SciBERTClient
 from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
 from pipelines.retrievals.HybridRetrievalHandler import HybridRetrievalHandler
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
@@ -66,7 +67,8 @@ app = FastAPI(
 ingestion_handler = IngestionHandler()
 neo4j_handler = GraphNeo4jHandler()
 vector_handler = MilvusClient()
-embedding_handler = EmbeddingSciBERTHandler()
+sciBERT_client = SciBERTClient()
+embedding_handler = EmbeddingSciBERTHandler(sciBERT_client)
 query_handler = GraphQueryHandler()
 
 # Global hybrid system components
@@ -74,7 +76,7 @@ routing_engine = RoutingDecisionEngine()
 result_fusion = ResultFusion()
 scientific_reranker = ScientificReranker()
 attribution_tracker = AttributionTracker()
-retrieval_handler = HybridRetrievalHandler(vector_handler, query_handler, routing_engine)
+retrieval_handler = HybridRetrievalHandler(vector_handler, query_handler, routing_engine, sciBERT_client)
 
 # ===============================================================================
 # ROOT ENDPOINT

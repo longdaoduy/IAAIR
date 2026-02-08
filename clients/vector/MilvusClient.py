@@ -17,20 +17,19 @@ from pymilvus import (
 )
 
 from models.configurators.VectorDBConfig import VectorDBConfig
-from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
 from sklearn.feature_extraction.text import TfidfVectorizer
-
 
 class MilvusClient:
     """Service for uploading embeddings to Zilliz Cloud."""
 
-    def __init__(self, config: Optional[VectorDBConfig] = None):
+    def __init__(self,config: Optional[VectorDBConfig] = None):
         """Initialize Zilliz upload service.
         
         Args:
             config: Vector database configuration. If None, loads from environment.
         """
         self.config = config or VectorDBConfig.from_env()
+
         self.collection = None
         self.is_connected = False
         self.tfidf_vectorizer = TfidfVectorizer(
@@ -106,21 +105,21 @@ class MilvusClient:
             # Check if collection exists and has compatible schema
             if utility.has_collection(collection_name):
                 self.collection = Collection(collection_name)
-                
+
                 # Check if the existing collection has the hybrid schema (title, abstract, dense_embedding, sparse_embedding)
                 schema = self.collection.schema
                 field_names = [field.name for field in schema.fields]
-                
+
                 required_fields = ['id', 'title', 'abstract', 'dense_embedding', 'sparse_embedding']
                 has_hybrid_schema = all(field in field_names for field in required_fields)
-                
+
                 if has_hybrid_schema:
                     print(f"📋 Using existing collection with hybrid schema: {collection_name}")
                     return True
                 else:
                     print(f"⚠️  Existing collection has incompatible schema. Required fields: {required_fields}")
                     print(f"⚠️  Existing fields: {field_names}")
-                    
+
                     if force_recreate:
                         print(f"🗑️  Dropping existing collection to recreate with hybrid schema...")
                         utility.drop_collection(collection_name)
@@ -202,18 +201,18 @@ class MilvusClient:
         """
         if not self.is_tfidf_fitted:
             raise ValueError("TF-IDF vectorizer not fitted. Call fit_tfidf_vectorizer first.")
-        
+
         # Transform text to TF-IDF vector
         tfidf_vector = self.tfidf_vectorizer.transform([text])
-        
+
         # Convert to sparse dictionary format expected by Milvus
         sparse_dict = {}
         coo_matrix = tfidf_vector.tocoo()
-        
+
         for i, j, val in zip(coo_matrix.row, coo_matrix.col, coo_matrix.data):
             if val > 0.01:  # Filter out very small values
                 sparse_dict[j] = float(val)
-        
+
         return sparse_dict
 
     def fit_tfidf_vectorizer(self, texts: List[str]):
@@ -323,7 +322,8 @@ class MilvusClient:
 
         return batches
 
-    def upload_embeddings(self, embedding_file: Optional[str] = None, papers_data: Optional[List[Dict]] = None, batch_size: int = 1000) -> bool:
+    def upload_embeddings(self, embedding_file: Optional[str] = None, papers_data: Optional[List[Dict]] = None,
+                          batch_size: int = 1000) -> bool:
         """Upload embeddings to Zilliz Cloud with hybrid search support.
         
         Args:
@@ -341,7 +341,7 @@ class MilvusClient:
             if not embeddings:
                 print("❌ No embeddings to upload")
                 return False
-            
+
             if not papers_data:
                 print("⚠️ No papers data provided, sparse embeddings will be minimal")
                 papers_data = []
@@ -352,7 +352,7 @@ class MilvusClient:
                 embedding_dim = len(first_item['embedding'])
             else:
                 embedding_dim = 768  # Default SciBERT dimension
-            
+
             print(f"📏 Dense embedding dimension: {embedding_dim}")
 
             # Create collection (force recreate for hybrid schema compatibility)
@@ -397,39 +397,6 @@ class MilvusClient:
         except Exception as e:
             print(f"❌ Upload failed: {e}")
             return False
-
-    def search_similar_papers(self, query_text: str, top_k: int = 10, use_hybrid: bool = True) -> List[Dict]:
-        """Search for similar papers using hybrid search (dense + sparse) or dense-only search.
-        
-        Args:
-            query_text: Text query to search for similar papers
-            top_k: Number of top results to return
-            use_hybrid: Whether to use hybrid search or dense-only search
-            
-        Returns:
-            List of similar papers with scores and IDs
-        """
-        try:
-            if not self.collection:
-                self.collection = Collection(self.config.collection_name)
-                self.collection.load()
-
-            # Generate embedding for the query text
-            embedding_handler = EmbeddingSciBERTHandler()
-            query_embedding = embedding_handler.generate_embedding(query_text)
-            
-            if query_embedding is None:
-                print("❌ Failed to generate query embedding")
-                return []
-
-            if use_hybrid and self.is_tfidf_fitted:
-                return self._hybrid_search(query_text, query_embedding, top_k)
-            else:
-                return self._dense_search(query_embedding, top_k)
-
-        except Exception as e:
-            print(f"❌ Search failed: {e}")
-            return []
 
     def _dense_search(self, query_embedding: List[float], top_k: int) -> List[Dict]:
         """Perform dense vector search only.
@@ -484,7 +451,7 @@ class MilvusClient:
         try:
             # Generate sparse embedding for the query
             sparse_embedding = self.generate_sparse_embedding(query_text)
-            
+
             # Create search requests for both dense and sparse
             dense_search_request = AnnSearchRequest(
                 data=[dense_embedding],
@@ -495,7 +462,7 @@ class MilvusClient:
                 },
                 limit=top_k * 2  # Get more candidates for reranking
             )
-            
+
             sparse_search_request = AnnSearchRequest(
                 data=[sparse_embedding],
                 anns_field="sparse_embedding",
@@ -505,7 +472,7 @@ class MilvusClient:
                 },
                 limit=top_k * 2  # Get more candidates for reranking
             )
-            
+
             # Perform hybrid search with RRF (Reciprocal Rank Fusion) reranking
             hybrid_results = self.collection.hybrid_search(
                 reqs=[dense_search_request, sparse_search_request],
@@ -513,7 +480,7 @@ class MilvusClient:
                 limit=top_k,
                 output_fields=["id", "title", "abstract"]
             )
-            
+
             # Format results
             formatted_results = []
             if hybrid_results and len(hybrid_results[0]) > 0:
@@ -526,10 +493,10 @@ class MilvusClient:
                         "distance": float(hit.distance),
                         "search_type": "hybrid"
                     })
-            
+
             print(f"🔍 Hybrid search found {len(formatted_results)} similar papers")
             return formatted_results
-            
+
         except Exception as e:
             print(f"⚠️ Hybrid search failed, falling back to dense search: {e}")
             return self._dense_search(dense_embedding, top_k)
@@ -552,7 +519,7 @@ class MilvusClient:
             print(f"\n🔍 Collection Verification:")
             print(f"   Collection name: {self.config.collection_name}")
             print(f"   Total entities: {num_entities}")
-            
+
             # Display schema information
             schema = self.collection.schema
             field_names = [field.name for field in schema.fields]
@@ -567,21 +534,21 @@ class MilvusClient:
                         limit=3,
                         output_fields=["id", "title", "abstract"]
                     )
-                    
+
                     if sample_results:
                         print(f"   Sample records:")
                         for i, record in enumerate(sample_results[:2]):
-                            print(f"     {i+1}. ID: {record.get('id', 'N/A')}")
+                            print(f"     {i + 1}. ID: {record.get('id', 'N/A')}")
                             print(f"        Title: {record.get('title', 'N/A')[:80]}...")
                             print(f"        Abstract: {record.get('abstract', 'N/A')[:80]}...")
-                    
+
                 except Exception as e:
                     print(f"   Sample query failed: {e}")
 
                 # Test dense search
                 try:
                     dense_search_params = {"metric_type": self.config.metric_type, "params": {"nprobe": 10}}
-                    
+
                     # Use zero vector for test search (just to verify search works)
                     dense_results = self.collection.search(
                         data=[[0.0] * 768],  # Assume 768-dim embeddings
@@ -594,14 +561,14 @@ class MilvusClient:
                         print(f"   Dense search test: ✅ Working")
                     else:
                         print(f"   Dense search test: ⚠️ No results")
-                        
+
                 except Exception as e:
                     print(f"   Dense search test: ❌ Failed ({e})")
 
                 # Test sparse search
                 try:
                     sparse_search_params = {"metric_type": "IP", "params": {}}
-                    
+
                     # Use minimal sparse vector for test
                     sparse_results = self.collection.search(
                         data=[{0: 0.1}],  # Minimal sparse vector
@@ -614,7 +581,7 @@ class MilvusClient:
                         print(f"   Sparse search test: ✅ Working")
                     else:
                         print(f"   Sparse search test: ⚠️ No results")
-                        
+
                 except Exception as e:
                     print(f"   Sparse search test: ❌ Failed ({e})")
 

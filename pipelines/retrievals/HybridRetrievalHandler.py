@@ -9,6 +9,10 @@ from typing import Dict, List, Optional
 from models.entities.retrieval.QueryType import QueryType
 import logging
 import re
+from clients.vector.MilvusClient import MilvusClient
+from pymilvus import ( Collection
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +20,9 @@ logger = logging.getLogger(__name__)
 class HybridRetrievalHandler:
     """Unified handler for vector and graph-based retrieval operations."""
 
-    def __init__(self, vector_handler, graph_handler, routing_engine):
-        self.milvus_client = vector_handler
+    def __init__(self, milvus_client: MilvusClient, graph_handler, routing_engine, embedding_client):
+        self.milvus_client = milvus_client
+        self.embedding_client = embedding_client
         self.graph_handler = graph_handler
         self.routing_engine = routing_engine
 
@@ -28,7 +33,7 @@ class HybridRetrievalHandler:
                 logger.warning("Vector search failed: Could not connect to Zilliz")
                 return []
 
-            results = self.milvus_client.search_similar_papers(
+            results = self.search_similar_papers(
                 query_text=query,
                 top_k=top_k,
                 use_hybrid=True
@@ -36,6 +41,38 @@ class HybridRetrievalHandler:
             return results or []
         except Exception as e:
             logger.error(f"Vector search error: {e}")
+            return []
+
+    def search_similar_papers(self, query_text: str, top_k: int = 10, use_hybrid: bool = True) -> List[Dict]:
+        """Search for similar papers using hybrid search (dense + sparse) or dense-only search.
+
+        Args:
+            query_text: Text query to search for similar papers
+            top_k: Number of top results to return
+            use_hybrid: Whether to use hybrid search or dense-only search
+
+        Returns:
+            List of similar papers with scores and IDs
+        """
+        try:
+            if not self.milvus_client.collection:
+                self.milvus_client.collection = Collection(self.milvus_client.config.collection_name)
+                self.milvus_client.collection.load()
+
+            # Generate embedding for the query text
+            query_embedding = self.embedding_client.generate_embedding(query_text)
+
+            if query_embedding is None:
+                print("❌ Failed to generate query embedding")
+                return []
+
+            if use_hybrid and self.milvus_client.is_tfidf_fitted:
+                return self.milvus_client._hybrid_search(query_text, query_embedding, top_k)
+            else:
+                return self.milvus_client._dense_search(query_embedding, top_k)
+
+        except Exception as e:
+            print(f"❌ Search failed: {e}")
             return []
 
     async def _execute_graph_search(self, query: str, top_k: int) -> List[Dict]:

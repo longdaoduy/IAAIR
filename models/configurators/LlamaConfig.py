@@ -22,7 +22,7 @@ class LlamaConfig:
             pass
             
         # Configuration options
-        self.provider = os.getenv('LLAMA_PROVIDER', 'mock')  # 'ollama', 'huggingface', or 'mock'
+        self.provider = os.getenv('LLAMA_PROVIDER', 'huggingface')  # 'ollama', 'huggingface', or 'mock'
         self.model_name = os.getenv('LLAMA_MODEL', 'llama2')
         self.temperature = float(os.getenv('LLAMA_TEMPERATURE', '0.1'))
         self.max_tokens = int(os.getenv('LLAMA_MAX_TOKENS', '1000'))
