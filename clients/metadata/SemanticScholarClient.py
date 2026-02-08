@@ -245,8 +245,8 @@ class SemanticScholarClient:
                 }
                 
                 # Add Semantic Scholar data if available
-                if "semantic_scholar" in paper_data:
-                    json_paper["semantic_scholar"] = paper_data["semantic_scholar"]
+                if "metadata" in paper_data:
+                    json_paper["metadata"] = paper_data["metadata"]
                 
                 json_data.append(json_paper)
             

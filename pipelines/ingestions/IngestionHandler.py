@@ -2,8 +2,8 @@ from typing import Dict, List
 from datetime import datetime
 import json
 from models.schemas.nodes import Paper, Author, Venue,VenueType
-from clients.semantic_scholar.SemanticScholarClient import SemanticScholarClient
-from clients.semantic_scholar.OpenAlexClient import OpenAlexClient
+from clients.metadata.SemanticScholarClient import SemanticScholarClient
+from clients.metadata.OpenAlexClient import OpenAlexClient
 
 class IngestionHandler():
     def __init__(self):
