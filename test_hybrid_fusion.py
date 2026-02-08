@@ -2,22 +2,19 @@
 Test suite for hybrid fusion and attribution system.
 """
 
-import asyncio
 import pytest
-from typing import Dict, List
 import sys
 import os
 
 # Add the parent directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pipelines.main import (
+from main import (
     HybridSearchRequest, RoutingStrategy, QueryType,
     QueryClassifier, RoutingDecisionEngine, ResultFusion,
-    ScientificReranker, AttributionTracker,
-    hybrid_fusion_search
+    AttributionTracker
 )
-from pipelines.retrieval.attribution_utils import AttributionManager
+from pipelines.retrievals.attribution_utils import AttributionManager
 
 class TestQueryClassifier:
     """Test query classification functionality."""
@@ -195,7 +192,7 @@ class TestAttributionTracker:
     
     def test_attribution_creation(self):
         """Test creation of attribution spans."""
-        from pipelines.main import SearchResult
+        from main import SearchResult
         
         result = SearchResult(
             paper_id="paper1",

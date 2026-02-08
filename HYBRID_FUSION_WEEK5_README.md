@@ -89,7 +89,7 @@ Returns attribution tracking accuracy and statistics.
 The system uses `pipelines/retrieval/hybrid_config.py` for configuration:
 
 ```python
-from pipelines.retrieval.hybrid_config import CONFIG
+from pipelines.retrievals.hybrid_config import CONFIG
 
 # Routing Configuration
 CONFIG.ADAPTIVE_ROUTING_ENABLED = True

@@ -282,7 +282,7 @@ LIMIT 15
 The Cypher API provides graph-based retrieval that complements vector search:
 
 ```python
-# Pseudo-code for hybrid retrieval
+# Pseudo-code for hybrid retrievals
 def hybrid_search(query):
     # Vector search for semantic similarity
     vector_results = vector_search(query)

@@ -2,7 +2,7 @@
 Graph Query Handler for Neo4j Cypher queries.
 
 This module provides functionality to execute complex Cypher queries
-against the Neo4j graph database, enabling graph-based paper retrieval
+against the Neo4j graph database, enabling graph-based paper retrievals
 and relationship exploration.
 """
 

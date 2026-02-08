@@ -10,5 +10,6 @@ class HybridSearchRequest(BaseModel):
     routing_strategy: RoutingStrategy = Field(RoutingStrategy.ADAPTIVE, description="Routing strategy")
     enable_reranking: bool = Field(True, description="Enable neural reranking")
     enable_attribution: bool = Field(True, description="Track source attribution")
+    enable_ai_response: bool = Field(True, description="Generate AI response using Gemini")
     fusion_weights: Optional[Dict[str, float]] = Field(None, description="Custom fusion weights")
     include_provenance: bool = Field(False, description="Include detailed provenance")

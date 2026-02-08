@@ -24,7 +24,7 @@ class Neo4jClient:
     Neo4j implementation of the graph_store store for scientific literature.
     
     Manages citation networks, author collaboration graphs, and
-    concept hierarchies with optimized Cypher queries for retrieval.
+    concept hierarchies with optimized Cypher queries for retrievals.
     """
 
     def __init__(self):

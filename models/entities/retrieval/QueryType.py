@@ -5,4 +5,4 @@ class QueryType(str, Enum):
     SEMANTIC = "semantic"          # Concept-based queries
     STRUCTURAL = "structural"      # Relationship-based queries
     HYBRID = "hybrid"             # Mixed semantic and structural
-    FACTUAL = "factual"           # Specific fact retrieval
+    FACTUAL = "factual"           # Specific fact retrievals

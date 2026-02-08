@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 
 
 class ResultFusion:
-    """Fuse results from different retrieval strategies."""
+    """Fuse results from different retrievals strategies."""
 
     def __init__(self):
         self.default_weights = {
