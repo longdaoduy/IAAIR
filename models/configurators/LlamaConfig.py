@@ -1,12 +1,11 @@
 import os
-import warnings
 import logging
 from typing import Optional, Union
 from dotenv import load_dotenv
-import requests
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
+from clients.huggingface.OllamaClient import OllamaClient
+from clients.huggingface.HuggingFaceClient import HuggingFaceClient
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -63,36 +62,7 @@ class LlamaConfig:
                 logger.error(f"Cannot connect to Ollama server at {self.ollama_base_url}")
                 logger.info("To use Ollama: 1) Install from https://ollama.ai 2) Run 'ollama serve' 3) Pull a model with 'ollama pull llama2'")
                 return None
-                
-            # Create a simple client wrapper
-            class OllamaClient:
-                def __init__(self, base_url, model_name, temperature, max_tokens):
-                    self.base_url = base_url
-                    self.model_name = model_name
-                    self.temperature = temperature
-                    self.max_tokens = max_tokens
-                    
-                def generate_content(self, prompt):
-                    response = requests.post(
-                        f"{self.base_url}/api/generate",
-                        json={
-                            "model": self.model_name,
-                            "prompt": prompt,
-                            "stream": False,
-                            "options": {
-                                "temperature": self.temperature,
-                                "num_predict": self.max_tokens
-                            }
-                        },
-                        timeout=30
-                    )
-                    if response.status_code == 200:
-                        result = response.json()
-                        return type('Response', (), {'text': result.get('response', '')})()
-                    else:
-                        logger.error(f"Ollama API error: {response.status_code}")
-                        return None
-            
+
             client = OllamaClient(
                 self.ollama_base_url, 
                 self.model_name, 
@@ -114,57 +84,6 @@ class LlamaConfig:
         """Initialize Hugging Face client for Llama models."""
         try:
 
-            
-            # Create a simple client wrapper
-            class HuggingFaceClient:
-                def __init__(self, model_name, temperature, max_tokens, token=None):
-                    self.model_name = model_name
-                    self.temperature = temperature
-                    self.max_tokens = max_tokens
-                    
-                    logger.info(f"Loading Hugging Face model: {model_name}")
-                    self.tokenizer = AutoTokenizer.from_pretrained(
-                        model_name, 
-                        use_auth_token=token,
-                        trust_remote_code=True
-                    )
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        model_name,
-                        use_auth_token=token,
-                        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                        device_map="auto" if torch.cuda.is_available() else None,
-                        trust_remote_code=True
-                    )
-                    
-                    if self.tokenizer.pad_token is None:
-                        self.tokenizer.pad_token = self.tokenizer.eos_token
-                    
-                def generate_content(self, prompt):
-                    try:
-                        inputs = self.tokenizer(prompt, return_tensors="pt", padding=True)
-                        if torch.cuda.is_available():
-                            inputs = {k: v.cuda() for k, v in inputs.items()}
-                            
-                        with torch.no_grad():
-                            outputs = self.model.generate(
-                                **inputs,
-                                max_new_tokens=self.max_tokens,
-                                temperature=self.temperature,
-                                do_sample=True,
-                                pad_token_id=self.tokenizer.eos_token_id
-                            )
-                        
-                        response_text = self.tokenizer.decode(
-                            outputs[0][inputs['input_ids'].shape[1]:], 
-                            skip_special_tokens=True
-                        )
-                        
-                        return type('Response', (), {'text': response_text.strip()})()
-                        
-                    except Exception as e:
-                        logger.error(f"HuggingFace generation error: {e}")
-                        return None
-            
             client = HuggingFaceClient(
                 self.model_name, 
                 self.temperature, 
