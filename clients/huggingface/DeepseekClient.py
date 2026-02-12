@@ -11,6 +11,7 @@ from transformers import AutoTokenizer, AutoModel
 from typing import List, Dict, Optional
 
 from models.configurators.DeepseekConfig import DeepseekConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import logging
 
 logger = logging.getLogger(__name__)
@@ -32,22 +33,19 @@ class DeepseekClient:
         self._load_model()
 
     def _load_model(self):
-        """Load SciBERT model and tokenizer."""
-        print(f"Loading Deepseek model: {self.config.model_name}")
+        print(f"Loading model: {self.config.model_name}")
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
-        self.model = AutoModel.from_pretrained(self.config.model_name)
 
-        # Determine device
-        if self.config.device == "auto":
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = torch.device(self.config.device)
+        # This is the important change
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.config.model_name,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            device_map="auto"   # or "cuda" / "cpu"
+        )
 
-        self.model.to(self.device)
         self.model.eval()
-
-        print(f"✅ Model loaded successfully on device: {self.device}")
+        print(f"✅ Model loaded on device: {self.model.device}")
 
     def _mean_pooling(self, model_output, attention_mask):
         """Apply mean pooling to get sentence-level embeddings."""
@@ -82,28 +80,48 @@ class DeepseekClient:
         embedding = self._mean_pooling(outputs, inputs["attention_mask"])
         return embedding.squeeze().cpu().tolist()
 
-    def generate_content(self, prompt):
+    def generate_content(self, prompt: str, system_prompt: str = None) -> str | None:
         try:
-            inputs = self.tokenizer(prompt, return_tensors="pt", padding=True)
-            if torch.cuda.is_available():
-                inputs = {k: v.cuda() for k, v in inputs.items()}
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+
+            text = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+
+            inputs = self.tokenizer(
+                [text],
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+            )
+
+            # Critical fix
+            device = self.model.device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+
+            # Optional: add this temporarily to confirm
+            print("Model device:", device)
+            print("input_ids device:", inputs["input_ids"].device)
 
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=self.config.max_sequence_length,
-                    temperature=self.config.temperature,
+                    temperature=self.config.temperature or 0.7,
                     do_sample=True,
-                    pad_token_id=self.tokenizer.eos_token_id
+                    pad_token_id=self.tokenizer.eos_token_id,
                 )
 
-            response_text = self.tokenizer.decode(
-                outputs[0][inputs['input_ids'].shape[1]:],
-                skip_special_tokens=True
-            )
-
-            return type('Response', (), {'text': response_text.strip()})()
+            input_length = inputs["input_ids"].shape[1]
+            generated_ids = outputs[0, input_length:]
+            response = self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+            return response
 
         except Exception as e:
-            logger.error(f"DeepseekClient generation error: {e}")
+            logger.error(f"Generation failed: {e}", exc_info=True)
             return None
