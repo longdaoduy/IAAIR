@@ -80,7 +80,7 @@ class Neo4jClient:
             "CREATE INDEX paper_doi_index IF NOT EXISTS FOR (p:Paper) ON (p.doi)",
             "CREATE INDEX paper_pmid_index IF NOT EXISTS FOR (p:Paper) ON (p.pmid)",
             "CREATE INDEX paper_title_index IF NOT EXISTS FOR (p:Paper) ON (p.title)",
-            "CREATE INDEX author_name_index IF NOT EXISTS FOR (a:Author) ON (a.name)",
+            "CREATE INDEX author_id_index IF NOT EXISTS FOR (a:Author) ON (a.id)",
             "CREATE INDEX author_orcid_index IF NOT EXISTS FOR (a:Author) ON (a.orcid)",
             "CREATE INDEX venue_name_index IF NOT EXISTS FOR (v:Venue) ON (v.name)",
             "CREATE INDEX venue_issn_index IF NOT EXISTS FOR (v:Venue) ON (v.issn)"

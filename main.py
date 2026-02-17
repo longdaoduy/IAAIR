@@ -156,7 +156,6 @@ async def pull_papers(request: PaperRequest):
             count=request.num_papers,
             filters=request.filters,
             save_to_file=True,
-            upload_to_neo4j=False  # We'll handle this separately
         )
         
         if not papers_data:

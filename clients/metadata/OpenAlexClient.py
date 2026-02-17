@@ -58,7 +58,7 @@ class OpenAlexClient:
             return None
 
     @staticmethod
-    def extract_paper_data(self, work: Dict) -> Optional[Paper]:
+    def extract_paper_data(work: Dict) -> Optional[Paper]:
         """Extract paper data from OpenAlex work response."""
         try:
             # Extract basic paper information
@@ -104,7 +104,7 @@ class OpenAlexClient:
             return None
 
     @staticmethod
-    def extract_authors(self, work: Dict) -> List[Author]:
+    def extract_authors(work: Dict) -> List[Author]:
         """Extract author information from OpenAlex work response."""
         authors = []
 
@@ -129,7 +129,7 @@ class OpenAlexClient:
         return authors
 
     @staticmethod
-    def extract_citations(self, work: Dict) -> List[str]:
+    def extract_citations(work: Dict) -> List[str]:
         """Extract citation information (referenced works) from OpenAlex work response."""
         citations = []
 
