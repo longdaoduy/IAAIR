@@ -1,6 +1,7 @@
 from typing import Dict, List
 
 from clients.graph.Neo4jClient import Neo4jClient
+from models.schemas.nodes import Institution, Figure, Table
 
 
 class GraphNeo4jHandler:
@@ -40,29 +41,44 @@ class GraphNeo4jHandler:
             uploaded_papers = 0
             uploaded_authors = 0
             created_citations = 0
+            uploaded_figures = 0
+            uploaded_tables = 0
+            uploaded_institutions = 0
 
             for i, paper_data in enumerate(papers_data):
                 if i % 10 == 0:
                     print(f"Processing paper {i + 1}/{len(papers_data)}...")
 
                 try:
-                    # Use the Neo4j client's store_paper method
+                    # Extract data
                     paper = paper_data["paper"]
                     authors = paper_data["authors"]
                     citations = [cid for cid in paper_data["citations"]
                                  if self._paper_exists_in_dataset(cid, papers_data)]
+                    venue = paper_data.get("venue")
+                    
+                    # Extract new entities if available
+                    institutions = paper_data.get("institutions", [])
+                    figures = paper_data.get("figures", [])
+                    tables = paper_data.get("tables", [])
 
-                    # Store paper with all its relationships
-                    await client.store_paper(
+                    # Store paper with all its relationships and content
+                    await client.store_paper_with_content(
                         paper=paper,
                         authors=authors,
-                        venue=paper_data.get("venue"),
-                        citations=citations
+                        venue=venue,
+                        citations=citations,
+                        institutions=institutions,
+                        figures=figures,
+                        tables=tables
                     )
 
                     uploaded_papers += 1
                     uploaded_authors += len(authors)
                     created_citations += len(citations)
+                    uploaded_institutions += len(institutions)
+                    uploaded_figures += len(figures)
+                    uploaded_tables += len(tables)
 
                 except Exception as e:
                     print(f"Error processing paper {paper.id}: {e}")
@@ -71,6 +87,9 @@ class GraphNeo4jHandler:
             print(f"\n=== Neo4j Upload Summary ===")
             print(f"Papers uploaded: {uploaded_papers}")
             print(f"Authors uploaded: {uploaded_authors}")
+            print(f"Institutions uploaded: {uploaded_institutions}")
+            print(f"Figures uploaded: {uploaded_figures}")
+            print(f"Tables uploaded: {uploaded_tables}")
             print(f"Citation relationships created: {created_citations}")
             print("✅ Successfully uploaded papers to Neo4j!")
 

@@ -13,6 +13,9 @@ from neo4j import AsyncGraphDatabase, AsyncDriver
 from models.schemas.nodes.Paper import Paper
 from models.schemas.nodes.Author import Author
 from models.schemas.nodes.Venue import Venue
+from models.schemas.nodes.Institution import Institution
+from models.schemas.nodes.Figure import Figure
+from models.schemas.nodes.Table import Table
 from models.schemas.edges.CitedBy import CitedBy
 from models.configurators.GraphDBConfig import GraphDBConfig
 
@@ -47,7 +50,7 @@ class Neo4jClient:
             logger.info("Successfully connected to Neo4j")
             
             # Create unique constraints and indexes
-            await self.create_constraints()
+            # await self.create_constraints()
             await self.create_indexes()
 
         except Exception as e:
@@ -59,7 +62,10 @@ class Neo4jClient:
         constraints = [
             "CREATE CONSTRAINT paper_id_unique IF NOT EXISTS FOR (p:Paper) REQUIRE p.id IS UNIQUE",
             "CREATE CONSTRAINT author_id_unique IF NOT EXISTS FOR (a:Author) REQUIRE a.id IS UNIQUE", 
-            "CREATE CONSTRAINT venue_id_unique IF NOT EXISTS FOR (v:Venue) REQUIRE v.id IS UNIQUE"
+            "CREATE CONSTRAINT venue_id_unique IF NOT EXISTS FOR (v:Venue) REQUIRE v.id IS UNIQUE",
+            "CREATE CONSTRAINT institution_id_unique IF NOT EXISTS FOR (i:Institution) REQUIRE i.id IS UNIQUE",
+            "CREATE CONSTRAINT figure_id_unique IF NOT EXISTS FOR (f:Figure) REQUIRE f.id IS UNIQUE",
+            "CREATE CONSTRAINT table_id_unique IF NOT EXISTS FOR (t:Table) REQUIRE t.id IS UNIQUE"
         ]
         
         # Note: Neo4j doesn't support unique constraints on relationships directly,
@@ -83,7 +89,10 @@ class Neo4jClient:
             "CREATE INDEX author_id_index IF NOT EXISTS FOR (a:Author) ON (a.id)",
             "CREATE INDEX author_orcid_index IF NOT EXISTS FOR (a:Author) ON (a.orcid)",
             "CREATE INDEX venue_name_index IF NOT EXISTS FOR (v:Venue) ON (v.name)",
-            "CREATE INDEX venue_issn_index IF NOT EXISTS FOR (v:Venue) ON (v.issn)"
+            "CREATE INDEX venue_issn_index IF NOT EXISTS FOR (v:Venue) ON (v.issn)",
+            "CREATE INDEX institution_name_index IF NOT EXISTS FOR (i:Institution) ON (i.name)",
+            "CREATE INDEX figure_paper_id_index IF NOT EXISTS FOR (f:Figure) ON (f.paper_id)",
+            "CREATE INDEX table_paper_id_index IF NOT EXISTS FOR (t:Table) ON (t.paper_id)"
         ]
         
         async with self.driver.session() as session:
@@ -97,7 +106,7 @@ class Neo4jClient:
     async def initialize_database(self):
         """Initialize database with constraints and indexes. Call this once per database setup."""
         logger.info("Initializing database schema...")
-        await self.create_constraints()
+        # await self.create_constraints()
         await self.create_indexes()
         logger.info("Database schema initialization complete")
 
@@ -178,6 +187,7 @@ class Neo4jClient:
             p.doi = $doi,
             p.pmid = $pmid,
             p.arxiv_id = $arxiv_id,
+            p.pdf_url = $pdf_url,
             p.source = $source,
             p.ingested_at = $ingested_at,
             p.last_updated = $last_updated,
@@ -193,6 +203,7 @@ class Neo4jClient:
             "doi": paper.doi,
             "pmid": getattr(paper, 'pmid', None),
             "arxiv_id": getattr(paper, 'arxiv_id', None),
+            "pdf_url": getattr(paper, 'pdf_url', None),
             "source": paper.source,
             "ingested_at": paper.ingested_at.isoformat(),
             "last_updated": paper.last_updated.isoformat(),
@@ -499,3 +510,270 @@ class Neo4jClient:
                 papers.append(paper_data)
 
             return papers
+
+    async def _create_institution_node(self, tx, institution: Institution):
+        """Create an institution node in the graph."""
+        query = '''
+        MERGE (i:Institution {id: $id})
+        SET i.name = $name,
+            i.country = $country,
+            i.city = $city,
+            i.type = $type,
+            i.website = $website,
+            i.ingested_at = $ingested_at,
+            i.last_updated = $last_updated,
+            i.metadata = $metadata
+        '''
+
+        await tx.run(query, {
+            "id": institution.id,
+            "name": institution.name,
+            "country": institution.country,
+            "city": institution.city,
+            "type": institution.type,
+            "website": institution.website,
+            "ingested_at": institution.ingested_at.isoformat(),
+            "last_updated": institution.last_updated.isoformat(),
+            "metadata": json.dumps(institution.metadata) if institution.metadata else "{}"
+        })
+
+    async def _create_figure_node(self, tx, figure: Figure):
+        """Create a figure node in the graph."""
+        query = '''
+        MERGE (f:Figure {id: $id})
+        SET f.paper_id = $paper_id,
+            f.figure_number = $figure_number,
+            f.description = $description,
+            f.caption = $caption,
+            f.page_number = $page_number,
+            f.image_path = $image_path,
+            f.image_embedding = $image_embedding,
+            f.ingested_at = $ingested_at,
+            f.last_updated = $last_updated,
+            f.metadata = $metadata
+        '''
+
+        await tx.run(query, {
+            "id": figure.id,
+            "paper_id": figure.paper_id,
+            "figure_number": figure.figure_number,
+            "description": figure.description,
+            "caption": figure.caption,
+            "page_number": figure.page_number,
+            "image_path": figure.image_path,
+            "image_embedding": figure.image_embedding,
+            "ingested_at": figure.ingested_at.isoformat(),
+            "last_updated": figure.last_updated.isoformat(),
+            "metadata": json.dumps(figure.metadata) if figure.metadata else "{}"
+        })
+
+    async def _create_table_node(self, tx, table: Table):
+        """Create a table node in the graph."""
+        query = '''
+        MERGE (t:Table {id: $id})
+        SET t.paper_id = $paper_id,
+            t.table_number = $table_number,
+            t.description = $description,
+            t.caption = $caption,
+            t.page_number = $page_number,
+            t.headers = $headers,
+            t.rows = $rows,
+            t.table_text = $table_text,
+            t.image_path = $image_path,
+            t.image_embedding = $image_embedding,
+            t.ingested_at = $ingested_at,
+            t.last_updated = $last_updated,
+            t.metadata = $metadata
+        '''
+
+        await tx.run(query, {
+            "id": table.id,
+            "paper_id": table.paper_id,
+            "table_number": table.table_number,
+            "description": table.description,
+            "caption": table.caption,
+            "page_number": table.page_number,
+            "headers": json.dumps(table.headers) if table.headers else None,
+            "rows": json.dumps(table.rows) if table.rows else None,
+            "table_text": table.table_text,
+            "image_path": table.image_path,
+            "image_embedding": table.image_embedding,
+            "ingested_at": table.ingested_at.isoformat(),
+            "last_updated": table.last_updated.isoformat(),
+            "metadata": json.dumps(table.metadata) if table.metadata else "{}"
+        })
+
+    async def _create_figure_relationship(self, tx, paper_id: str, figure_id: str):
+        """Create a relationship between paper and figure."""
+        query = '''
+        MATCH (p:Paper {id: $paper_id})
+        MATCH (f:Figure {id: $figure_id})
+        MERGE (p)-[:CONTAINS_FIGURE]->(f)
+        '''
+        await tx.run(query, {"paper_id": paper_id, "figure_id": figure_id})
+
+    async def _create_table_relationship(self, tx, paper_id: str, table_id: str):
+        """Create a relationship between paper and table."""
+        query = '''
+        MATCH (p:Paper {id: $paper_id})
+        MATCH (t:Table {id: $table_id})
+        MERGE (p)-[:CONTAINS_TABLE]->(t)
+        '''
+        await tx.run(query, {"paper_id": paper_id, "table_id": table_id})
+
+    async def _create_institution_paper_relationship(self, tx, paper_id: str, institution_id: str):
+        """Create a relationship between paper and institution."""
+        query = '''
+        MATCH (p:Paper {id: $paper_id})
+        MATCH (i:Institution {id: $institution_id})
+        MERGE (p)-[:ASSOCIATED_WITH_INSTITUTION]->(i)
+        '''
+        await tx.run(query, {"paper_id": paper_id, "institution_id": institution_id})
+
+    async def store_paper_with_content(self, paper: Paper, authors: List[Author] = None, 
+                                     venue: Venue = None, citations: List[str] = None,
+                                     institutions: List[Institution] = None,
+                                     figures: List[Figure] = None, tables: List[Table] = None):
+        """
+        Store a paper with all its associated content including figures and tables.
+        
+        Args:
+            paper: Paper entity
+            authors: List of authors
+            venue: Venue entity
+            citations: List of citation IDs
+            institutions: List of institutions for authors
+            figures: List of figures extracted from paper
+            tables: List of tables extracted from paper
+        """
+        async with self.driver.session() as session:
+            try:
+                tx = await session.begin_transaction()
+                try:
+                    # Create paper node
+                    await self._create_paper_node(tx, paper)
+
+                    # Create author nodes and relationships
+                    if authors:
+                        for author in authors:
+                            await self._create_author_node(tx, author)
+                            await self._create_authorship_relationship(tx, paper.id, author.id)
+
+                    # Create venue node and relationship
+                    if venue:
+                        await self._create_venue_node(tx, venue)
+                        await self._create_publication_relationship(tx, paper.id, venue.id)
+
+                    # Create citation relationships
+                    if citations:
+                        for cited_paper_id in citations:
+                            await self._create_simple_citation_relationship(tx, paper.id, cited_paper_id)
+
+                    # Create institution nodes and relationships
+                    if institutions:
+                        for institution in institutions:
+                            await self._create_institution_node(tx, institution)
+                            # Create relationship between paper and institution
+                            await self._create_institution_paper_relationship(tx, paper.id, institution.id)
+
+                    # Create figure nodes and relationships
+                    if figures:
+                        for figure in figures:
+                            await self._create_figure_node(tx, figure)
+                            await self._create_figure_relationship(tx, paper.id, figure.id)
+
+                    # Create table nodes and relationships
+                    if tables:
+                        for table in tables:
+                            await self._create_table_node(tx, table)
+                            await self._create_table_relationship(tx, paper.id, table.id)
+
+                    await tx.commit()
+                    logger.info(f"Stored paper {paper.id} with all content in graph database")
+
+                except Exception as e:
+                    await tx.rollback()
+                    raise e
+                finally:
+                    await tx.close()
+
+            except Exception as e:
+                logger.error(f"Failed to store paper with content {paper.id}: {e}")
+                raise
+
+    async def diagnose_relationships(self):
+        """Diagnose relationship issues in the graph database."""
+        async with self.driver.session() as session:
+            try:
+                # Query to check all relationship types
+                query = '''
+                CALL db.relationshipTypes() YIELD relationshipType
+                RETURN relationshipType
+                ORDER BY relationshipType
+                '''
+                
+                result = await session.run(query)
+                records = await result.data()
+                
+                print("=== All Relationship Types in Database ===")
+                for record in records:
+                    rel_type = record['relationshipType']
+                    print(f"  - {rel_type}")
+                
+                # Query to check for problematic relationships
+                problematic_query = '''
+                MATCH ()-[r]-()
+                WHERE type(r) = '*' OR type(r) = '' OR type(r) IS NULL
+                RETURN type(r) as rel_type, count(*) as count
+                '''
+                
+                result = await session.run(problematic_query)
+                records = await result.data()
+                
+                if records:
+                    print("\n=== Problematic Relationships Found ===")
+                    for record in records:
+                        print(f"  - Type: '{record['rel_type']}', Count: {record['count']}")
+                else:
+                    print("\n✅ No problematic relationships found")
+                
+                # Check relationship patterns
+                pattern_query = '''
+                MATCH (n1)-[r]->(n2)
+                RETURN labels(n1)[0] as from_label, type(r) as rel_type, labels(n2)[0] as to_label, count(*) as count
+                ORDER BY from_label, rel_type, to_label
+                LIMIT 20
+                '''
+                
+                result = await session.run(pattern_query)
+                records = await result.data()
+                
+                print("\n=== Relationship Patterns (Top 20) ===")
+                for record in records:
+                    print(f"  {record['from_label']} -[{record['rel_type']}]-> {record['to_label']} ({record['count']})")
+                
+            except Exception as e:
+                logger.error(f"Error diagnosing relationships: {e}")
+                print(f"Error diagnosing relationships: {e}")
+
+    async def cleanup_invalid_relationships(self):
+        """Clean up any invalid relationships that might be causing issues."""
+        async with self.driver.session() as session:
+            try:
+                # Remove relationships with empty or null types
+                cleanup_query = '''
+                MATCH ()-[r]-()
+                WHERE type(r) = '*' OR type(r) = '' OR type(r) IS NULL
+                DELETE r
+                RETURN count(r) as deleted_count
+                '''
+                
+                result = await session.run(cleanup_query)
+                record = await result.single()
+                deleted_count = record['deleted_count'] if record else 0
+                
+                print(f"Cleaned up {deleted_count} invalid relationships")
+                
+            except Exception as e:
+                logger.error(f"Error cleaning up relationships: {e}")
+                print(f"Error cleaning up relationships: {e}")

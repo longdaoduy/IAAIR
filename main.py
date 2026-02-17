@@ -29,6 +29,7 @@ from pipelines.ingestions.GraphNeo4jHandler import GraphNeo4jHandler
 from clients.vector.MilvusClient import MilvusClient
 from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.huggingface.DeepseekClient import DeepseekClient
+from clients.huggingface.CLIPClient import CLIPClient
 from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
 from pipelines.retrievals.HybridRetrievalHandler import HybridRetrievalHandler
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
@@ -69,6 +70,7 @@ ingestion_handler = IngestionHandler()
 neo4j_handler = GraphNeo4jHandler()
 vector_handler = MilvusClient()
 sciBERT_client = SciBERTClient()
+clip_client = CLIPClient()
 deepseek_client = None
 query_handler = GraphQueryHandler()
 
@@ -139,7 +141,7 @@ async def pull_papers(request: PaperRequest):
     Pull papers from OpenAlex, enrich with Semantic Scholar, and upload to databases.
     
     This endpoint:
-    1. Fetches papers from OpenAlex API
+    1. Fetches papers from OpenAlex API with PDF URLs and optionally processes PDFs to extract figures/tables
     2. Enriches abstracts using Semantic Scholar
     3. Uploads to Neo4j (if requested)
     4. Generates embeddings and uploads to Zilliz (if requested)
@@ -156,6 +158,7 @@ async def pull_papers(request: PaperRequest):
             count=request.num_papers,
             filters=request.filters,
             save_to_file=True,
+            process_pdfs=request.process_pdfs
         )
         
         if not papers_data:
@@ -184,13 +187,20 @@ async def pull_papers(request: PaperRequest):
         # Generate summary
         total_authors = sum(len(pd.get('authors', [])) for pd in enriched_papers)
         total_citations = sum(len(pd.get('citations', [])) for pd in enriched_papers)
+        total_institutions = sum(len(pd.get('institutions', [])) for pd in enriched_papers)
+        total_figures = sum(len(pd.get('figures', [])) for pd in enriched_papers)
+        total_tables = sum(len(pd.get('tables', [])) for pd in enriched_papers)
         
         summary = {
             "papers_fetched": len(enriched_papers),
             "authors_extracted": total_authors,
             "citations_extracted": total_citations,
+            "institutions_extracted": total_institutions,
+            "figures_extracted": total_figures,
+            "tables_extracted": total_tables,
             "avg_citations_per_paper": total_citations / len(enriched_papers) if enriched_papers else 0,
-            "processing_time_seconds": (datetime.now() - timestamp).total_seconds()
+            "processing_time_seconds": (datetime.now() - timestamp).total_seconds(),
+            "pdf_processing_enabled": request.process_pdfs
         }
         
         # Create response filename

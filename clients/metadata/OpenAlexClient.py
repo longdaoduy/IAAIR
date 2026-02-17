@@ -16,6 +16,7 @@ from models.configurators.OpenAlexConfig import OpenAlexConfig
 from models.schemas.nodes.Paper import Paper
 from models.schemas.nodes.Author import Author
 from models.schemas.nodes.Venue import Venue, VenueType
+from models.schemas.nodes.Institution import Institution
 
 
 class OpenAlexClient:
@@ -83,6 +84,17 @@ class OpenAlexClient:
                 except:
                     pass
 
+            # Extract PDF URL from primary_location or best_oa_location
+            pdf_url = None
+            primary_location = work.get('primary_location', {})
+            if primary_location and primary_location.get('pdf_url'):
+                pdf_url = primary_location.get('pdf_url')
+            elif work.get('best_oa_location', {}).get('pdf_url'):
+                pdf_url = work.get('best_oa_location', {}).get('pdf_url')
+            # Also check content_urls for direct PDF access
+            elif work.get('content_urls', {}).get('pdf'):
+                pdf_url = work.get('content_urls', {}).get('pdf')
+
             # Create Paper object
             paper = Paper(
                 id=work.get('id', '').replace('https://openalex.org/', ''),
@@ -91,6 +103,7 @@ class OpenAlexClient:
                 publication_date=pub_date,
                 doi=doi,
                 pmid=pmid,
+                pdf_url=pdf_url,
                 source="OpenAlex",
                 metadata={
                     'openalex_id': work.get('id', '').replace('https://openalex.org/', ''),
@@ -113,9 +126,12 @@ class OpenAlexClient:
 
             if not author_data.get('display_name'):
                 continue
+            id = (author_data.get('id') or '').replace('https://openalex.org/', '')
+            if not id:
+                continue
 
             author = Author(
-                id=(author_data.get('id') or '').replace('https://openalex.org/', ''),
+                id=id,
                 name=author_data.get('display_name', ''),
                 orcid=author_data.get('orcid', '').replace('https://orcid.org/', '') if author_data.get(
                     'orcid') else None,
@@ -190,6 +206,70 @@ class OpenAlexClient:
             print(f"Error extracting venue data: {e}")
             return None
 
+    @staticmethod
+    def extract_institutions(work: Dict) -> List[Institution]:
+        """Extract institution information from OpenAlex work response for authors with null IDs."""
+        institutions = []
+        seen_institutions = set()  # To avoid duplicates
+
+        for authorship in work.get('authorships', []):
+            author_data = authorship.get('author', {})
+
+            # Only process authors with null IDs
+            if author_data.get('id') is None:
+                # Extract institutions associated with this author
+                for institution_data in authorship.get('institutions', []):
+                    institution_id = institution_data.get('id', '').replace('https://openalex.org/', '')
+
+                    # Skip if we've already processed this institution
+                    if institution_id in seen_institutions or not institution_id:
+                        continue
+
+                    seen_institutions.add(institution_id)
+
+                    # Extract country from country_code
+                    country = None
+                    country_code = institution_data.get('country_code')
+                    if country_code:
+                        # Map common country codes to full names
+                        country_mapping = {
+                            'JP': 'Japan',
+                            'US': 'United States',
+                            'GB': 'United Kingdom',
+                            'DE': 'Germany',
+                            'FR': 'France',
+                            'CN': 'China',
+                            'CA': 'Canada',
+                            'AU': 'Australia',
+                            'IT': 'Italy',
+                            'ES': 'Spain',
+                            'NL': 'Netherlands',
+                            'SE': 'Sweden',
+                            'CH': 'Switzerland',
+                            'KR': 'South Korea',
+                            'IN': 'India',
+                            'BR': 'Brazil'
+                        }
+                        country = country_mapping.get(country_code, country_code)
+
+                    institution = Institution(
+                        id=institution_id,
+                        name=institution_data.get('display_name', ''),
+                        country=country,
+                        type=institution_data.get('type', 'unknown'),
+                        metadata={
+                            'openalex_id': institution_data.get('id', ''),
+                            'ror': institution_data.get('ror', ''),
+                            'country_code': country_code,
+                            'lineage': institution_data.get('lineage', []),
+                            'associated_author': author_data.get('display_name', '')
+                        }
+                    )
+
+                    institutions.append(institution)
+
+        return institutions
+
     def fetch_papers(self, count: int = 1000, filters: Dict = None) -> List[Dict]:
         """
         Fetch papers from OpenAlex API.
@@ -206,7 +286,7 @@ class OpenAlexClient:
 
         base_params = {
             "filter": "has_doi:true",
-            "select": "id,title,abstract,publication_year,doi,ids,authorships,referenced_works,cited_by_count,primary_location,best_oa_location,locations"
+            "select": "id,title,abstract,publication_year,doi,ids,authorships,referenced_works,cited_by_count,primary_location,best_oa_location,locations,content_urls"
         }
 
         # Add custom filters if provided
@@ -249,12 +329,16 @@ class OpenAlexClient:
                 # Extract venue
                 venue = self.extract_venue(work)
 
+                # Extract institutions for authors with null IDs
+                institutions = self.extract_institutions(work)
+
                 # Store all data together
                 paper_data = {
                     "paper": paper,
                     "authors": authors,
                     "citations": citations,
                     "venue": venue,
+                    "institutions": institutions,
                     "cited_by_count": work.get('cited_by_count', 0)
                 }
 
