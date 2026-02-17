@@ -14,7 +14,7 @@ class CLIPConfig:
     """Configuration for CLIP client."""
     
     # Model settings
-    model_name: str = "ViT-B/32"  # Available: RN50, RN101, RN50x4, RN50x16, RN50x64, ViT-B/32, ViT-B/16, ViT-L/14
+    model_name: str = "openai/clip-vit-base-patch32"  # Available: RN50, RN101, RN50x4, RN50x16, RN50x64, ViT-B/32, ViT-B/16, ViT-L/14
     device: Optional[str] = None  # Will auto-detect if not specified
     
     # Processing settings

@@ -150,43 +150,6 @@ class Neo4jClient:
                 MERGE (p)-[:CONTAINS_FIGURE]->(f)
             """, list=f_list, pid=paper.id)
 
-    # --- Query Methods ---
-
-    async def get_citation_subgraph(self, document_id: str, depth: int = 2) -> Dict[str, Any]:
-        """Retrieves a local neighborhood of the citation graph."""
-        query = """
-        MATCH path = (p:Paper {id: $id})-[:CITES*1..%d]-(connected:Paper)
-        RETURN path
-        LIMIT 500
-        """ % depth
-        
-        async with self.driver.session() as session:
-            result = await session.run(query, id=document_id)
-            nodes, edges = {}, []
-            async for record in result:
-                path = record["path"]
-                for node in path.nodes:
-                    nodes[node["id"]] = dict(node)
-                for rel in path.relationships:
-                    edges.append({
-                        "source": rel.start_node["id"],
-                        "target": rel.end_node["id"],
-                        "type": rel.type
-                    })
-            return {"nodes": list(nodes.values()), "edges": edges}
-
-    async def find_similar_by_citations(self, document_id: str, limit: int = 10) -> List[Dict]:
-        """Co-citation analysis: find papers that cite the same things."""
-        query = """
-        MATCH (p:Paper {id: $id})-[:CITES]->(cited:Paper)<-[:CITES]-(similar:Paper)
-        WHERE similar.id <> $id
-        RETURN similar, count(cited) as common_cites
-        ORDER BY common_cites DESC LIMIT $limit
-        """
-        async with self.driver.session() as session:
-            result = await session.run(query, id=document_id, limit=limit)
-            return [dict(r["similar"], score=r["common_cites"]) async for r in result]
-
     # --- Utilities ---
 
     @staticmethod
