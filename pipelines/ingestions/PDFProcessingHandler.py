@@ -7,6 +7,7 @@ and generates descriptions and embeddings using various AI models.
 
 import logging
 import os
+import json
 import requests
 from typing import List, Dict, Optional, Tuple
 import fitz  # PyMuPDF
@@ -18,12 +19,16 @@ from datetime import datetime
 from models.schemas.nodes import Figure, Table, Paper
 from clients.huggingface.CLIPClient import CLIPClient
 from clients.huggingface.DeepseekClient import DeepseekClient
+from clients.huggingface.SciBERTClient import SciBERTClient
+from clients.vector.MilvusClient import MilvusClient
 
 class PDFProcessingHandler:
     """Handler for processing PDFs and extracting visual content."""
     
-    def __init__(self, clip_client: Optional[CLIPClient] = None):
+    def __init__(self, clip_client: Optional[CLIPClient] = None, scibert_client: Optional[SciBERTClient] = None, milvus_client: Optional[MilvusClient] = None):
         self.clip_client = clip_client or CLIPClient()
+        self.scibert_client = scibert_client or SciBERTClient()
+        self.milvus_client = milvus_client or MilvusClient()
         self.logger = logging.getLogger(__name__)
         
         # Create directories for storing extracted content
@@ -119,6 +124,11 @@ class PDFProcessingHandler:
                                 # Extract surrounding text for description
                                 description = self._extract_figure_description(page, img, page_num + 1)
                                 
+                                # Generate SciBERT embedding for description
+                                description_embedding = None
+                                if description:
+                                    description_embedding = self.scibert_client.generate_embedding(description)
+                                
                                 # Create Figure entity
                                 figure = Figure(
                                     id=figure_id,
@@ -127,7 +137,8 @@ class PDFProcessingHandler:
                                     description=description,
                                     page_number=page_num + 1,
                                     image_path=image_path,
-                                    image_embedding=image_embedding
+                                    image_embedding=image_embedding,
+                                    description_embedding=description_embedding
                                 )
                                 
                                 figures.append(figure)
@@ -249,6 +260,11 @@ class PDFProcessingHandler:
                 # Extract table description/caption
                 description = self._extract_table_description(page, bbox)
                 
+                # Generate SciBERT embedding for description
+                description_embedding = None
+                if description:
+                    description_embedding = self.scibert_client.generate_embedding(description)
+                
                 # Try to parse table structure
                 headers, rows = self._parse_table_structure(table_text)
                 
@@ -260,7 +276,8 @@ class PDFProcessingHandler:
                     page_number=page_num,
                     headers=headers,
                     rows=rows,
-                    table_text=table_text
+                    table_text=table_text,
+                    description_embedding=description_embedding
                 )
                 
                 tables.append(table)
@@ -368,6 +385,147 @@ class PDFProcessingHandler:
         center2 = ((rect2.x0 + rect2.x1) / 2, (rect2.y0 + rect2.y1) / 2)
         
         return ((center1[0] - center2[0]) ** 2 + (center1[1] - center2[1]) ** 2) ** 0.5
+
+    def _save_figures_to_milvus(self, figures: List[Figure]) -> bool:
+        """
+        Save figure embeddings to Milvus using dedicated figures collection.
+        
+        Args:
+            figures: List of Figure entities with embeddings
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not figures:
+            return True
+            
+        try:
+            # Connect to Milvus if not connected
+            if not self.milvus_client.is_connected and not self.milvus_client.connect():
+                self.logger.error("Failed to connect to Milvus")
+                return False
+            
+            # Fit TF-IDF vectorizer once for all descriptions
+            if not self.milvus_client.is_tfidf_fitted:
+                all_descriptions = [fig.description for fig in figures if fig.description]
+                if all_descriptions:
+                    self.milvus_client.fit_tfidf_vectorizer(all_descriptions)
+                    self.logger.info(f"Fitted TF-IDF vectorizer with {len(all_descriptions)} figure descriptions")
+            
+            # Prepare figures data for the dedicated figures collection
+            figures_data = []
+            for figure in figures:
+                if figure.description_embedding or figure.image_embedding:
+                    # Generate sparse embedding for description if available
+                    sparse_description_embedding = {0: 0.001}  # Default minimal sparse vector
+                    if figure.description and self.milvus_client.is_tfidf_fitted:
+                        sparse_description_embedding = self.milvus_client.generate_sparse_embedding(figure.description)
+                    
+                    figure_data = {
+                        'id': figure.id,
+                        'paper_id': figure.paper_id,
+                        'description': figure.description or "",
+                        'description_embedding': figure.description_embedding or [0.0] * 768,
+                        'image_embedding': figure.image_embedding or [0.0] * 512,
+                        'sparse_description_embedding': sparse_description_embedding
+                    }
+                    figures_data.append(figure_data)
+            
+            if not figures_data:
+                self.logger.warning("No figure embeddings to save to Milvus")
+                return True
+            
+            # Upload using the dedicated figures collection method
+            success = self.milvus_client.upload_figures_embeddings(
+                figures_data=figures_data,
+                batch_size=100
+            )
+            
+            if success:
+                self.logger.info(f"Successfully saved {len(figures_data)} figures to dedicated Milvus figures collection")
+            else:
+                self.logger.error("Failed to save figures to Milvus")
+            
+            return success
+            
+        except Exception as e:
+            self.logger.error(f"Error saving figures to Milvus: {e}")
+            return False
+
+    def _save_tables_to_milvus(self, tables: List[Table]) -> bool:
+        """
+        Save table embeddings to Milvus using existing MilvusClient functionality.
+        
+        Args:
+            tables: List of Table entities with embeddings
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not tables:
+            return True
+            
+        try:
+            # Connect to Milvus if not connected
+            if not self.milvus_client.is_connected and not self.milvus_client.connect():
+                self.logger.error("Failed to connect to Milvus")
+                return False
+            
+            # Prepare tables as embedding data for MilvusClient
+            embedding_data = []
+            for table in tables:
+                if table.description_embedding:
+                    embedding_item = {
+                        'paper_id': table.id,  # Use table ID as paper_id for unique identification
+                        'embedding': table.description_embedding
+                    }
+                    embedding_data.append(embedding_item)
+            
+            if not embedding_data:
+                self.logger.warning("No table embeddings to save to Milvus")
+                return True
+            
+            # Prepare papers_data for text extraction (for sparse embeddings)
+            papers_data = []
+            for table in tables:
+                if table.description_embedding:
+                    paper_data = {
+                        'paper': {
+                            'id': table.id,
+                            'title': f"Table {table.table_number}",
+                            'abstract': table.description or table.table_text or f"Table {table.table_number} from paper {table.paper_id}"
+                        }
+                    }
+                    papers_data.append(paper_data)
+            
+            # Create temporary embedding file
+            temp_filename = f"temp_tables_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            with open(temp_filename, 'w', encoding='utf-8') as f:
+                json.dump(embedding_data, f, indent=2)
+            
+            # Upload using existing MilvusClient method
+            success = self.milvus_client.upload_embeddings(
+                embedding_file=temp_filename,
+                papers_data=papers_data,
+                batch_size=100
+            )
+            
+            # Clean up temp file
+            try:
+                os.remove(temp_filename)
+            except:
+                pass
+            
+            if success:
+                self.logger.info(f"Successfully saved {len(embedding_data)} tables to Milvus")
+            else:
+                self.logger.error("Failed to save tables to Milvus")
+            
+            return success
+            
+        except Exception as e:
+            self.logger.error(f"Error saving tables to Milvus: {e}")
+            return False
     
     def process_paper_pdf(self, paper: Paper) -> Tuple[List[Figure], List[Table]]:
         """
@@ -388,8 +546,28 @@ class PDFProcessingHandler:
         if not pdf_path:
             return [], []
         
-        # Extract figures and tables
+        # Extract figures and tables with embeddings
         figures, tables = self.extract_figures_and_tables(pdf_path, paper.id)
+        
+        # Save embeddings to Milvus using dedicated collections
+        try:
+            self.logger.info(f"Saving {len(figures)} figures and {len(tables)} tables to Milvus...")
+            
+            # Save figures to dedicated figures collection
+            figures_success = self._save_figures_to_milvus(figures)
+            if not figures_success:
+                self.logger.warning("Failed to save some figures to dedicated Milvus figures collection")
+            
+            # Save tables to existing papers collection
+            tables_success = self._save_tables_to_milvus(tables)
+            if not tables_success:
+                self.logger.warning("Failed to save some tables to Milvus")
+                
+            if figures_success and tables_success:
+                self.logger.info("Successfully saved all figures to dedicated collection and tables to papers collection")
+            
+        except Exception as e:
+            self.logger.error(f"Error saving to Milvus: {e}")
         
         # Clean up PDF file (optional)
         try:

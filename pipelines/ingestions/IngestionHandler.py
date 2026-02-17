@@ -7,6 +7,8 @@ from clients.metadata.OpenAlexClient import OpenAlexClient
 from pipelines.ingestions.PDFProcessingHandler import PDFProcessingHandler
 from clients.huggingface.CLIPClient import CLIPClient
 from clients.huggingface.DeepseekClient import DeepseekClient
+from clients.huggingface.SciBERTClient import SciBERTClient
+from clients.vector.MilvusClient import MilvusClient
 
 
 class IngestionHandler():
@@ -14,7 +16,13 @@ class IngestionHandler():
         self.semantic_scholar_client = SemanticScholarClient()
         self.openalex_client = OpenAlexClient()
         self.clip_client = CLIPClient()
-        self.pdf_handler = PDFProcessingHandler(self.clip_client)
+        self.scibert_client = SciBERTClient()
+        self.milvus_client = MilvusClient()
+        self.pdf_handler = PDFProcessingHandler(
+            self.clip_client, 
+            self.scibert_client, 
+            self.milvus_client
+        )
 
     def save_papers_to_json(self, papers_data: List[Dict], filename: str = "openalex_papers.json"):
         """Save fetched papers data to a JSON file."""
@@ -74,6 +82,7 @@ class IngestionHandler():
                         "page_number": fig.page_number,
                         "image_path": fig.image_path,
                         "image_embedding": fig.image_embedding,
+                        "description_embedding": fig.description_embedding,
                     } for fig in paper_data.get("figures", [])
                 ],
                 "tables": [
@@ -89,6 +98,7 @@ class IngestionHandler():
                         "table_text": tbl.table_text,
                         "image_path": tbl.image_path,
                         "image_embedding": tbl.image_embedding,
+                        "description_embedding": tbl.description_embedding,
                     } for tbl in paper_data.get("tables", [])
                 ],
                 "citations": paper_data["citations"],
@@ -398,6 +408,7 @@ class IngestionHandler():
                             page_number=f.get("page_number"),
                             image_path=f.get("image_path"),
                             image_embedding=f.get("image_embedding"),
+                            description_embedding=f.get("description_embedding"),
                         )
                     )
 
@@ -417,6 +428,7 @@ class IngestionHandler():
                             table_text=t.get("table_text"),
                             image_path=t.get("image_path"),
                             image_embedding=t.get("image_embedding"),
+                            description_embedding=t.get("description_embedding"),
                         )
                     )
 

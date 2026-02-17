@@ -25,6 +25,7 @@ class Figure:
     # Visual representation
     image_path: Optional[str] = None
     image_embedding: Optional[List[float]] = None  # CLIP embedding
+    description_embedding: Optional[List[float]] = None  # SciBERT embedding for description
     
     # Tracking fields
     ingested_at: datetime = field(default_factory=datetime.now)

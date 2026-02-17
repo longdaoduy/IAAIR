@@ -89,6 +89,28 @@ class MilvusClient:
 
         return schema
 
+    def create_figures_collection_schema(self) -> CollectionSchema:
+        """Create collection schema for figures with specific fields.
+        
+        Returns:
+            Collection schema for figures
+        """
+        fields = [
+            FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=200, is_primary=True),
+            FieldSchema(name="paper_id", dtype=DataType.VARCHAR, max_length=100),
+            FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=2000),
+            FieldSchema(name="description_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),  # SciBERT dimension
+            FieldSchema(name="image_embedding", dtype=DataType.FLOAT_VECTOR, dim=512),  # CLIP dimension
+            FieldSchema(name="sparse_description_embedding", dtype=DataType.SPARSE_FLOAT_VECTOR)
+        ]
+
+        schema = CollectionSchema(
+            fields=fields,
+            description="Figures collection with description and image embeddings"
+        )
+
+        return schema
+
     def create_collection(self, embedding_dim: int, force_recreate: bool = False) -> bool:
         """Create or get existing collection.
         
@@ -167,6 +189,102 @@ class MilvusClient:
 
         except Exception as e:
             print(f"❌ Failed to create collection: {e}")
+            return False
+
+    def create_figures_collection(self, force_recreate: bool = False) -> bool:
+        """Create or get existing figures collection.
+        
+        Args:
+            force_recreate: Whether to drop existing collection and recreate
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            collection_name = "figures_collection"
+
+            # Check if collection exists
+            if utility.has_collection(collection_name):
+                figures_collection = Collection(collection_name)
+
+                # Check if the existing collection has the correct schema
+                schema = figures_collection.schema
+                field_names = [field.name for field in schema.fields]
+
+                required_fields = ['id', 'paper_id', 'description', 'description_embedding', 'image_embedding', 'sparse_description_embedding']
+                has_correct_schema = all(field in field_names for field in required_fields)
+
+                if has_correct_schema:
+                    print(f"📋 Using existing figures collection: {collection_name}")
+                    return True
+                else:
+                    print(f"⚠️  Existing figures collection has incompatible schema. Required fields: {required_fields}")
+                    print(f"⚠️  Existing fields: {field_names}")
+
+                    if force_recreate:
+                        print(f"🗑️  Dropping existing figures collection to recreate...")
+                        utility.drop_collection(collection_name)
+                    else:
+                        print(f"❌ Set force_recreate=True to automatically recreate the figures collection")
+                        return False
+
+            # Create new figures collection
+            print(f"🏗️ Creating new figures collection: {collection_name}")
+            schema = self.create_figures_collection_schema()
+
+            figures_collection = Collection(
+                name=collection_name,
+                schema=schema
+            )
+
+            # Create indexes for vector fields
+            # Index for description embedding (dense)
+            desc_index_params = {
+                "metric_type": "COSINE",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": 128}
+            }
+
+            print(f"🔍 Creating description embedding index...")
+            figures_collection.create_index(
+                field_name="description_embedding",
+                index_params=desc_index_params
+            )
+
+            # Index for image embedding (dense)
+            img_index_params = {
+                "metric_type": "COSINE",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": 128}
+            }
+
+            print(f"🔍 Creating image embedding index...")
+            figures_collection.create_index(
+                field_name="image_embedding",
+                index_params=img_index_params
+            )
+
+            # Index for sparse description embedding
+            sparse_index_params = {
+                "metric_type": "IP",  # Inner Product for sparse vectors
+                "index_type": "SPARSE_INVERTED_INDEX",
+                "params": {"drop_ratio_build": 0.2}
+            }
+
+            print(f"🔍 Creating sparse description embedding index...")
+            figures_collection.create_index(
+                field_name="sparse_description_embedding",
+                index_params=sparse_index_params
+            )
+
+            # Load collection for immediate use
+            figures_collection.load()
+
+            print("✅ Figures collection created successfully")
+            return True
+
+        except Exception as e:
+            print(f"❌ Failed to create figures collection: {e}")
             return False
 
     def find_latest_embedding_file(self) -> Optional[str]:
@@ -396,6 +514,98 @@ class MilvusClient:
 
         except Exception as e:
             print(f"❌ Upload failed: {e}")
+            return False
+
+    def upload_figures_embeddings(self, figures_data: List[Dict], batch_size: int = 100) -> bool:
+        """Upload figures embeddings to figures collection.
+        
+        Args:
+            figures_data: List of figure data with embeddings
+            batch_size: Number of records per batch
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not figures_data:
+                print("❌ No figures data to upload")
+                return False
+
+            # Create figures collection
+            if not self.create_figures_collection(force_recreate=True):
+                return False
+
+            # Prepare texts for TF-IDF fitting if not already fitted
+            if not self.is_tfidf_fitted:
+                all_texts = []
+                for figure in figures_data:
+                    description = figure.get('description', '')
+                    if description:
+                        all_texts.append(description)
+                
+                if all_texts:
+                    self.fit_tfidf_vectorizer(all_texts)
+
+            # Prepare batch data
+            batches = []
+            for i in range(0, len(figures_data), batch_size):
+                batch = figures_data[i:i + batch_size]
+
+                ids, paper_ids, descriptions = [], [], []
+                description_embeddings, image_embeddings, sparse_embeddings = [], [], []
+
+                for figure in batch:
+                    ids.append(figure['id'])
+                    paper_ids.append(figure['paper_id'])
+                    descriptions.append(figure['description'][:2000])  # Truncate to max length
+                    
+                    # Dense embeddings
+                    description_embeddings.append(figure.get('description_embedding', [0.0] * 768))
+                    image_embeddings.append(figure.get('image_embedding', [0.0] * 512))
+                    
+                    # Sparse embedding
+                    desc_text = figure.get('description', '')
+                    if desc_text and self.is_tfidf_fitted:
+                        sparse_embeddings.append(self.generate_sparse_embedding(desc_text))
+                    else:
+                        sparse_embeddings.append({0: 0.001})  # Minimal sparse vector
+
+                batches.append([ids, paper_ids, descriptions, description_embeddings, image_embeddings, sparse_embeddings])
+
+            # Upload batches
+            print(f"📤 Uploading {len(figures_data)} figures in {len(batches)} batches...")
+
+            figures_collection = Collection("figures_collection")
+            total_inserted = 0
+            
+            for i, batch_data in enumerate(tqdm(batches, desc="Uploading figures batches")):
+                try:
+                    insert_result = figures_collection.insert(batch_data)
+                    batch_count = len(batch_data[0])  # Number of IDs in batch
+                    total_inserted += batch_count
+
+                    if (i + 1) % 5 == 0:  # Flush every 5 batches
+                        figures_collection.flush()
+
+                except Exception as e:
+                    print(f"❌ Error uploading figures batch {i + 1}: {e}")
+                    continue
+
+            # Final flush and load
+            figures_collection.flush()
+            figures_collection.load()
+
+            print(f"\n📊 Figures Upload Summary:")
+            print(f"   Total figures: {len(figures_data)}")
+            print(f"   Successfully inserted: {total_inserted}")
+            print(f"   Success rate: {total_inserted / len(figures_data) * 100:.1f}%")
+            print(f"   Collection name: figures_collection")
+            print("✅ Figures upload completed successfully")
+
+            return True
+
+        except Exception as e:
+            print(f"❌ Figures upload failed: {e}")
             return False
 
     def _dense_search(self, query_embedding: List[float], top_k: int) -> List[Dict]:
