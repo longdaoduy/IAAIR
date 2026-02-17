@@ -9,7 +9,7 @@ import logging
 import os
 import json
 import requests
-from typing import List, Dict, Optional, Tuple
+from typing import List, Optional, Tuple
 import fitz  # PyMuPDF
 from PIL import Image
 import io
@@ -18,7 +18,6 @@ from datetime import datetime
 
 from models.schemas.nodes import Figure, Table, Paper
 from clients.huggingface.CLIPClient import CLIPClient
-from clients.huggingface.DeepseekClient import DeepseekClient
 from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.vector.MilvusClient import MilvusClient
 
@@ -425,8 +424,8 @@ class PDFProcessingHandler:
                         'id': figure.id,
                         'paper_id': figure.paper_id,
                         'description': figure.description or "",
-                        'description_embedding': figure.description_embedding or [0.0] * 768,
-                        'image_embedding': figure.image_embedding or [0.0] * 512,
+                        'description_embedding': figure.description_embedding,
+                        'image_embedding': figure.image_embedding,
                         'sparse_description_embedding': sparse_description_embedding
                     }
                     figures_data.append(figure_data)
