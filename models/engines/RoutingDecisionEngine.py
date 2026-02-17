@@ -23,12 +23,6 @@ class RoutingDecisionEngine:
         self.deepseek_client = None #DeepseekClient()  # Keep as fallback
         self.performance_history = {}  # Track routing performance
 
-        # Initialize Llama for few-shot learning
-        # self.llama_config = LlamaConfig()
-        # self.llama_model = self.llama_config.initialize_client()
-        # self.use_llama = self.llama_model is not None
-
-        # Load few-shot learning examples from file
         self.few_shot_examples = self._load_few_shot_examples()
 
     def decide_routing(self, query: str, request: HybridSearchRequest) -> RoutingStrategy:

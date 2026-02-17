@@ -152,7 +152,7 @@ async def pull_papers(request: PaperRequest):
         
         # Step 1: Pull papers from OpenAlex
         logger.info("Step 1: Pulling papers from OpenAlex...")
-        papers_data = ingestion_handler.pull_OpenAlex_Paper(
+        papers_data = ingestion_handler.pull_open_alex_paper(
             count=request.num_papers,
             filters=request.filters,
             save_to_file=True,

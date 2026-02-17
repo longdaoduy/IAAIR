@@ -7,8 +7,7 @@ provides configurable embedding generation.
 """
 
 import torch
-from transformers import AutoTokenizer, AutoModel
-from typing import List, Dict, Optional
+from typing import List, Optional
 
 from models.configurators.DeepseekConfig import DeepseekConfig
 from transformers import AutoTokenizer, AutoModelForCausalLM

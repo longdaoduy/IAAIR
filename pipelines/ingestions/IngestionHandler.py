@@ -10,9 +10,6 @@ class IngestionHandler():
         self.semantic_scholar_client = SemanticScholarClient()
         self.openalex_client = OpenAlexClient()
 
-    def fetch_papers(self, count: int = 1000, filters: Dict = None) -> List[Dict]:
-        return self.openalex_client.fetch_papers(count, filters)
-
     def save_papers_to_json(self, papers_data: List[Dict], filename: str = "openalex_papers.json"):
         """Save fetched papers data to a JSON file."""
         # Convert dataclass objects to dictionaries for JSON serialization
@@ -59,29 +56,22 @@ class IngestionHandler():
 
         print(f"Saved {len(json_data)} papers to {filename}")
 
-    def pull_OpenAlex_Paper(self, count: int, filters: Dict = None, save_to_file: bool = True,
-                            upload_to_neo4j: bool = False) -> List[Dict]:
+    def pull_open_alex_paper(self, count: int, filters: Dict = None, save_to_file: bool = True) -> List[Dict]:
         """Main method to ingest papers from OpenAlex.
         
         Args:
             count: Number of papers to fetch (500-1000), defaults to nums_papers_to_pull
             filters: Additional filters for the API request
             save_to_file: Whether to save results to JSON file
-            upload_to_neo4j: Whether to upload results to Neo4j database
-            
+
         Returns:
             List of paper data with authors and citations
         """
 
         print(f"Starting paper ingestion from OpenAlex (target: {count} papers)")
 
-        # # Test API connection first
-        # if not self.test_api_connection():
-        #     print("API connection failed. Aborting ingestion.")
-        #     return []
-
         # Fetch papers
-        papers_data = self.fetch_papers(count, filters)
+        papers_data = self.openalex_client.fetch_papers(count, filters)
 
         # Save to file if requested
         if save_to_file and papers_data:

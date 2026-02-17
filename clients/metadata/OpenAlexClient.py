@@ -57,20 +57,7 @@ class OpenAlexClient:
             print(f"Error making request to {url}: {e}")
             return None
 
-    def test_connection(self) -> bool:
-        """Test the API connection with a simple request"""
-        print("Testing OpenAlex API connection...")
-
-        response = self.make_request("works", {"filter": "publication_year:2023", "per-page": 1})
-
-        if response and "results" in response:
-            print("✅ API connection successful!")
-            print(f"Total works in 2023: {response['meta']['count']:,}")
-            return True
-        else:
-            print("❌ API connection failed!")
-            return False
-
+    @staticmethod
     def extract_paper_data(self, work: Dict) -> Optional[Paper]:
         """Extract paper data from OpenAlex work response."""
         try:
@@ -116,6 +103,7 @@ class OpenAlexClient:
             print(f"Error extracting paper data: {e}")
             return None
 
+    @staticmethod
     def extract_authors(self, work: Dict) -> List[Author]:
         """Extract author information from OpenAlex work response."""
         authors = []
@@ -140,6 +128,7 @@ class OpenAlexClient:
 
         return authors
 
+    @staticmethod
     def extract_citations(self, work: Dict) -> List[str]:
         """Extract citation information (referenced works) from OpenAlex work response."""
         citations = []
@@ -152,7 +141,8 @@ class OpenAlexClient:
 
         return citations
 
-    def extract_venue(self, work: Dict) -> Optional[Venue]:
+    @staticmethod
+    def extract_venue(work: Dict) -> Optional[Venue]:
         """Extract venue information from OpenAlex work response."""
         try:
             host_venue = work.get('primary_location', {}) or work.get('best_oa_location', {})
@@ -212,11 +202,9 @@ class OpenAlexClient:
             List of dictionaries containing paper data with authors and citations
         """
         papers_data = []
-        per_page = min(200, count)  # OpenAlex max is 200 per page
-        pages_needed = 2
+        pages_needed = count
 
         base_params = {
-            "per-page": per_page,
             "filter": "has_doi:true",
             "select": "id,title,abstract,publication_year,doi,ids,authorships,referenced_works,cited_by_count,primary_location,best_oa_location,locations"
         }
