@@ -93,7 +93,12 @@ class PDFProcessingHandler:
                     pix = None
                     try:
                         xref = img[0]
-                        pix = fitz.Pixmap(doc, xref)
+                        # PRIMARY FIX: Wrap the initial Pixmap creation
+                        try:
+                            pix = fitz.Pixmap(doc, xref)
+                        except Exception:
+                            # If colorspace is missing/unsupported, create an RGB Pixmap from the xref directly
+                            pix = fitz.Pixmap(fitz.csRGB, doc, xref)
 
                         # Fix: Force colorspace conversion to RGB
                         # This solves the "unsupported colorspace for png" error
