@@ -73,176 +73,135 @@ class PDFProcessingHandler:
 
     def extract_figures_and_tables(self, pdf_path: str, paper_id: str) -> Tuple[List[Figure], List[Table]]:
         """
-        Extract figures and tables from PDF.
-        
-        Args:
-            pdf_path: Path to the PDF file
-            paper_id: Paper ID for generating entity IDs
-            
-        Returns:
-            Tuple of (figures, tables) lists
+        Extract figures and tables from PDF with robust colorspace handling
+        and memory management.
         """
         figures = []
         tables = []
 
         try:
-            # Open PDF
             doc = fitz.open(pdf_path)
-
             figure_counter = 1
             table_counter = 1
 
             for page_num in range(doc.page_count):
                 page = doc[page_num]
 
-                # Extract images (potential figures)
+                # --- 1. Figure Extraction ---
                 image_list = page.get_images()
-
                 for img_index, img in enumerate(image_list):
+                    pix = None
                     try:
-                        # Extract image
                         xref = img[0]
                         pix = fitz.Pixmap(doc, xref)
 
-                        # Handle different colorspace scenarios
-                        if pix.colorspace is None:
-                            # Skip images with no colorspace (often metadata or problematic images)
-                            self.logger.warning(f"Skipping image with None colorspace on page {page_num + 1}")
-                            pix = None
-                            continue
-
-                        # Convert to RGB colorspace for consistent processing
-                        if pix.n - pix.alpha > 4:  # CMYK or other multi-channel
-                            # Convert CMYK or other formats to RGB
-                            pix = fitz.Pixmap(fitz.csRGB, pix)
-                        elif pix.n - pix.alpha == 1:  # Grayscale
-                            # Convert grayscale to RGB for consistency
-                            pix = fitz.Pixmap(fitz.csRGB, pix)
-                        elif pix.alpha:  # Has alpha channel
-                            # Ensure RGB with alpha handling
+                        # Fix: Force colorspace conversion to RGB
+                        # This solves the "unsupported colorspace for png" error
+                        if pix.colorspace is None or pix.colorspace.n != 3:
                             pix = fitz.Pixmap(fitz.csRGB, pix)
 
-                        # Verify we have a valid pixmap before converting to PNG
-                        if pix.colorspace is None:
-                            self.logger.warning(f"Skipping image with problematic colorspace on page {page_num + 1}")
-                            pix = None
-                            continue
-
-                        # Convert to PIL Image with error handling
+                        # Fix: Use PPM as intermediate buffer for PIL
+                        # PPM is a raw format that doesn't care about complex PDF colorspace metadata
                         try:
-                            img_data = pix.tobytes("png")
-                            pil_image = Image.open(io.BytesIO(img_data))
+                            img_data = pix.tobytes("ppm")
+                            pil_image = Image.open(io.BytesIO(img_data)).convert("RGB")
                         except Exception as conv_error:
-                            self.logger.warning(
-                                f"Failed to convert pixmap to PIL Image on page {page_num + 1}: {conv_error}")
-                            pix = None
+                            self.logger.warning(f"Conversion failed on page {page_num + 1}: {conv_error}")
                             continue
 
-                        # Filter out small images (likely icons or decorations)
+                        # Filter: Ignore icons/tiny UI elements
                         if pil_image.width >= 100 and pil_image.height >= 100:
-                            # Save image
                             figure_id = f"{paper_id}#figure_{figure_counter}"
                             image_path = os.path.join(self.figures_dir, f"{figure_id}.png")
-                            pil_image.save(image_path)
 
-                            # Generate CLIP embedding
+                            # Save and Generate Embeddings
+                            pil_image.save(image_path)
                             image_embedding = self.clip_client.generate_image_embedding(pil_image)
 
-                            # Extract surrounding text for description
                             description = self._extract_figure_description(page, img, page_num + 1)
-
-                            # Generate SciBERT embedding for description
-                            description_embedding = None
+                            desc_embedding = None
                             if description:
-                                description_embedding = self.scibert_client.generate_embedding(description)
+                                desc_embedding = self.scibert_client.generate_embedding(description)
 
-                                # Create Figure entity
-                                figure = Figure(
-                                    id=figure_id,
-                                    paper_id=paper_id,
-                                    figure_number=figure_counter,
-                                    description=description,
-                                    page_number=page_num + 1,
-                                    image_path=image_path,
-                                    image_embedding=image_embedding,
-                                    description_embedding=description_embedding
-                                )
+                            figures.append(Figure(
+                                id=figure_id,
+                                paper_id=paper_id,
+                                figure_number=figure_counter,
+                                description=description or "",
+                                page_number=page_num + 1,
+                                image_path=image_path,
+                                image_embedding=image_embedding,
+                                description_embedding=desc_embedding
+                            ))
+                            figure_counter += 1
 
-                                figures.append(figure)
-                                figure_counter += 1
+                    except Exception as img_e:
+                        self.logger.error(f"Image error on page {page_num + 1}: {img_e}")
+                    finally:
+                        # Explicitly release memory (important for 140+ page docs)
+                        pix = None
 
-                        # Clean up pixmap
-                        if pix:
-                            pix = None
-
-                    except Exception as e:
-                        self.logger.error(f"Error processing image on page {page_num + 1}: {e}")
-                        # Ensure pixmap cleanup even in error cases
-                        try:
-                            if 'pix' in locals() and pix:
-                                pix = None
-                        except:
-                            pass
-                        continue
-
-                # Extract tables
-                page_tables = self._extract_tables_from_page(page, paper_id, table_counter, page_num + 1)
-                tables.extend(page_tables)
-                table_counter += len(page_tables)
+                # --- 2. Table Extraction ---
+                try:
+                    page_tables = self._extract_tables_from_page(page, paper_id, table_counter, page_num + 1)
+                    tables.extend(page_tables)
+                    table_counter += len(page_tables)
+                except Exception as tab_e:
+                    self.logger.error(f"Table error on page {page_num + 1}: {tab_e}")
 
             doc.close()
-
             self.logger.info(f"Extracted {len(figures)} figures and {len(tables)} tables from {paper_id}")
 
         except Exception as e:
-            self.logger.error(f"Error processing PDF {pdf_path}: {e}")
+            self.logger.error(f"Critical error processing PDF {pdf_path}: {e}")
 
         return figures, tables
 
     def _extract_figure_description(self, page, img_info, page_num: int) -> Optional[str]:
         """
-        Extract caption/description for a figure by analyzing surrounding text.
-        
-        Args:
-            page: PyMuPDF page object
-            img_info: Image information from PyMuPDF
-            page_num: Page number
-            
-        Returns:
-            Figure description if found
+        Extract figure caption by analyzing proximity and vertical alignment.
         """
         try:
-            # Get image position
-            img_rect = page.get_image_rects(img_info[0])[0] if page.get_image_rects(img_info[0]) else None
-
-            if not img_rect:
+            # 1. Get image bounding box
+            img_rects = page.get_image_rects(img_info[0])
+            if not img_rects:
                 return None
+            img_rect = img_rects[0]
 
-            # Extract text from the page
-            text_instances = page.get_text("dict")
-
-            # Look for figure captions near the image
+            # 2. Extract page text as dictionary for structural analysis
+            blocks = page.get_text("dict")["blocks"]
             potential_captions = []
 
-            for block in text_instances["blocks"]:
-                if "lines" in block:
-                    for line in block["lines"]:
-                        line_text = ""
-                        line_rect = fitz.Rect(line["bbox"])
+            for block in blocks:
+                if "lines" not in block:
+                    continue
 
-                        for span in line["spans"]:
-                            line_text += span["text"]
+                # Combine lines to handle multi-line captions
+                block_text = ""
+                for line in block["lines"]:
+                    line_text = "".join([span["text"] for span in line["spans"]])
+                    block_text += " " + line_text
 
-                        line_text = line_text.strip()
+                block_text = block_text.strip()
+                block_rect = fitz.Rect(block["bbox"])
 
-                        # Check if text contains figure references
-                        if re.search(r'(fig|figure)\s*\d+', line_text.lower()):
-                            # Calculate distance from image
-                            distance = self._calculate_distance(img_rect, line_rect)
-                            potential_captions.append((line_text, distance))
+                # 3. Look for Figure/Fig prefix at the start of blocks
+                # This distinguishes actual captions from "As shown in Fig 1..."
+                if re.search(r'^(fig|figure)\.?\s*\d+', block_text, re.IGNORECASE):
+                    # Calculate Euclidean distance
+                    distance = self._calculate_distance(img_rect, block_rect)
 
-            # Return the closest caption
+                    # Heuristic: Captions are usually vertically aligned and close
+                    # We give a "bonus" to blocks starting below the image
+                    is_below = block_rect.y0 >= img_rect.y1 - 5
+
+                    # Weighting: favor blocks below and very close
+                    score = distance if is_below else distance * 2.0
+
+                    potential_captions.append((block_text, score))
+
             if potential_captions:
+                # Sort by our weighted score
                 potential_captions.sort(key=lambda x: x[1])
                 return potential_captions[0][0]
 
@@ -253,69 +212,49 @@ class PDFProcessingHandler:
             return None
 
     def _extract_tables_from_page(self, page, paper_id: str, start_counter: int, page_num: int) -> List[Table]:
-        """
-        Extract tables from a page using text analysis.
-        
-        Args:
-            page: PyMuPDF page object
-            paper_id: Paper ID
-            start_counter: Starting table counter
-            page_num: Page number
-            
-        Returns:
-            List of Table entities
-        """
         tables = []
-
         try:
-            # Get page text with formatting
             text_dict = page.get_text("dict")
 
-            # Look for table-like structures (this is a simplified approach)
-            # In practice, you might want to use more sophisticated table detection
-            table_patterns = []
-
             for block in text_dict["blocks"]:
-                if "lines" in block:
-                    block_text = ""
-                    for line in block["lines"]:
-                        line_text = ""
-                        for span in line["spans"]:
-                            line_text += span["text"]
-                        block_text += line_text + "\n"
+                if "lines" not in block:
+                    continue
 
-                    # Simple heuristic: look for patterns that might be tables
-                    if self._is_likely_table(block_text):
-                        table_patterns.append((block_text.strip(), block["bbox"]))
+                # Reconstruct block text
+                block_text = ""
+                for line in block["lines"]:
+                    line_text = "".join([span["text"] for span in line["spans"]])
+                    block_text += line_text + "\n"
 
-            # Create table entities
-            for i, (table_text, bbox) in enumerate(table_patterns):
-                table_text = table_text or ""
-                table_id = f"{paper_id}#table_{start_counter + i}"
+                # Check if this block is the table body or contains the "Table X:" identifier
+                is_table_content = self._is_likely_table(block_text)
+                is_table_caption = re.search(r'^\s*(Table|Tab)\.?\s*\d+', block_text, re.IGNORECASE)
 
-                # Extract table description/caption
-                description = self._extract_table_description(page, bbox) or ""
+                if is_table_content and is_table_caption:
+                    table_id = f"{paper_id}#table_{start_counter + len(tables)}"
 
-                # Generate SciBERT embedding for description
-                description_embedding = None
+                    # Extract surrounding description specifically looking for "Table X:"
+                    description = self._extract_table_description(page, block["bbox"])
 
-                # Try to parse table structure
-                headers, rows = self._parse_table_structure(table_text)
+                    # If we found table-like text, generate embeddings
+                    description_embedding = None
+                    if block_text.strip():
+                        # We embed the actual content of the table for semantic search
+                        description_embedding = self.scibert_client.generate_embedding(block_text)
 
-                if table_text:
-                    description_embedding = self.scibert_client.generate_embedding(table_text)
-                table = Table(
-                    id=table_id,
-                    paper_id=paper_id,
-                    table_number=start_counter + i,
-                    description=table_text,
-                    page_number=page_num,
-                    headers=headers,
-                    rows=rows,
-                    description_embedding=description_embedding
-                )
+                    headers, rows = self._parse_table_structure(block_text)
 
-                tables.append(table)
+                    table = Table(
+                        id=table_id,
+                        paper_id=paper_id,
+                        table_number=start_counter + len(tables),
+                        description=description or block_text[:200],  # Fallback to start of text
+                        page_number=page_num,
+                        headers=headers,
+                        rows=rows,
+                        description_embedding=description_embedding
+                    )
+                    tables.append(table)
 
         except Exception as e:
             self.logger.error(f"Error extracting tables from page {page_num}: {e}")
