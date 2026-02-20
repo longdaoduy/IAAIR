@@ -119,21 +119,20 @@ class PDFProcessingHandler:
                             image_embedding = self.clip_client.generate_image_embedding(pil_image)
 
                             description = self._extract_figure_description(page, img, page_num + 1)
-                            desc_embedding = None
                             if description:
                                 desc_embedding = self.scibert_client.generate_embedding(description)
 
-                            figures.append(Figure(
-                                id=figure_id,
-                                paper_id=paper_id,
-                                figure_number=figure_counter,
-                                description=description or "",
-                                page_number=page_num + 1,
-                                image_path=image_path,
-                                image_embedding=image_embedding,
-                                description_embedding=desc_embedding
-                            ))
-                            figure_counter += 1
+                                figures.append(Figure(
+                                    id=figure_id,
+                                    paper_id=paper_id,
+                                    figure_number=figure_counter,
+                                    description=description or "",
+                                    page_number=page_num + 1,
+                                    image_path=image_path,
+                                    image_embedding=image_embedding,
+                                    description_embedding=desc_embedding
+                                ))
+                                figure_counter += 1
 
                     except Exception as img_e:
                         self.logger.error(f"Image error on page {page_num + 1}: {img_e}")
@@ -248,7 +247,7 @@ class PDFProcessingHandler:
                         id=table_id,
                         paper_id=paper_id,
                         table_number=start_counter + len(tables),
-                        description=description or block_text[:200],  # Fallback to start of text
+                        description=description or block_text[:8000],  # Fallback to start of text
                         page_number=page_num,
                         headers=headers,
                         rows=rows,
