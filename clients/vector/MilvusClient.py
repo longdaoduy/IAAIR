@@ -99,9 +99,9 @@ class MilvusClient:
         fields = [
             FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=200, is_primary=True),
             FieldSchema(name="paper_id", dtype=DataType.VARCHAR, max_length=100),
-            FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=2000),
+            FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=8000),
             FieldSchema(name="description_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),  # SciBERT dimension
-            FieldSchema(name="image_embedding", dtype=DataType.FLOAT_VECTOR, dim=512),  # CLIP dimension
+            FieldSchema(name="image_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),  # CLIP dimension
             FieldSchema(name="sparse_description_embedding", dtype=DataType.SPARSE_FLOAT_VECTOR)
         ]
 
@@ -669,7 +669,7 @@ class MilvusClient:
 
                     # Dense embeddings
                     description_embeddings.append(figure.get('description_embedding', [0.0] * 768))
-                    image_embeddings.append(figure.get('image_embedding', [0.0] * 512))
+                    image_embeddings.append(figure.get('image_embedding', [0.0] * 768))
 
                     # Sparse embedding
                     desc_text = figure.get('description', '')
