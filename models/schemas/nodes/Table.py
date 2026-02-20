@@ -24,8 +24,7 @@ class Table:
     # Table structure
     headers: Optional[List[str]] = None
     rows: Optional[List[List[str]]] = None
-    table_text: Optional[str] = None  # Full table as text
-    
+
     # Visual representation (if available)
     image_path: Optional[str] = None
     image_embedding: Optional[List[float]] = None  # CLIP embedding if image available

@@ -62,6 +62,10 @@ class OpenAlexClient:
     def extract_paper_data(work: Dict) -> Optional[Paper]:
         """Extract paper data from OpenAlex work response."""
         try:
+            # Check if work is None or not a dict
+            if not work or not isinstance(work, dict):
+                return None
+                
             # Extract basic paper information
             title = work.get('title', '').strip()
             if not title:
@@ -73,7 +77,7 @@ class OpenAlexClient:
             # Extract PMID from external IDs
             pmid = None
             external_ids = work.get('ids', {})
-            if external_ids and external_ids.get('pmid'):
+            if external_ids and isinstance(external_ids, dict) and external_ids.get('pmid'):
                 pmid = external_ids.get('pmid').replace('https://pubmed.ncbi.nlm.nih.gov/', '')
 
             # Extract publication year
@@ -87,13 +91,17 @@ class OpenAlexClient:
             # Extract PDF URL from primary_location or best_oa_location
             pdf_url = None
             primary_location = work.get('primary_location', {})
-            if primary_location and primary_location.get('pdf_url'):
+            if primary_location and isinstance(primary_location, dict) and primary_location.get('pdf_url'):
                 pdf_url = primary_location.get('pdf_url')
-            elif work.get('best_oa_location', {}).get('pdf_url'):
-                pdf_url = work.get('best_oa_location', {}).get('pdf_url')
-            # Also check content_urls for direct PDF access
-            elif work.get('content_urls', {}).get('pdf'):
-                pdf_url = work.get('content_urls', {}).get('pdf')
+            else:
+                best_oa_location = work.get('best_oa_location', {})
+                if best_oa_location and isinstance(best_oa_location, dict) and best_oa_location.get('pdf_url'):
+                    pdf_url = best_oa_location.get('pdf_url')
+                else:
+                    # Also check content_urls for direct PDF access
+                    content_urls = work.get('content_urls', {})
+                    if content_urls and isinstance(content_urls, dict) and content_urls.get('pdf'):
+                        pdf_url = content_urls.get('pdf')
 
             # Create Paper object
             paper = Paper(
@@ -120,6 +128,10 @@ class OpenAlexClient:
     def extract_authors(work: Dict) -> List[Author]:
         """Extract author information from OpenAlex work response."""
         authors = []
+        
+        # Check if work is None or not a dict
+        if not work or not isinstance(work, dict):
+            return authors
 
         for authorship in work.get('authorships', []):
             author_data = authorship.get('author', {})
@@ -148,11 +160,15 @@ class OpenAlexClient:
     def extract_citations(work: Dict) -> List[str]:
         """Extract citation information (referenced works) from OpenAlex work response."""
         citations = []
+        
+        # Check if work is None or not a dict
+        if not work or not isinstance(work, dict):
+            return citations
 
-        for ref in work.get('referenced_works', []):
-            if ref:
+        for ref_work in work.get('referenced_works', []):
+            if ref_work:
                 # Clean the OpenAlex ID
-                citation_id = ref.replace('https://openalex.org/', '')
+                citation_id = ref_work.replace('https://openalex.org/', '')
                 citations.append(citation_id)
 
         return citations
@@ -161,6 +177,10 @@ class OpenAlexClient:
     def extract_venue(work: Dict) -> Optional[Venue]:
         """Extract venue information from OpenAlex work response."""
         try:
+            # Check if work is None or not a dict
+            if not work or not isinstance(work, dict):
+                return None
+                
             host_venue = work.get('primary_location', {}) or work.get('best_oa_location', {})
             if not host_venue:
                 # Try locations array
@@ -211,6 +231,10 @@ class OpenAlexClient:
         """Extract institution information from OpenAlex work response for authors with null IDs."""
         institutions = []
         seen_institutions = set()  # To avoid duplicates
+        
+        # Check if work is None or not a dict
+        if not work or not isinstance(work, dict):
+            return institutions
 
         for authorship in work.get('authorships', []):
             author_data = authorship.get('author', {})
@@ -315,34 +339,44 @@ class OpenAlexClient:
                 if len(papers_data) >= count:
                     break
 
-                # Extract paper data
-                paper = self.extract_paper_data(work)
-                if not paper:
+                # Skip None or invalid work objects
+                if not work or not isinstance(work, dict):
+                    print("Skipping invalid work object (None or not dict)")
                     continue
 
-                # Extract authors
-                authors = self.extract_authors(work)
+                # Extract paper data
+                try:
+                    paper = self.extract_paper_data(work)
+                    if not paper:
+                        continue
 
-                # Extract citations
-                citations = self.extract_citations(work)
+                    # Extract authors
+                    authors = self.extract_authors(work)
 
-                # Extract venue
-                venue = self.extract_venue(work)
+                    # Extract citations
+                    citations = self.extract_citations(work)
 
-                # Extract institutions for authors with null IDs
-                institutions = self.extract_institutions(work)
+                    # Extract venue
+                    venue = self.extract_venue(work)
 
-                # Store all data together
-                paper_data = {
-                    "paper": paper,
-                    "authors": authors,
-                    "citations": citations,
-                    "venue": venue,
-                    "institutions": institutions,
-                    "cited_by_count": work.get('cited_by_count', 0)
-                }
+                    # Extract institutions for authors with null IDs
+                    institutions = self.extract_institutions(work)
 
-                papers_data.append(paper_data)
+                    # Store all data together
+                    paper_data = {
+                        "paper": paper,
+                        "authors": authors,
+                        "citations": citations,
+                        "venue": venue,
+                        "institutions": institutions,
+                        "cited_by_count": work.get('cited_by_count', 0)
+                    }
+
+                    papers_data.append(paper_data)
+                
+                except Exception as e:
+                    print(f"Error processing work: {e}")
+                    continue
 
             if len(papers_data) >= count:
                 break

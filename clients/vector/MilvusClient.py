@@ -19,10 +19,11 @@ from pymilvus import (
 from models.configurators.VectorDBConfig import VectorDBConfig
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+
 class MilvusClient:
     """Service for uploading embeddings to Zilliz Cloud."""
 
-    def __init__(self,config: Optional[VectorDBConfig] = None):
+    def __init__(self, config: Optional[VectorDBConfig] = None):
         """Initialize Zilliz upload service.
         
         Args:
@@ -111,13 +112,34 @@ class MilvusClient:
 
         return schema
 
+    def create_tables_collection_schema(self) -> CollectionSchema:
+        """Create collection schema for tables with specific fields.
+
+        Returns:
+            Collection schema for tables
+        """
+        fields = [
+            FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=200, is_primary=True),
+            FieldSchema(name="paper_id", dtype=DataType.VARCHAR, max_length=100),
+            FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=8000),
+            FieldSchema(name="description_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),  # SciBERT dimension
+            FieldSchema(name="sparse_description_embedding", dtype=DataType.SPARSE_FLOAT_VECTOR)
+        ]
+
+        schema = CollectionSchema(
+            fields=fields,
+            description="Tables collection with description embeddings"
+        )
+
+        return schema
+
     def create_collection(self, embedding_dim: int, force_recreate: bool = False) -> bool:
         """Create or get existing collection.
-        
+
         Args:
             embedding_dim: Dimension of embedding vectors
             force_recreate: Whether to drop existing collection and recreate
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -193,10 +215,10 @@ class MilvusClient:
 
     def create_figures_collection(self, force_recreate: bool = False) -> bool:
         """Create or get existing figures collection.
-        
+
         Args:
             force_recreate: Whether to drop existing collection and recreate
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -211,14 +233,16 @@ class MilvusClient:
                 schema = figures_collection.schema
                 field_names = [field.name for field in schema.fields]
 
-                required_fields = ['id', 'paper_id', 'description', 'description_embedding', 'image_embedding', 'sparse_description_embedding']
+                required_fields = ['id', 'paper_id', 'description', 'description_embedding', 'image_embedding',
+                                   'sparse_description_embedding']
                 has_correct_schema = all(field in field_names for field in required_fields)
 
                 if has_correct_schema:
                     print(f"📋 Using existing figures collection: {collection_name}")
                     return True
                 else:
-                    print(f"⚠️  Existing figures collection has incompatible schema. Required fields: {required_fields}")
+                    print(
+                        f"⚠️  Existing figures collection has incompatible schema. Required fields: {required_fields}")
                     print(f"⚠️  Existing fields: {field_names}")
 
                     if force_recreate:
@@ -287,9 +311,93 @@ class MilvusClient:
             print(f"❌ Failed to create figures collection: {e}")
             return False
 
+    def create_tables_collection(self, force_recreate: bool = False) -> bool:
+        """Create or get existing tables collection.
+
+        Args:
+            force_recreate: Whether to drop existing collection and recreate
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            collection_name = "tables_collection"
+
+            # Check if collection exists
+            if utility.has_collection(collection_name):
+                tables_collection = Collection(collection_name)
+
+                # Check if the existing collection has the correct schema
+                schema = tables_collection.schema
+                field_names = [field.name for field in schema.fields]
+
+                required_fields = ['id', 'paper_id', 'description', 'description_embedding',
+                                   'sparse_description_embedding']
+                has_correct_schema = all(field in field_names for field in required_fields)
+
+                if has_correct_schema:
+                    print(f"📋 Using existing tables collection: {collection_name}")
+                    return True
+                else:
+                    print(f"⚠️  Existing tables collection has incompatible schema. Required fields: {required_fields}")
+                    print(f"⚠️  Existing fields: {field_names}")
+
+                    if force_recreate:
+                        print(f"🗑️  Dropping existing tables collection to recreate...")
+                        utility.drop_collection(collection_name)
+                    else:
+                        print(f"❌ Set force_recreate=True to automatically recreate the tables collection")
+                        return False
+
+            # Create new tables collection
+            print(f"🏗️ Creating new tables collection: {collection_name}")
+            schema = self.create_tables_collection_schema()
+
+            tables_collection = Collection(
+                name=collection_name,
+                schema=schema
+            )
+
+            # Create indexes for vector fields
+            # Index for description embedding (dense)
+            desc_index_params = {
+                "metric_type": "COSINE",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": 128}
+            }
+
+            print(f"🔍 Creating description embedding index...")
+            tables_collection.create_index(
+                field_name="description_embedding",
+                index_params=desc_index_params
+            )
+
+            # Index for sparse description embedding
+            sparse_index_params = {
+                "metric_type": "IP",  # Inner Product for sparse vectors
+                "index_type": "SPARSE_INVERTED_INDEX",
+                "params": {"drop_ratio_build": 0.2}
+            }
+
+            print(f"🔍 Creating sparse description embedding index...")
+            tables_collection.create_index(
+                field_name="sparse_description_embedding",
+                index_params=sparse_index_params
+            )
+
+            # Load collection for immediate use
+            tables_collection.load()
+
+            print("✅ Tables collection created successfully")
+            return True
+
+        except Exception as e:
+            print(f"❌ Failed to create tables collection: {e}")
+            return False
+
     def find_latest_embedding_file(self) -> Optional[str]:
         """Find the most recent embedding file.
-        
+
         Returns:
             Path to the most recent embedding file, or None if not found
         """
@@ -310,10 +418,10 @@ class MilvusClient:
 
     def generate_sparse_embedding(self, text: str) -> Dict[int, float]:
         """Generate sparse embedding using TF-IDF.
-        
+
         Args:
             text: Input text
-            
+
         Returns:
             Sparse vector as dictionary {index: value}
         """
@@ -335,7 +443,7 @@ class MilvusClient:
 
     def fit_tfidf_vectorizer(self, texts: List[str]):
         """Fit TF-IDF vectorizer on the corpus.
-        
+
         Args:
             texts: List of texts to fit the vectorizer
         """
@@ -346,10 +454,10 @@ class MilvusClient:
 
     def load_embeddings(self, embedding_file: Optional[str] = None) -> List[Dict]:
         """Load embedding data from JSON file.
-        
+
         Args:
             embedding_file: Path to embedding file. Auto-detects if None.
-            
+
         Returns:
             List of embedding data
         """
@@ -443,12 +551,12 @@ class MilvusClient:
     def upload_embeddings(self, embedding_file: Optional[str] = None, papers_data: Optional[List[Dict]] = None,
                           batch_size: int = 1000) -> bool:
         """Upload embeddings to Zilliz Cloud with hybrid search support.
-        
+
         Args:
             embedding_file: Path to embedding file. Auto-detects if None.
             papers_data: Original papers data for text extraction
             batch_size: Number of records per batch
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -518,11 +626,11 @@ class MilvusClient:
 
     def upload_figures_embeddings(self, figures_data: List[Dict], batch_size: int = 100) -> bool:
         """Upload figures embeddings to figures collection.
-        
+
         Args:
             figures_data: List of figure data with embeddings
             batch_size: Number of records per batch
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -542,7 +650,7 @@ class MilvusClient:
                     description = figure.get('description', '')
                     if description:
                         all_texts.append(description)
-                
+
                 if all_texts:
                     self.fit_tfidf_vectorizer(all_texts)
 
@@ -558,11 +666,11 @@ class MilvusClient:
                     ids.append(figure['id'])
                     paper_ids.append(figure['paper_id'])
                     descriptions.append(figure['description'][:2000])  # Truncate to max length
-                    
+
                     # Dense embeddings
                     description_embeddings.append(figure.get('description_embedding', [0.0] * 768))
                     image_embeddings.append(figure.get('image_embedding', [0.0] * 512))
-                    
+
                     # Sparse embedding
                     desc_text = figure.get('description', '')
                     if desc_text and self.is_tfidf_fitted:
@@ -570,18 +678,19 @@ class MilvusClient:
                     else:
                         sparse_embeddings.append({0: 0.001})  # Minimal sparse vector
 
-                batches.append([ids, paper_ids, descriptions, description_embeddings, image_embeddings, sparse_embeddings])
+                batches.append(
+                    [ids, paper_ids, descriptions, description_embeddings, image_embeddings, sparse_embeddings])
 
             # Upload batches
             print(f"📤 Uploading {len(figures_data)} figures in {len(batches)} batches...")
 
             figures_collection = Collection("figures_collection")
             total_inserted = 0
-            
+
             for i, batch_data in enumerate(tqdm(batches, desc="Uploading figures batches")):
                 try:
                     insert_result = figures_collection.insert(batch_data)
-                    batch_count = len(batch_data[0])  # Number of IDs in batch
+                    batch_count = len(batch_data)  # Number of IDs in batch
                     total_inserted += batch_count
 
                     if (i + 1) % 5 == 0:  # Flush every 5 batches
@@ -606,6 +715,99 @@ class MilvusClient:
 
         except Exception as e:
             print(f"❌ Figures upload failed: {e}")
+            return False
+
+    def upload_tables_embeddings(self, tables_data: List[Dict], batch_size: int = 100) -> bool:
+        """Upload tables embeddings to tables collection.
+
+        Args:
+            tables_data: List of table data with embeddings
+            batch_size: Number of records per batch
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not tables_data:
+                print("❌ No tables data to upload")
+                return False
+
+            # Create tables collection
+            if not self.create_tables_collection(force_recreate=True):
+                return False
+
+            # Prepare texts for TF-IDF fitting if not already fitted
+            if not self.is_tfidf_fitted:
+                all_texts = []
+                for table in tables_data:
+                    # Use both description and table text for richer embeddings
+                    description = table.get('description', '')
+                    if description:
+                        all_texts.append(description)
+
+                if all_texts:
+                    self.fit_tfidf_vectorizer(all_texts)
+
+            # Prepare batch data
+            batches = []
+            for i in range(0, len(tables_data), batch_size):
+                batch = tables_data[i:i + batch_size]
+
+                ids, paper_ids, descriptions = [], [], []
+                description_embeddings, sparse_embeddings = [], []
+
+                for table in batch:
+                    ids.append(table['id'])
+                    paper_ids.append(table['paper_id'])
+                    descriptions.append(table['description'][:8000])  # Truncate to max length
+
+                    # Dense embedding
+                    description_embeddings.append(table.get('description_embedding', [0.0] * 768))
+
+                    # Sparse embedding (use combined text for richer representation)
+                    desc_text = table.get('description', '')
+
+                    if desc_text and self.is_tfidf_fitted:
+                        sparse_embeddings.append(self.generate_sparse_embedding(desc_text))
+                    else:
+                        sparse_embeddings.append({0: 0.001})  # Minimal sparse vector
+
+                batches.append([ids, paper_ids, descriptions, description_embeddings, sparse_embeddings])
+
+            # Upload batches
+            print(f"📤 Uploading {len(tables_data)} tables in {len(batches)} batches...")
+
+            tables_collection = Collection("tables_collection")
+            total_inserted = 0
+
+            for i, batch_data in enumerate(tqdm(batches, desc="Uploading tables batches")):
+                try:
+                    insert_result = tables_collection.insert(batch_data)
+                    batch_count = len(batch_data)  # Number of IDs in batch
+                    total_inserted += batch_count
+
+                    if (i + 1) % 5 == 0:  # Flush every 5 batches
+                        tables_collection.flush()
+
+                except Exception as e:
+                    print(f"❌ Error uploading tables batch {i + 1}: {e}")
+                    continue
+
+            # Final flush and load
+            tables_collection.flush()
+            tables_collection.load()
+
+            print(f"\n📊 Tables Upload Summary:")
+            print(f"   Total tables: {len(tables_data)}")
+            print(f"   Successfully inserted: {total_inserted}")
+            print(f"   Success rate: {total_inserted / len(tables_data) * 100:.1f}%")
+            print(f"   Collection name: tables_collection")
+            print("✅ Tables upload completed successfully")
+
+            return True
+
+        except Exception as e:
+            print(f"❌ Tables upload failed: {e}")
             return False
 
     def _dense_search(self, query_embedding: List[float], top_k: int) -> List[Dict]:

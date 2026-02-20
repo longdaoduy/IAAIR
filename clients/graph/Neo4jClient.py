@@ -15,6 +15,7 @@ from models.configurators.GraphDBConfig import GraphDBConfig
 
 logger = logging.getLogger(__name__)
 
+
 class Neo4jClient:
     """
     Optimized Neo4j Client for scientific literature graphs.
@@ -59,7 +60,7 @@ class Neo4jClient:
                 try:
                     await session.run(q)
                 except Exception:
-                    pass # Ignore if already exists
+                    pass  # Ignore if already exists
 
     async def close(self):
         if self.driver:
@@ -67,17 +68,16 @@ class Neo4jClient:
 
     # --- Core Ingestion Logic (Atomic & Batched) ---
 
-    async def store_paper_with_content(self, paper: Paper, authors: List[Author] = None, 
-                                     venue: Venue = None, citations: List[str] = None,
-                                     institutions: List[Institution] = None,
-                                     figures: List[Figure] = None, tables: List[Table] = None):
+    async def store_paper_with_content(self, paper: Paper, authors: List[Author] = None,
+                                       venue: Venue = None, citations: List[str] = None,
+                                       institutions: List[Institution] = None,
+                                       figures: List[Figure] = None, tables: List[Table] = None):
         """Orchestrates the atomic ingestion of a paper and all related entities."""
         async with self.driver.session() as session:
             try:
                 await session.execute_write(
-                    self._ingest_transaction, 
-                    paper, authors, venue, citations, institutions, figures, tables
-                )
+                    self._ingest_transaction,
+                    paper, authors, venue, citations, institutions, figures, tables)
             except Exception as e:
                 logger.error(f"Ingestion failed for paper {paper.id}: {e}")
                 raise
@@ -85,7 +85,7 @@ class Neo4jClient:
     @staticmethod
     async def _ingest_transaction(tx, paper, authors, venue, citations, institutions, figures, tables):
         """The internal transaction logic using Cypher UNWIND for bulk processing."""
-        
+
         # 1. Upsert Paper
         p_props = Neo4jClient._prepare_props(paper)
         await tx.run("""
@@ -150,6 +150,17 @@ class Neo4jClient:
                 MERGE (p)-[:CONTAINS_FIGURE]->(f)
             """, list=f_list, pid=paper.id)
 
+        if tables:
+            t_list = [Neo4jClient._prepare_props(t) for t in tables]
+            await tx.run("""
+                UNWIND $list AS tab
+                MERGE (t:Table {id: tab.id})
+                SET t += tab, t.last_updated = datetime()
+                WITH t
+                MATCH (p:Paper {id: $pid})
+                MERGE (p)-[:CONTAINS_TABLE]->(t)
+            """, list=t_list, pid=paper.id)
+
     # --- Utilities ---
 
     @staticmethod
@@ -157,7 +168,15 @@ class Neo4jClient:
         """Helper to convert objects/Pydantic models to Neo4j-friendly dicts."""
         data = obj.dict() if hasattr(obj, 'dict') else vars(obj)
         clean = {}
+        
+        # Fields to exclude from Neo4j storage (embeddings are stored in Milvus)
+        excluded_fields = {'image_embedding', 'description_embedding'}
+        
         for k, v in data.items():
+            # Skip embedding fields
+            if k in excluded_fields:
+                continue
+                
             # Handle Enums (like VenueType)
             if isinstance(v, enum.Enum):
                 clean[k] = v.value
