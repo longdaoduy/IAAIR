@@ -363,12 +363,18 @@ class MilvusClient:
                 index_params=desc_index_params
             )
 
-            # Index for sparse description embedding
-            sparse_index_params = {
-                "metric_type": "IP",  # Inner Product for sparse vectors
-                "index_type": "SPARSE_INVERTED_INDEX",
-                "params": {"drop_ratio_build": 0.2}
+            # Index for image embedding (dense)
+            img_index_params = {
+                "metric_type": "COSINE",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": 128}
             }
+
+            print(f"🔍 Creating image embedding index...")
+            tables_collection.create_index(
+                field_name="image_embedding",
+                index_params=img_index_params
+            )
 
             # Load collection for immediate use
             tables_collection.load()
@@ -645,7 +651,7 @@ class MilvusClient:
                 batch = figures_data[i:i + batch_size]
 
                 ids, paper_ids, descriptions = [], [], []
-                description_embeddings, image_embeddings = [], [], []
+                description_embeddings, image_embeddings = [], []
 
                 for figure in batch:
                     ids.append(figure['id'])
@@ -733,7 +739,7 @@ class MilvusClient:
                 batch = tables_data[i:i + batch_size]
 
                 ids, paper_ids, descriptions = [], [], []
-                description_embeddings, image_embeddings = [], [], []
+                description_embeddings, image_embeddings = [], []
 
                 for table in batch:
                     ids.append(table['id'])
