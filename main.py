@@ -15,7 +15,7 @@ This unified API provides comprehensive endpoints for:
    - Hybrid search capabilities
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List
 from datetime import datetime
 import logging
 import os
@@ -84,11 +84,6 @@ async def root():
             "semantic_search": {
                 "/search": "POST - Semantic search for similar papers",
                 "/hybrid-search": "POST - Hybrid fusion search with attribution"
-            },
-            "analytics": {
-                "/analytics/routing-performance": "GET - Routing strategy performance metrics",
-                "/analytics/query-classification": "POST - Analyze query classification",
-                "/analytics/attribution-stats": "GET - Attribution tracking statistics"
             },
             "graph_queries": {
                 "/graph/query": "POST - Execute custom Cypher queries"

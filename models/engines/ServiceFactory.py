@@ -1,10 +1,4 @@
-from typing import Dict, List, Optional
-from datetime import datetime
 import logging
-import os
-import asyncio
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
 
 # Import handlers
 from pipelines.ingestions.IngestionHandler import IngestionHandler
@@ -20,20 +14,6 @@ from models.engines.RoutingDecisionEngine import RoutingDecisionEngine
 from models.engines.ResultFusion import ResultFusion
 from models.engines.ScientificReranker import ScientificReranker
 from models.engines.AttributionTracker import AttributionTracker
-from models.entities.ingestion.PaperRequest import PaperRequest
-from models.entities.ingestion.PaperResponse import PaperResponse
-from models.entities.retrieval.HybridSearchRequest import HybridSearchRequest
-from models.entities.retrieval.GraphQueryRequest import GraphQueryRequest
-from models.entities.retrieval.GraphQueryResponse import GraphQueryResponse
-from models.entities.retrieval.SearchRequest import SearchRequest
-from models.entities.retrieval.SearchResponse import SearchResponse
-from models.entities.retrieval.HybridSearchResponse import HybridSearchResponse
-from models.entities.retrieval.RoutingStrategy import RoutingStrategy
-from models.entities.retrieval.RoutingPerformanceResponse import RoutingPerformanceResponse
-from models.entities.retrieval.QueryAnalysisResponse import QueryAnalysisResponse
-from models.entities.retrieval.QueryAnalysisRequest import QueryAnalysisRequest
-from models.entities.retrieval.QueryType import QueryType
-from models.entities.retrieval.AttributionStatsResponse import AttributionStatsResponse
 
 logger = logging.getLogger(__name__)
 
