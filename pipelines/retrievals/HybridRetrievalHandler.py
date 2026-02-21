@@ -18,13 +18,13 @@ logger = logging.getLogger(__name__)
 class HybridRetrievalHandler:
     """Unified handler for vector and graph-based retrieval operations."""
 
-    def __init__(self, milvus_client: MilvusClient, graph_handler, llms_client, embedding_client):
-        self.milvus_client = milvus_client
-        self.embedding_client = embedding_client
-        self.graph_handler = graph_handler
-        self.llms_client = llms_client
+    def __init__(self, vector_db: MilvusClient, graph_db, llm_client, embedder):
+        self.milvus_client = vector_db
+        self.embedding_client = embedder
+        self.graph_handler = graph_db
+        self.llm_client = llm_client
 
-    async def _execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
+    async def execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
         """Execute vector search."""
         try:
             if not self.milvus_client or not self.milvus_client.connect():
@@ -73,7 +73,7 @@ class HybridRetrievalHandler:
             print(f"❌ Search failed: {e}")
             return []
 
-    async def _execute_graph_search(self, query: str, top_k: int) -> List[Dict]:
+    async def execute_graph_search(self, query: str, top_k: int) -> List[Dict]:
         """Execute graph search using Cypher query with intelligent query parsing."""
         try:
             if not self.graph_handler:
@@ -272,7 +272,7 @@ class HybridRetrievalHandler:
         """Generate AI response using Llama based on search results from vector and graph searches."""
         try:
             # Use the routing engine's Llama model for response generation
-            if not self.llms_client:
+            if not self.llm_client:
                 logger.info("Llama not available for response generation")
                 return None
 
@@ -355,7 +355,7 @@ Instructions:
 Answer:"""
 
             # Generate response using Llama
-            ai_answer = self.llms_client.generate_content(
+            ai_answer = self.llm_client.generate_content(
                 prompt=prompt
             )
 
