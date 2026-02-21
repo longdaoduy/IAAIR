@@ -76,7 +76,8 @@ class RoutingDecisionEngine:
             logger.error(f"Error in few-shot routing decision: {e}")
             return None
 
-    def _load_few_shot_examples(self) -> list:
+    @staticmethod
+    def _load_few_shot_examples() -> list:
         """Load few-shot learning examples from JSON file."""
         # Get the path to the data directory relative to the current file
         current_dir = os.path.dirname(os.path.abspath(__file__))

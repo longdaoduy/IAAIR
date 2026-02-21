@@ -493,7 +493,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         response_generation_time = None
         if request.enable_ai_response and fused_results:
             response_start = datetime.now()
-            ai_response = await factory.retrieval_handler._generate_ai_response(request.query, fused_results, query_type)
+            ai_response = await factory.retrieval_handler.generate_ai_response(request.query, fused_results, query_type)
             response_generation_time = (datetime.now() - response_start).total_seconds()
 
         # Update routing performance tracking

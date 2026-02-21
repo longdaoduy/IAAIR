@@ -10,6 +10,9 @@ from models.entities.retrieval.QueryType import QueryType
 import logging
 import re
 from clients.vector.MilvusClient import MilvusClient
+from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
+from clients.huggingface.SciBERTClient import SciBERTClient
+from clients.huggingface.DeepseekClient import DeepseekClient
 from pymilvus import (Collection)
 
 logger = logging.getLogger(__name__)
@@ -18,7 +21,8 @@ logger = logging.getLogger(__name__)
 class HybridRetrievalHandler:
     """Unified handler for vector and graph-based retrieval operations."""
 
-    def __init__(self, vector_db: MilvusClient, graph_db, llm_client, embedder):
+    def __init__(self, vector_db: Optional[MilvusClient], graph_db: GraphQueryHandler, llm_client: Optional[DeepseekClient],
+                 embedder: SciBERTClient):
         self.milvus_client = vector_db
         self.embedding_client = embedder
         self.graph_handler = graph_db
@@ -263,7 +267,7 @@ class HybridRetrievalHandler:
             logger.error(f"Vector refinement error: {e}")
             return []
 
-    async def _generate_ai_response(
+    async def generate_ai_response(
             self,
             query: str,
             search_results: List,
