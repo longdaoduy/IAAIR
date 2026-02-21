@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime
 import json
 from models.schemas.nodes import Paper, Author, Venue, VenueType, Institution, Figure, Table
@@ -12,15 +12,15 @@ from clients.vector.MilvusClient import MilvusClient
 
 
 class IngestionHandler():
-    def __init__(self):
+    def __init__(self, scibert_client: Optional[SciBERTClient] = None, ):
         self.semantic_scholar_client = SemanticScholarClient()
         self.openalex_client = OpenAlexClient()
         self.clip_client = CLIPClient()
-        self.scibert_client = SciBERTClient()
+        self.scibert_client = scibert_client or SciBERTClient()
         self.milvus_client = MilvusClient()
         self.pdf_handler = PDFProcessingHandler(
-            self.clip_client, 
-            self.scibert_client, 
+            self.clip_client,
+            self.scibert_client,
             self.milvus_client
         )
 

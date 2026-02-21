@@ -66,7 +66,6 @@ app = FastAPI(
 )
 
 # Initialize handlers
-ingestion_handler = IngestionHandler()
 neo4j_handler = GraphNeo4jHandler()
 vector_handler = MilvusClient()
 sciBERT_client = SciBERTClient()
@@ -75,12 +74,14 @@ deepseek_client = None
 query_handler = GraphQueryHandler()
 
 # Global hybrid system components
+ingestion_handler = IngestionHandler(sciBERT_client)
 embedding_handler = EmbeddingSciBERTHandler(sciBERT_client)
 routing_engine = RoutingDecisionEngine()
 result_fusion = ResultFusion()
 scientific_reranker = ScientificReranker()
 attribution_tracker = AttributionTracker()
 retrieval_handler = HybridRetrievalHandler(vector_handler, query_handler, deepseek_client, sciBERT_client)
+
 
 # ===============================================================================
 # ROOT ENDPOINT
@@ -117,6 +118,7 @@ async def root():
         }
     }
 
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -130,6 +132,7 @@ async def health_check():
             "semantic_search": "available"
         }
     }
+
 
 # ===============================================================================
 # PAPER INGESTION ENDPOINTS
@@ -148,10 +151,10 @@ async def pull_papers(request: PaperRequest):
     5. Returns JSON file and processing summary
     """
     timestamp = datetime.now()
-    
+
     try:
         logger.info(f"Starting paper ingestion for {request.num_papers} papers")
-        
+
         # Step 1: Pull papers from OpenAlex
         logger.info("Step 1: Pulling papers from OpenAlex...")
         papers_data = ingestion_handler.pull_open_alex_paper(
@@ -160,37 +163,37 @@ async def pull_papers(request: PaperRequest):
             save_to_file=True,
             process_pdfs=request.process_pdfs
         )
-        
+
         if not papers_data:
             raise HTTPException(status_code=400, detail="Failed to fetch papers from OpenAlex")
-        
+
         # Step 2: Enrich with Semantic Scholar
         logger.info("Step 2: Enriching papers with Semantic Scholar...")
         enriched_papers = ingestion_handler.enrich_papers_with_semantic_scholar(
             papers_data=papers_data,
             save_to_file=True
         )
-        
+
         # Step 3: Upload to Neo4j (if requested)
         neo4j_success = True
         if request.include_neo4j:
             logger.info("Step 3: Uploading to Neo4j...")
             neo4j_success = await neo4j_handler.upload_papers_to_neo4j(enriched_papers)
-        
+
         # Step 4: Generate embeddings and upload to Zilliz (if requested)
         zilliz_success = True
         if request.include_zilliz:
             logger.info("Step 4: Processing embeddings and uploading to Zilliz...")
             embedding_success = await generate_and_upload_embeddings(enriched_papers, timestamp)
             zilliz_success = embedding_success
-        
+
         # Generate summary
         total_authors = sum(len(pd.get('authors', [])) for pd in enriched_papers)
         total_citations = sum(len(pd.get('citations', [])) for pd in enriched_papers)
         total_institutions = sum(len(pd.get('institutions', [])) for pd in enriched_papers)
         total_figures = sum(len(pd.get('figures', [])) for pd in enriched_papers)
         total_tables = sum(len(pd.get('tables', [])) for pd in enriched_papers)
-        
+
         summary = {
             "papers_fetched": len(enriched_papers),
             "authors_extracted": total_authors,
@@ -202,12 +205,12 @@ async def pull_papers(request: PaperRequest):
             "processing_time_seconds": (datetime.now() - timestamp).total_seconds(),
             "pdf_processing_enabled": request.process_pdfs
         }
-        
+
         # Create response filename
         json_filename = f"enriched_openalex_papers_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
-        
+
         logger.info(f"Paper ingestion completed successfully. Processed {len(enriched_papers)} papers")
-        
+
         return PaperResponse(
             success=True,
             message=f"Successfully processed {len(enriched_papers)} papers",
@@ -218,64 +221,67 @@ async def pull_papers(request: PaperRequest):
             timestamp=timestamp.isoformat(),
             summary=summary
         )
-        
+
     except Exception as e:
         logger.error(f"Error during paper ingestion: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
     """Download a generated JSON file."""
     file_path = os.path.join(os.getcwd(), filename)
-    
+
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
-    
+
     return FileResponse(
         file_path,
         media_type='application/json',
         filename=filename
     )
 
+
 async def generate_and_upload_embeddings(papers_data: List[Dict], timestamp: datetime) -> bool:
     """Generate embeddings for papers and upload to Zilliz."""
     try:
         # Create a temporary JSON file for the embedding handler
         temp_filename = f"temp_papers_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
-        
+
         # Save papers to temporary file
         ingestion_handler.save_papers_to_json(papers_data, temp_filename)
-        
+
         # Generate embeddings using the process_papers method
         output_filename = embedding_handler.process_papers(input_file=temp_filename)
-        
+
         if not output_filename or not os.path.exists(output_filename):
             logger.error("Failed to generate embeddings")
             return False
-        
+
         # Connect to Zilliz and upload embeddings
         if not vector_handler.connect():
             logger.error("Failed to connect to Zilliz")
             return False
-        
+
         # Upload embeddings using the generated embedding file with papers data for hybrid search
         upload_success = vector_handler.upload_embeddings(
             embedding_file=output_filename,
             papers_data=papers_data  # Pass papers data for sparse embeddings
         )
-        
+
         # Cleanup temporary files
         try:
             os.remove(temp_filename)
             os.remove(output_filename)  # Also remove the embedding file after upload
         except:
             pass  # Ignore cleanup errors
-        
+
         return upload_success
-        
+
     except Exception as e:
         logger.error(f"Error in embedding generation and upload: {e}")
         return False
+
 
 # ===============================================================================
 # SEMANTIC SEARCH ENDPOINTS
@@ -294,7 +300,7 @@ async def semantic_search(request: SearchRequest):
     5. Returns ranked results with similarity scores
     """
     start_time = datetime.now()
-    
+
     try:
         logger.info(f"Starting semantic search for query: '{request.query}'")
 
@@ -304,7 +310,7 @@ async def semantic_search(request: SearchRequest):
             top_k=request.top_k,
             use_hybrid=request.use_hybrid
         )
-        
+
         if not similar_papers:
             return SearchResponse(
                 success=True,
@@ -314,27 +320,27 @@ async def semantic_search(request: SearchRequest):
                 search_time_seconds=(datetime.now() - start_time).total_seconds(),
                 results=[]
             )
-        
+
         results = similar_papers
-        
+
         # Step 2: Enrich with detailed information from Neo4j (if requested)
         if request.include_details:
             logger.info(f"Enriching {len(similar_papers)} results with Neo4j data...")
-            
+
             paper_ids = [paper["paper_id"] for paper in similar_papers if paper.get("paper_id")]
-            
+
             if paper_ids:
                 detailed_papers = await neo4j_handler.get_papers_by_ids(paper_ids)
-                
+
                 # Create a lookup dict for detailed paper data
                 detailed_lookup = {paper["id"]: paper for paper in detailed_papers}
-                
+
                 # Merge Zilliz results with Neo4j details
                 enriched_results = []
                 for zilliz_result in similar_papers:
                     paper_id = zilliz_result.get("paper_id")
                     detailed_paper = detailed_lookup.get(paper_id, {})
-                    
+
                     # Combine data, prioritizing Neo4j details where available
                     enriched_result = {
                         "paper_id": paper_id,
@@ -351,13 +357,13 @@ async def semantic_search(request: SearchRequest):
                         "source": detailed_paper.get("source")
                     }
                     enriched_results.append(enriched_result)
-                
+
                 results = enriched_results
-        
+
         search_time = (datetime.now() - start_time).total_seconds()
-        
+
         logger.info(f"Semantic search completed. Found {len(results)} results in {search_time:.2f} seconds")
-        
+
         return SearchResponse(
             success=True,
             message=f"Found {len(results)} similar papers",
@@ -366,10 +372,11 @@ async def semantic_search(request: SearchRequest):
             search_time_seconds=search_time,
             results=results
         )
-        
+
     except Exception as e:
         logger.error(f"Error during semantic search: {e}")
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
 
 @app.post("/hybrid-search", response_model=HybridSearchResponse)
 async def hybrid_fusion_search(request: HybridSearchRequest):
@@ -385,13 +392,13 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
     6. AI-powered response generation using Gemini
     """
     start_time = datetime.now()
-    
+
     try:
         logger.info(f"Starting hybrid search for query: '{request.query}'")
-        
+
         # Step 1: Query classification and routing decision
         query_type, confidence = routing_engine.query_classifier.classify_query(request.query)
-        
+
         # Check if user specified a routing strategy explicitly
         if request.routing_strategy != RoutingStrategy.ADAPTIVE:
             # User provided specific routing strategy - use it
@@ -400,33 +407,35 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
         else:
             # Use AI routing decision for adaptive strategy
             routing_result = routing_engine.decide_routing(request.query, request)
-            
+
             # Handle routing result (could be tuple with 3 values)
             if isinstance(routing_result, tuple) and len(routing_result) == 3:
                 routing_strategy, _, _ = routing_result
             else:
                 routing_strategy = routing_result
-        
-        logger.info(f"Query classified as {query_type} (confidence: {confidence:.2f}), using {routing_strategy} routing")
-        
+
+        logger.info(
+            f"Query classified as {query_type} (confidence: {confidence:.2f}), using {routing_strategy} routing")
+
         # Step 2: Execute search based on routing strategy
         vector_results = []
         graph_results = []
-        
+
         fusion_start = datetime.now()
-        
+
         if routing_strategy == RoutingStrategy.VECTOR_FIRST:
             # Vector search first, then graph refinement
             vector_results = await retrieval_handler._execute_vector_search(request.query, request.top_k * 2)
             if vector_results:
                 # Use top vector results to inform graph search
                 paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
-                graph_results = await retrieval_handler._execute_graph_refinement(paper_ids, request.query, request.top_k)
-            
+                graph_results = await retrieval_handler._execute_graph_refinement(paper_ids, request.query,
+                                                                                  request.top_k)
+
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
             # Graph search first, then vector similarity
             graph_results = await retrieval_handler._execute_graph_search(request.query, request.top_k * 2)
-            
+
             # Check if this is a specific paper ID query BEFORE checking if graph_results exist
             if retrieval_handler._is_paper_id_query(request.query):
                 # For paper ID queries, return only the graph results, no vector search
@@ -434,7 +443,8 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
                 vector_results = []
                 if graph_results:
                     graph_results = graph_results[:1]  # Limit to single exact match
-                    logger.info(f"GRAPH_FIRST paper ID: graph_results count: {len(graph_results)}, vector_results count: {len(vector_results)}")
+                    logger.info(
+                        f"GRAPH_FIRST paper ID: graph_results count: {len(graph_results)}, vector_results count: {len(vector_results)}")
                 else:
                     logger.warning("Graph search returned no results for paper ID query")
             elif graph_results and not retrieval_handler._is_paper_id_query(request.query):
@@ -443,62 +453,63 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
                 vector_results = await retrieval_handler._execute_vector_refinement(paper_ids, request.query)
             else:
                 vector_results = []
-            
+
         elif routing_strategy == RoutingStrategy.PARALLEL:
             # Execute both searches in parallel
             vector_task = retrieval_handler._execute_vector_search(request.query, request.top_k)
             graph_task = retrieval_handler._execute_graph_search(request.query, request.top_k)
-            
+
             results = await asyncio.gather(vector_task, graph_task)
             # Safely unpack results with fallbacks
             vector_results = results[0] if results[0] is not None else []
             graph_results = results[1] if results[1] is not None else []
-        
+
         # Step 3: Result fusion
-        logger.info(f"Before fusion - vector_results: {len(vector_results or [])}, graph_results: {len(graph_results or [])}")
+        logger.info(
+            f"Before fusion - vector_results: {len(vector_results or [])}, graph_results: {len(graph_results or [])}")
         logger.info(graph_results)
         fused_results = result_fusion.fuse_results(
             vector_results or [],
             graph_results or [],
             request.fusion_weights
         )
-        
+
         fusion_time = (datetime.now() - fusion_start).total_seconds()
-        
+
         # Limit to requested number of results
         fused_results = fused_results[:request.top_k]
-        
+
         # Step 4: Reranking (if enabled)
         reranking_time = None
         if request.enable_reranking and routing_strategy == RoutingStrategy.PARALLEL:
             reranking_start = datetime.now()
             fused_results = await scientific_reranker.rerank_results(fused_results, request.query)
             reranking_time = (datetime.now() - reranking_start).total_seconds()
-        
+
         # # Step 5: Attribution tracking (if enabled)
         # if request.enable_attribution and fused_results:
         #     fused_results = attribution_tracker.track_attributions(fused_results, request.query)
         #
         # Step 6: Calculate statistics
         total_time = (datetime.now() - start_time).total_seconds()
-        
+
         fusion_stats = {
             'vector_results_count': len(vector_results or []),
             'graph_results_count': len(graph_results or []),
             'fusion_method': routing_strategy.value,
             'fusion_weights': request.fusion_weights or result_fusion.default_weights
         }
-        
+
         attribution_stats = {
             'total_attributions': sum(len(r.attributions) for r in fused_results),
             'high_confidence_attributions': sum(
-                1 for r in fused_results 
-                for a in r.attributions 
+                1 for r in fused_results
+                for a in r.attributions
                 if a.confidence > attribution_tracker.confidence_threshold
             ),
             'attribution_enabled': request.enable_attribution
         }
-        
+
         # Step 7: Generate AI response using Gemini
         ai_response = None
         response_generation_time = None
@@ -506,13 +517,13 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
             response_start = datetime.now()
             ai_response = await retrieval_handler._generate_ai_response(request.query, fused_results, query_type)
             response_generation_time = (datetime.now() - response_start).total_seconds()
-        
+
         # Update routing performance tracking
         avg_relevance = sum(r.relevance_score for r in fused_results) / len(fused_results) if fused_results else 0
         routing_engine.update_performance(routing_strategy, query_type, total_time, avg_relevance)
-        
+
         logger.info(f"Hybrid search completed. Found {len(fused_results)} results in {total_time:.2f}s")
-        
+
         return HybridSearchResponse(
             success=True,
             message=f"Hybrid search completed using {routing_strategy.value} strategy",
@@ -529,10 +540,11 @@ async def hybrid_fusion_search(request: HybridSearchRequest):
             fusion_stats=fusion_stats,
             attribution_stats=attribution_stats
         )
-        
+
     except Exception as e:
         logger.error(f"Error during hybrid search: {e}")
         raise HTTPException(status_code=500, detail=f"Hybrid search failed: {str(e)}")
+
 
 # ===============================================================================
 # ANALYTICS AND MONITORING ENDPOINTS
@@ -544,34 +556,34 @@ async def get_routing_performance():
     try:
         performance_metrics = {}
         recommendations = []
-        
+
         # Calculate performance metrics for each routing strategy
         for key, metrics in routing_engine.performance_history.items():
             if not metrics['latencies'] or not metrics['relevance_scores']:
                 continue
-            
+
             avg_latency = sum(metrics['latencies']) / len(metrics['latencies'])
             avg_relevance = sum(metrics['relevance_scores']) / len(metrics['relevance_scores'])
-            
+
             performance_metrics[key] = {
                 'average_latency_seconds': round(avg_latency, 3),
                 'average_relevance_score': round(avg_relevance, 3),
                 'query_count': len(metrics['latencies']),
                 'efficiency_score': round(avg_relevance / max(avg_latency, 0.1), 2)
             }
-        
+
         # Generate recommendations
         if performance_metrics:
-            best_strategy = max(performance_metrics.items(), 
-                              key=lambda x: x[1]['efficiency_score'])
+            best_strategy = max(performance_metrics.items(),
+                                key=lambda x: x[1]['efficiency_score'])
             recommendations.append(
                 f"Best performing strategy: {best_strategy[0]} "
                 f"(efficiency score: {best_strategy[1]['efficiency_score']})"
             )
-            
+
             # Find strategies with high latency
             high_latency_strategies = [
-                k for k, v in performance_metrics.items() 
+                k for k, v in performance_metrics.items()
                 if v['average_latency_seconds'] > 2.0
             ]
             if high_latency_strategies:
@@ -580,17 +592,18 @@ async def get_routing_performance():
                 )
         else:
             recommendations.append("Insufficient performance data. Run more hybrid searches to generate metrics.")
-        
+
         return RoutingPerformanceResponse(
             success=True,
             timestamp=datetime.now().isoformat(),
             performance_metrics=performance_metrics,
             recommendations=recommendations
         )
-        
+
     except Exception as e:
         logger.error(f"Error retrieving routing performance: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve performance metrics: {str(e)}")
+
 
 @app.post("/analytics/query-classification", response_model=QueryAnalysisResponse)
 async def analyze_query_classification(request: QueryAnalysisRequest):
@@ -598,25 +611,27 @@ async def analyze_query_classification(request: QueryAnalysisRequest):
     try:
         # Classify the query
         query_type, confidence = routing_engine.query_classifier.classify_query(request.query)
-        
+
         # Get routing suggestion
         mock_hybrid_request = HybridSearchRequest(
             query=request.query,
             routing_strategy=RoutingStrategy.ADAPTIVE
         )
         suggested_routing = routing_engine.decide_routing(request.query, mock_hybrid_request)
-        
+
         # Detailed analysis
         query_lower = request.query.lower()
         analysis_details = {
             'query_length': len(request.query.split()),
             'has_semantic_keywords': any(kw in query_lower for kw in routing_engine.query_classifier.semantic_keywords),
-            'has_structural_keywords': any(kw in query_lower for kw in routing_engine.query_classifier.structural_keywords),
+            'has_structural_keywords': any(
+                kw in query_lower for kw in routing_engine.query_classifier.structural_keywords),
             'has_factual_keywords': any(kw in query_lower for kw in routing_engine.query_classifier.factual_keywords),
-            'complexity_estimate': 'high' if len(request.query.split()) > 10 else 'medium' if len(request.query.split()) > 5 else 'low',
+            'complexity_estimate': 'high' if len(request.query.split()) > 10 else 'medium' if len(
+                request.query.split()) > 5 else 'low',
             'routing_reasoning': _get_routing_reasoning(query_type, confidence)
         }
-        
+
         return QueryAnalysisResponse(
             success=True,
             query=request.query,
@@ -625,10 +640,11 @@ async def analyze_query_classification(request: QueryAnalysisRequest):
             suggested_routing=suggested_routing,
             analysis_details=analysis_details
         )
-        
+
     except Exception as e:
         logger.error(f"Error analyzing query: {e}")
         raise HTTPException(status_code=500, detail=f"Query analysis failed: {str(e)}")
+
 
 @app.get("/analytics/attribution-stats", response_model=AttributionStatsResponse)
 async def get_attribution_statistics():
@@ -636,7 +652,7 @@ async def get_attribution_statistics():
     try:
         # In a real implementation, these would come from a database
         # For now, return mock statistics
-        
+
         return AttributionStatsResponse(
             success=True,
             timestamp=datetime.now().isoformat(),
@@ -650,10 +666,11 @@ async def get_attribution_statistics():
             },
             average_attributions_per_result=2.3
         )
-        
+
     except Exception as e:
         logger.error(f"Error retrieving attribution stats: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve attribution statistics: {str(e)}")
+
 
 def _get_routing_reasoning(query_type: QueryType, confidence: float) -> str:
     """Generate human-readable routing reasoning."""
@@ -668,6 +685,7 @@ def _get_routing_reasoning(query_type: QueryType, confidence: float) -> str:
     else:
         return f"Uncertain classification (confidence: {confidence:.2f}) - using parallel search for comprehensive coverage"
 
+
 # ===============================================================================
 # GRAPH QUERY ENDPOINTS
 # ===============================================================================
@@ -676,7 +694,7 @@ def _get_routing_reasoning(query_type: QueryType, confidence: float) -> str:
 async def execute_custom_query(request: GraphQueryRequest):
     """Execute a custom Cypher query."""
     start_time = datetime.now()
-    
+
     try:
 
         # Add LIMIT clause if not present and limit is specified
@@ -684,11 +702,11 @@ async def execute_custom_query(request: GraphQueryRequest):
         if request.limit and not query.upper().endswith('LIMIT'):
             if not any(keyword in query.upper() for keyword in ['LIMIT', 'SKIP']):
                 query += f" LIMIT {request.limit}"
-        
+
         results = query_handler.execute_query(query, request.parameters)
-        
+
         query_time = (datetime.now() - start_time).total_seconds()
-        
+
         return GraphQueryResponse(
             success=True,
             message=f"Query executed successfully, found {len(results)} results",
@@ -700,7 +718,7 @@ async def execute_custom_query(request: GraphQueryRequest):
                 "parameters": request.parameters
             }
         )
-        
+
     except Exception as e:
         logger.error(f"Query execution error: {e}")
         raise HTTPException(status_code=400, detail=f"Query execution failed: {str(e)}")
