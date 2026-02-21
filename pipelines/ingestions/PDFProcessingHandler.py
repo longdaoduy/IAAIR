@@ -247,6 +247,7 @@ class PDFProcessingHandler:
                         description_embedding = self.scibert_client.generate_embedding(block_text)
 
                     headers, rows = self._parse_table_structure(block_text)
+                    image_path, image_embedding = self._capture_table_image(page, block["bbox"], table_id)
 
                     table = Table(
                         id=table_id,
@@ -256,7 +257,8 @@ class PDFProcessingHandler:
                         page_number=page_num,
                         headers=headers,
                         rows=rows,
-                        description_embedding=description_embedding
+                        description_embedding=description_embedding,
+                        image_embedding=image_embedding
                     )
                     tables.append(table)
 
@@ -561,3 +563,87 @@ class PDFProcessingHandler:
             pass
 
         return figures, tables
+
+    def _capture_table_image(self, page, bbox, table_id: str) -> Tuple[Optional[str], Optional[List[float]]]:
+        """
+        Capture table region as image and generate CLIP embedding.
+
+        Args:
+            page: PyMuPDF page object
+            bbox: Bounding box of the table region
+            table_id: Table ID for filename
+
+        Returns:
+            Tuple of (image_path, image_embedding) or (None, None) if failed
+        """
+        try:
+            # Create a rect from bbox with some padding
+            table_rect = fitz.Rect(bbox)
+
+            # Add padding around the table (10 points on each side)
+            padding = 10
+            table_rect.x0 = max(0, table_rect.x0 - padding)
+            table_rect.y0 = max(0, table_rect.y0 - padding)
+            table_rect.x1 = min(page.rect.width, table_rect.x1 + padding)
+            table_rect.y1 = min(page.rect.height, table_rect.y1 + padding)
+
+            # Create pixmap of the table region
+            mat = fitz.Matrix(2.0, 2.0)  # 2x zoom for better quality
+            pix = page.get_pixmap(matrix=mat, clip=table_rect)
+
+            # Handle colorspace issues similar to figure extraction
+            if pix.colorspace is None:
+                self.logger.warning(f"Skipping table with None colorspace: {table_id}")
+                pix = None
+                return None, None
+
+            # Convert to RGB colorspace for consistent processing
+            if pix.n - pix.alpha > 4:  # CMYK or other multi-channel
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+            elif pix.n - pix.alpha == 1:  # Grayscale
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+            elif pix.alpha:  # Has alpha channel
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+
+            # Verify we have a valid pixmap
+            if pix.colorspace is None:
+                self.logger.warning(f"Skipping table with problematic colorspace: {table_id}")
+                pix = None
+                return None, None
+
+            # Convert to PIL Image
+            try:
+                img_data = pix.tobytes("png")
+                pil_image = Image.open(io.BytesIO(img_data))
+            except Exception as conv_error:
+                self.logger.warning(f"Failed to convert table pixmap to PIL Image: {conv_error}")
+                pix = None
+                return None, None
+
+            # Save table image
+            image_path = os.path.join(self.tables_dir, f"{table_id}_image.png")
+            pil_image.save(image_path)
+
+            # Generate CLIP embedding for the table image
+            image_embedding = None
+            try:
+                image_embedding = self.clip_client.generate_image_embedding(pil_image)
+            except Exception as embed_error:
+                self.logger.warning(f"Failed to generate embedding for table image {table_id}: {embed_error}")
+
+            # Clean up pixmap
+            if pix:
+                pix = None
+
+            self.logger.info(f"Captured table image for {table_id}: {image_path}")
+            return image_path, image_embedding
+
+        except Exception as e:
+            self.logger.error(f"Error capturing table image for {table_id}: {e}")
+            # Ensure pixmap cleanup even in error cases
+            try:
+                if 'pix' in locals() and pix:
+                    pix = None
+            except:
+                pass
+            return None, None
