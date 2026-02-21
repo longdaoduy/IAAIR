@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 class RoutingDecisionEngine:
     """Decide optimal routing strategy based on query and system state using Few-Shot Learning with Llama AI."""
 
-    def __init__(self):
+    def __init__(self, llm_client: Optional[DeepseekClient] = None):
         self.query_classifier = QueryClassifier()  # Keep as fallback
-        self.deepseek_client = None #DeepseekClient()  # Keep as fallback
+        self.ai_agent = llm_client  # DeepseekClient()  # Keep as fallback
         self.performance_history = {}  # Track routing performance
 
         self.few_shot_examples = self._load_few_shot_examples()
@@ -50,8 +50,8 @@ class RoutingDecisionEngine:
         """Use few-shot learning with Llama to make intelligent routing decisions."""
         try:
             # Check if Llama is available
-            if not self.deepseek_client:
-                logger.warning("Llama model not available for few-shot routing")
+            if not self.ai_agent:
+                logger.warning("Model not available for few-shot routing")
                 return None
 
             # Get performance context
@@ -61,7 +61,7 @@ class RoutingDecisionEngine:
             prompt = self._build_few_shot_prompt(query, performance_context)
 
             # Use the Llama API to generate content
-            response_text = self.deepseek_client.generate_content(
+            response_text = self.ai_agent.generate_content(
                 prompt=prompt
             )
 
@@ -190,7 +190,6 @@ Guidelines:
         except Exception as e:
             logger.error(f"Error parsing few-shot response: {e}")
             return None
-
 
     def _get_performance_context(self) -> str:
         """Get performance history context for Llama."""
