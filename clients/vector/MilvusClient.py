@@ -102,7 +102,6 @@ class MilvusClient:
             FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=8000),
             FieldSchema(name="description_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),  # SciBERT dimension
             FieldSchema(name="image_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),  # CLIP dimension
-            FieldSchema(name="sparse_description_embedding", dtype=DataType.SPARSE_FLOAT_VECTOR)
         ]
 
         schema = CollectionSchema(
@@ -123,7 +122,7 @@ class MilvusClient:
             FieldSchema(name="paper_id", dtype=DataType.VARCHAR, max_length=100),
             FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=8000),
             FieldSchema(name="description_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),  # SciBERT dimension
-            FieldSchema(name="sparse_description_embedding", dtype=DataType.SPARSE_FLOAT_VECTOR)
+            FieldSchema(name="image_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),  # CLIP dimension
         ]
 
         schema = CollectionSchema(
@@ -233,8 +232,7 @@ class MilvusClient:
                 schema = figures_collection.schema
                 field_names = [field.name for field in schema.fields]
 
-                required_fields = ['id', 'paper_id', 'description', 'description_embedding', 'image_embedding',
-                                   'sparse_description_embedding']
+                required_fields = ['id', 'paper_id', 'description', 'description_embedding', 'image_embedding']
                 has_correct_schema = all(field in field_names for field in required_fields)
 
                 if has_correct_schema:
@@ -295,12 +293,6 @@ class MilvusClient:
                 "params": {"drop_ratio_build": 0.2}
             }
 
-            print(f"🔍 Creating sparse description embedding index...")
-            figures_collection.create_index(
-                field_name="sparse_description_embedding",
-                index_params=sparse_index_params
-            )
-
             # Load collection for immediate use
             figures_collection.load()
 
@@ -331,8 +323,7 @@ class MilvusClient:
                 schema = tables_collection.schema
                 field_names = [field.name for field in schema.fields]
 
-                required_fields = ['id', 'paper_id', 'description', 'description_embedding',
-                                   'sparse_description_embedding']
+                required_fields = ['id', 'paper_id', 'description', 'description_embedding', 'image_embedding']
                 has_correct_schema = all(field in field_names for field in required_fields)
 
                 if has_correct_schema:
@@ -378,12 +369,6 @@ class MilvusClient:
                 "index_type": "SPARSE_INVERTED_INDEX",
                 "params": {"drop_ratio_build": 0.2}
             }
-
-            print(f"🔍 Creating sparse description embedding index...")
-            tables_collection.create_index(
-                field_name="sparse_description_embedding",
-                index_params=sparse_index_params
-            )
 
             # Load collection for immediate use
             tables_collection.load()
@@ -660,7 +645,7 @@ class MilvusClient:
                 batch = figures_data[i:i + batch_size]
 
                 ids, paper_ids, descriptions = [], [], []
-                description_embeddings, image_embeddings, sparse_embeddings = [], [], []
+                description_embeddings, image_embeddings = [], [], []
 
                 for figure in batch:
                     ids.append(figure['id'])
@@ -671,15 +656,9 @@ class MilvusClient:
                     description_embeddings.append(figure.get('description_embedding', [0.0] * 768))
                     image_embeddings.append(figure.get('image_embedding', [0.0] * 768))
 
-                    # Sparse embedding
-                    desc_text = figure.get('description', '')
-                    if desc_text and self.is_tfidf_fitted:
-                        sparse_embeddings.append(self.generate_sparse_embedding(desc_text))
-                    else:
-                        sparse_embeddings.append({0: 0.001})  # Minimal sparse vector
 
                 batches.append(
-                    [ids, paper_ids, descriptions, description_embeddings, image_embeddings, sparse_embeddings])
+                    [ids, paper_ids, descriptions, description_embeddings, image_embeddings])
 
             # Upload batches
             print(f"📤 Uploading {len(figures_data)} figures in {len(batches)} batches...")
@@ -754,7 +733,7 @@ class MilvusClient:
                 batch = tables_data[i:i + batch_size]
 
                 ids, paper_ids, descriptions = [], [], []
-                description_embeddings, sparse_embeddings = [], []
+                description_embeddings, image_embeddings = [], [], []
 
                 for table in batch:
                     ids.append(table['id'])
@@ -764,15 +743,10 @@ class MilvusClient:
                     # Dense embedding
                     description_embeddings.append(table.get('description_embedding', [0.0] * 768))
 
-                    # Sparse embedding (use combined text for richer representation)
-                    desc_text = table.get('description', '')
+                    image_embeddings.append(table.get('image_embedding', [0.0] * 768))
 
-                    if desc_text and self.is_tfidf_fitted:
-                        sparse_embeddings.append(self.generate_sparse_embedding(desc_text))
-                    else:
-                        sparse_embeddings.append({0: 0.001})  # Minimal sparse vector
-
-                batches.append([ids, paper_ids, descriptions, description_embeddings, sparse_embeddings])
+                batches.append(
+                    [ids, paper_ids, descriptions, description_embeddings, image_embeddings])
 
             # Upload batches
             print(f"📤 Uploading {len(tables_data)} tables in {len(batches)} batches...")

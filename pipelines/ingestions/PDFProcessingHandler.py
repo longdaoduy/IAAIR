@@ -475,12 +475,6 @@ class PDFProcessingHandler:
             for table in tables:
                 # Only upload tables that have valid description embeddings
                 if table.description_embedding is not None:
-                    # Generate sparse embedding for combined description and table text
-                    sparse_description_embedding = {0: 0.001}  # Default minimal sparse vector
-                    # combined_text = f"{table.description or ''} {table.table_text or ''}".strip()
-                    if table.description and self.milvus_client.is_tfidf_fitted:
-                        sparse_description_embedding = self.milvus_client.generate_sparse_embedding(table.description)
-
                     # Ensure embedding is a valid list, not None
                     description_embedding = table.description_embedding if table.description_embedding is not None else [0.0] * 768
 
@@ -489,7 +483,7 @@ class PDFProcessingHandler:
                         'paper_id': table.paper_id,
                         'description': table.description or "",
                         'description_embedding': description_embedding,
-                        'sparse_description_embedding': sparse_description_embedding
+                        'image_embedding': table.image_embedding,
                     }
                     tables_data.append(table_data)
 
