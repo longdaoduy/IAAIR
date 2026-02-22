@@ -29,6 +29,18 @@ from models.entities.retrieval.HybridSearchRequest import HybridSearchRequest
 from models.entities.retrieval.GraphQueryRequest import GraphQueryRequest
 from models.entities.retrieval.GraphQueryResponse import GraphQueryResponse
 from models.entities.retrieval.SearchRequest import SearchRequest
+
+# Import evaluation components
+from pipelines.evaluation.ComprehensiveEvaluationSuite import ComprehensiveEvaluationSuite
+from pipelines.evaluation.RetrievalEvaluator import RetrievalEvaluator, ScientificBenchmarkLoader
+from pipelines.evaluation.AttributionFidelityEvaluator import AttributionFidelityEvaluator
+from pipelines.evaluation.SciFractVerificationPipeline import SciFractVerificationPipeline
+from pipelines.evaluation.PerformanceRegressionTester import PerformanceRegressionTester
+from pipelines.evaluation.SciMMIRBenchmarkIntegration import (
+    run_scimmir_benchmark_suite,
+    SciMMIRBenchmarkResult,
+    SciMMIRResultAnalyzer
+)
 from models.entities.retrieval.SearchResponse import SearchResponse
 from models.entities.retrieval.HybridSearchResponse import HybridSearchResponse
 from models.entities.retrieval.RoutingStrategy import RoutingStrategy
@@ -87,6 +99,14 @@ async def root():
             },
             "graph_queries": {
                 "/graph/query": "POST - Execute custom Cypher queries"
+            },
+            "evaluation": {
+                "/evaluation/comprehensive": "POST - Run comprehensive evaluation suite",
+                "/evaluation/retrieval-quality": "POST - Evaluate retrieval quality with nDCG@k",
+                "/evaluation/attribution-fidelity": "POST - Evaluate attribution accuracy",
+                "/evaluation/verification": "POST - Run SciFact claim verification",
+                "/evaluation/regression-test": "POST - Run performance regression testing",
+                "/evaluation/scimmir-benchmark": "POST - Run SciMMIR multi-modal benchmark evaluation"
             },
             "system": {
                 "/health": "GET - Health check endpoint",
@@ -559,6 +579,327 @@ async def execute_custom_query(request: GraphQueryRequest, factory: ServiceFacto
     except Exception as e:
         logger.error(f"Query execution error: {e}")
         raise HTTPException(status_code=400, detail=f"Query execution failed: {str(e)}")
+
+
+# ===============================================================================
+# EVALUATION ENDPOINTS
+# ===============================================================================
+
+@app.post("/evaluation/comprehensive")
+async def run_comprehensive_evaluation(version: str = "current", factory: ServiceFactory = Depends(get_services)):
+    """Run comprehensive evaluation across all dimensions."""
+    try:
+        logger.info(f"Starting comprehensive evaluation for version {version}")
+        
+        # Initialize evaluation suite
+        eval_suite = ComprehensiveEvaluationSuite(factory)
+        
+        # Run full evaluation
+        results = eval_suite.run_full_evaluation(version)
+        
+        # Generate report
+        report = eval_suite.generate_evaluation_report(results)
+        
+        return {
+            "success": True,
+            "version": version,
+            "timestamp": datetime.now().isoformat(),
+            "results": results,
+            "report": report,
+            "overall_score": results.get('overall_score', 0.0)
+        }
+        
+    except Exception as e:
+        logger.error(f"Comprehensive evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
+
+@app.post("/evaluation/retrieval-quality")
+async def evaluate_retrieval_quality(factory: ServiceFactory = Depends(get_services)):
+    """Evaluate retrieval quality using nDCG@k and other metrics."""
+    try:
+        logger.info("Starting retrieval quality evaluation")
+        
+        # Initialize components
+        evaluator = RetrievalEvaluator()
+        benchmark_loader = ScientificBenchmarkLoader()
+        benchmarks = benchmark_loader.load_default_benchmarks()
+        
+        # Define retrieval function
+        def retrieval_function(query_text: str):
+            return factory.retrieval_handler.search_similar_papers(
+                query_text=query_text,
+                top_k=20,
+                use_hybrid=True
+            )
+        
+        # Run evaluation
+        results = evaluator.evaluate_benchmark_suite(benchmarks, retrieval_function)
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "metrics": {
+                "avg_ndcg_at_10": results.avg_ndcg_at_10,
+                "avg_ndcg_at_5": results.avg_ndcg_at_5,
+                "avg_mrr": results.avg_mrr,
+                "avg_precision_at_10": results.avg_precision_at_10,
+                "avg_recall_at_10": results.avg_recall_at_10
+            },
+            "by_query_type": results.by_query_type,
+            "by_domain": results.by_domain,
+            "total_queries": results.total_queries
+        }
+        
+    except Exception as e:
+        logger.error(f"Retrieval evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Retrieval evaluation failed: {str(e)}")
+
+
+@app.post("/evaluation/attribution-fidelity")
+async def evaluate_attribution_fidelity(factory: ServiceFactory = Depends(get_services)):
+    """Evaluate attribution fidelity and exact span matching."""
+    try:
+        logger.info("Starting attribution fidelity evaluation")
+        
+        # Initialize components
+        evaluator = AttributionFidelityEvaluator()
+        from pipelines.evaluation.AttributionFidelityEvaluator import AttributionBenchmarkLoader
+        benchmark_loader = AttributionBenchmarkLoader()
+        benchmarks = benchmark_loader.load_default_attribution_benchmarks()
+        
+        # Generate search results with attributions
+        search_results = []
+        for benchmark in benchmarks:
+            results = factory.retrieval_handler.search_similar_papers(
+                query_text=benchmark.query_text,
+                top_k=10,
+                use_hybrid=True
+            )
+            
+            # Add attribution tracking
+            if results:
+                results = factory.attribution_tracker.track_attributions(
+                    results, benchmark.query_text
+                )
+            
+            search_results.extend(results)
+        
+        # Evaluate attribution quality
+        metrics = evaluator.evaluate_attribution_quality(search_results, benchmarks)
+        
+        # Generate report
+        report = evaluator.create_attribution_report(metrics)
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "metrics": {
+                "exact_span_match_rate": metrics.exact_span_match_rate,
+                "partial_span_match_rate": metrics.partial_span_match_rate,
+                "citation_coverage": metrics.citation_coverage,
+                "wrong_source_rate": metrics.wrong_source_rate,
+                "attribution_precision": metrics.attribution_precision,
+                "attribution_recall": metrics.attribution_recall,
+                "average_confidence": metrics.average_confidence,
+                "high_confidence_rate": metrics.high_confidence_rate
+            },
+            "report": report
+        }
+        
+    except Exception as e:
+        logger.error(f"Attribution evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Attribution evaluation failed: {str(e)}")
+
+
+@app.post("/evaluation/verification")
+async def evaluate_verification(factory: ServiceFactory = Depends(get_services)):
+    """Run SciFact-style claim verification evaluation."""
+    try:
+        logger.info("Starting scientific claim verification evaluation")
+        
+        # Initialize verification pipeline
+        verification_pipeline = SciFractVerificationPipeline(
+            retrieval_client=factory.retrieval_handler,
+            llm_client=factory.deepseek_client
+        )
+        
+        from pipelines.evaluation.SciFractVerificationPipeline import (
+            create_verification_benchmarks,
+            VerificationEvaluator
+        )
+        
+        # Load benchmarks
+        benchmarks = create_verification_benchmarks()
+        
+        # Run verification on each benchmark
+        verification_results = []
+        for benchmark in benchmarks:
+            try:
+                result = verification_pipeline.verify_claim(benchmark.claim)
+                verification_results.append(result)
+            except Exception as e:
+                logger.warning(f"Error verifying claim {benchmark.claim.claim_id}: {e}")
+                continue
+        
+        # Evaluate verification accuracy
+        evaluator = VerificationEvaluator()
+        metrics = evaluator.evaluate_verification(verification_results, benchmarks)
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "metrics": metrics,
+            "verified_claims": len(verification_results),
+            "benchmark_claims": len(benchmarks),
+            "verification_results": [{
+                "claim_id": result.claim.claim_id,
+                "claim_text": result.claim.claim_text,
+                "predicted_label": result.final_label.value,
+                "confidence": result.confidence,
+                "evidence_count": len(result.evidence_pieces),
+                "reasoning": result.reasoning
+            } for result in verification_results]
+        }
+        
+    except Exception as e:
+        logger.error(f"Verification evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Verification evaluation failed: {str(e)}")
+
+
+@app.post("/evaluation/regression-test")
+async def run_regression_test(version: str = "current", baseline: str = "latest", factory: ServiceFactory = Depends(get_services)):
+    """Run performance regression testing against baseline."""
+    try:
+        logger.info(f"Running regression test for version {version} against baseline {baseline}")
+        
+        # Initialize regression tester
+        regression_tester = PerformanceRegressionTester()
+        
+        # Load benchmarks for performance testing
+        benchmark_loader = ScientificBenchmarkLoader()
+        benchmarks = benchmark_loader.load_default_benchmarks()
+        
+        try:
+            # Try to run regression test against existing baseline
+            result = regression_tester.run_regression_test(factory, benchmarks, baseline)
+            
+            # Generate report
+            report = regression_tester.generate_regression_report(result)
+            
+            return {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                "test_passed": result.passed,
+                "regressions": result.regressions,
+                "improvements": result.improvements,
+                "current_metrics": result.current_metrics,
+                "baseline_metrics": result.baseline_metrics,
+                "report": report
+            }
+            
+        except ValueError:
+            # No baseline exists, create one
+            logger.info(f"No baseline found for {baseline}, creating new baseline")
+            baseline_result = regression_tester.capture_performance_baseline(
+                factory, benchmarks, version
+            )
+            
+            return {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                "baseline_created": True,
+                "baseline_version": version,
+                "baseline_metrics": baseline_result.__dict__,
+                "message": f"Created new performance baseline for version {version}"
+            }
+            
+    except Exception as e:
+        logger.error(f"Regression test error: {e}")
+        raise HTTPException(status_code=500, detail=f"Regression test failed: {str(e)}")
+
+
+@app.post("/evaluation/scimmir-benchmark")
+async def run_scimmir_benchmark(
+    limit_samples: int = 500,
+    generate_report: bool = True,
+    use_streaming: bool = False,
+    use_mock: bool = False
+):
+    """Run SciMMIR multi-modal benchmark evaluation.
+    
+    Args:
+        limit_samples: Number of samples to evaluate (default: 50 for quick testing)
+        generate_report: Generate markdown report
+        use_streaming: Use streaming mode to avoid downloading entire dataset
+        use_mock: Use mock data for instant testing (no download required)
+    """
+    try:
+        mode = "mock data" if use_mock else ("streaming" if use_streaming else "cached")
+        logger.info(f"Starting SciMMIR benchmark with {limit_samples} samples using {mode}")
+        
+        # Run SciMMIR benchmark with new options
+        result = run_scimmir_benchmark_suite(
+            limit_samples=limit_samples,
+            cache_dir="./data/scimmir_cache",
+            report_path="./data/scimmir_benchmark_report.md" if generate_report else None,
+            use_streaming=use_streaming,
+            use_mock=use_mock
+        )
+        
+        # Generate comparison analysis
+        analyzer = SciMMIRResultAnalyzer()
+        comparison = analyzer.compare_with_baselines(result)
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "model_name": result.model_name,
+            "total_samples": result.total_samples,
+            "performance": {
+                "text_to_image": {
+                    "mrr": round(result.text2img_mrr, 4),
+                    "mrr_percentage": round(result.text2img_mrr * 100, 2),
+                    "recall_at_1": round(result.text2img_recall_at_1, 4),
+                    "recall_at_5": round(result.text2img_recall_at_5, 4),
+                    "recall_at_10": round(result.text2img_recall_at_10, 4)
+                },
+                "image_to_text": {
+                    "mrr": round(result.img2text_mrr, 4),
+                    "mrr_percentage": round(result.img2text_mrr * 100, 2),
+                    "recall_at_1": round(result.img2text_recall_at_1, 4),
+                    "recall_at_5": round(result.img2text_recall_at_5, 4),
+                    "recall_at_10": round(result.img2text_recall_at_10, 4)
+                }
+            },
+            "baseline_comparison": {
+                "your_rank": comparison['performance_ranking']['your_rank'],
+                "total_models": comparison['performance_ranking']['total_models'],
+                "percentile": round(comparison['performance_ranking']['percentile'], 1),
+                "improvements": comparison['improvement_analysis']
+            },
+            "category_breakdown": {
+                category: {
+                    "sample_count": metrics["sample_count"],
+                    "text2img_mrr": round(metrics["text2img_mrr"], 4),
+                    "img2text_mrr": round(metrics["img2text_mrr"], 4)
+                }
+                for category, metrics in result.by_category.items()
+            },
+            "domain_breakdown": {
+                domain: {
+                    "sample_count": metrics["sample_count"],
+                    "text2img_mrr": round(metrics["text2img_mrr"], 4),
+                    "img2text_mrr": round(metrics["img2text_mrr"], 4)
+                }
+                for domain, metrics in result.by_domain.items()
+            },
+            "report_path": "./data/scimmir_benchmark_report.md" if generate_report else None
+        }
+        
+    except Exception as e:
+        logger.error(f"SciMMIR benchmark error: {e}")
+        raise HTTPException(status_code=500, detail=f"SciMMIR benchmark failed: {str(e)}")
 
 
 # ===============================================================================

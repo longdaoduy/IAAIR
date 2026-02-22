@@ -24,7 +24,7 @@ class ServiceFactory:
         self.neo4j_handler = GraphNeo4jHandler()
         self.vector_handler = MilvusClient()
         self.scibert_client = SciBERTClient()
-        self.deepseek_client = DeepseekClient()
+        self.deepseek_client = None
 
         # Pipelines & Engines
         self.query_handler = GraphQueryHandler()
