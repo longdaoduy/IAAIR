@@ -14,6 +14,12 @@ from models.engines.RoutingDecisionEngine import RoutingDecisionEngine
 from models.engines.ResultFusion import ResultFusion
 from models.engines.ScientificReranker import ScientificReranker
 from models.engines.AttributionTracker import AttributionTracker
+from pipelines.evaluation.SciMMIRBenchmarkIntegration import (
+    SciMMIRBenchmarkResult,
+    SciMMIRResultAnalyzer,
+    SciMMIRDataLoader,
+    SciMMIRBenchmarkRunner
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +30,7 @@ class ServiceFactory:
         self.neo4j_handler = GraphNeo4jHandler()
         self.vector_handler = MilvusClient()
         self.scibert_client = SciBERTClient()
+        self.clip_client = CLIPClient()
         self.deepseek_client = None
 
         # Pipelines & Engines
@@ -34,7 +41,7 @@ class ServiceFactory:
         self.attribution_tracker = AttributionTracker()
 
         # Complex Handlers
-        self.ingestion_handler = IngestionHandler(self.scibert_client)
+        self.ingestion_handler = IngestionHandler(self.scibert_client, self.clip_client)
         self.embedding_handler = EmbeddingSciBERTHandler(self.scibert_client)
         self.retrieval_handler = HybridRetrievalHandler(
             self.vector_handler,
@@ -42,6 +49,57 @@ class ServiceFactory:
             self.deepseek_client,
             self.scibert_client
         )
+
+    def run_scimmir_benchmark_suite(
+            self,
+            limit_samples: int = 50,
+            cache_dir: str = "./data/scimmir_cache",
+            report_path: str = "./data/scimmir_benchmark_report.md",
+            use_streaming: bool = True,
+            use_mock: bool = False,
+            memory_efficient: bool = True
+    ) -> SciMMIRBenchmarkResult:
+        """
+        Complete SciMMIR benchmark evaluation workflow with memory management.
+
+        Args:
+            limit_samples: Number of test samples to evaluate (default: 50 for memory efficiency)
+            cache_dir: Directory to cache SciMMIR dataset (ignored if use_streaming=True)
+            report_path: Path to save evaluation report
+            use_streaming: Use streaming mode to avoid downloading entire dataset
+            use_mock: Use mock samples for quick testing (no download required)
+            memory_efficient: Use memory-efficient loading (default: True, caps at 100 samples)
+
+        Returns:
+            Benchmark results with comparison to baselines
+        """
+        # Load data with memory management
+        data_loader = SciMMIRDataLoader(cache_dir)
+        samples = data_loader.load_test_samples(
+            limit=limit_samples,
+            use_streaming=use_streaming,
+            use_mock=use_mock,
+            memory_efficient=memory_efficient,
+            batch_size=25  # Small batch size for memory efficiency
+        )
+
+        if not samples:
+            raise ValueError("Failed to load SciMMIR samples")
+
+        # Run benchmark
+        benchmark_runner = SciMMIRBenchmarkRunner(self.clip_client, self.scibert_client, self.vector_handler)
+        result = benchmark_runner.run_benchmark(samples, model_name="IAAIR-SciBERT-CLIP")
+
+        # Generate report
+        analyzer = SciMMIRResultAnalyzer()
+        report = analyzer.generate_report(result, save_path=report_path)
+
+        print("=" * 80)
+        print("🎯 SciMMIR Benchmark Completed!")
+        print("=" * 80)
+        print(report)
+
+        return result
 
     async def connect_all(self):
         """Standardize startup for all database clients"""

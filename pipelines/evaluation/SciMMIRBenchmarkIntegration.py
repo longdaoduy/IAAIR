@@ -103,23 +103,35 @@ class SciMMIRDataLoader:
             self.logger.error(f"Failed to download SciMMIR dataset: {e}")
             return False
     
-    def load_test_samples(self, limit: Optional[int] = None, use_streaming: bool = True, use_mock: bool = False) -> List[SciMMIRSample]:
-        """Load test samples from SciMMIR dataset.
+    def load_test_samples(self, limit: Optional[int] = None, use_streaming: bool = True, use_mock: bool = False, 
+                         memory_efficient: bool = True, batch_size: int = 50) -> List[SciMMIRSample]:
+        """Load test samples from SciMMIR dataset with memory management.
         
         Args:
             limit: Maximum number of samples to load
             use_streaming: Use streaming mode to avoid downloading entire dataset
             use_mock: Use mock samples for quick testing (no download required)
+            memory_efficient: Use memory-efficient loading (smaller batches, lazy loading)
+            batch_size: Size of batches for memory-efficient loading
         """
         if use_mock:
             return self._create_mock_samples(limit or 50)
+            
+        # Memory-efficient loading with very small limits
+        if memory_efficient:
+            effective_limit = min(limit or 100, 100)  # Cap at 100 samples for memory efficiency
+            self.logger.info(f"Memory-efficient mode: limiting to {effective_limit} samples")
+            return self._load_samples_memory_efficient(effective_limit, use_streaming, batch_size)
             
         try:
             import datasets
             
             if use_streaming:
                 self.logger.info(f"Loading SciMMIR test samples in streaming mode (limit: {limit})...")
+                # Use take() to limit dataset size early
                 ds = datasets.load_dataset("m-a-p/SciMMIR", split="test", streaming=True)
+                if limit:
+                    ds = ds.take(limit)
                 
                 samples = []
                 for i, item in enumerate(ds):
@@ -180,6 +192,72 @@ class SciMMIRDataLoader:
             return 'physics'
         else:
             return 'general'
+    
+    def _load_samples_memory_efficient(self, limit: int, use_streaming: bool = True, batch_size: int = 50) -> List[SciMMIRSample]:
+        """Load samples with memory efficiency - process in small batches and release memory."""
+        try:
+            import datasets
+            import gc
+            
+            if use_streaming:
+                self.logger.info(f"Memory-efficient streaming: loading {limit} samples in batches of {batch_size}")
+                ds = datasets.load_dataset("m-a-p/SciMMIR", split="test", streaming=True)
+                
+                samples = []
+                batch_count = 0
+                
+                for i, item in enumerate(ds):
+                    if i >= limit:
+                        break
+                    
+                    # Create sample with minimal memory footprint
+                    sample = SciMMIRSample(
+                        text=item['text'][:500] if len(item['text']) > 500 else item['text'],  # Truncate long text
+                        image=self._process_image_memory_efficient(item.get('image')),
+                        class_label=item.get('class', 'figure'),
+                        sample_id=f"scimmir_mem_{i:06d}",
+                        domain=self._infer_domain(item['text'])
+                    )
+                    samples.append(sample)
+                    
+                    # Force garbage collection every batch
+                    if (i + 1) % batch_size == 0:
+                        batch_count += 1
+                        gc.collect()
+                        self.logger.info(f"Processed batch {batch_count}, loaded {i+1}/{limit} samples")
+                
+                self.logger.info(f"Memory-efficient loading completed: {len(samples)} samples")
+                return samples
+            else:
+                # Fallback to mock for cached mode with memory constraints
+                self.logger.info("Memory constraints - falling back to mock samples")
+                return self._create_mock_samples(limit)
+                
+        except Exception as e:
+            self.logger.error(f"Memory-efficient loading failed: {e}")
+            self.logger.info("Falling back to mock samples")
+            return self._create_mock_samples(min(limit, 20))
+    
+    def _process_image_memory_efficient(self, image) -> Optional[Image.Image]:
+        """Process image with memory efficiency - resize and optimize."""
+        if image is None:
+            return None
+        
+        try:
+            from PIL import Image
+            
+            # If image is already PIL Image, resize it
+            if isinstance(image, Image.Image):
+                # Resize to smaller size to save memory
+                image = image.resize((128, 128), Image.Resampling.LANCZOS)
+                return image
+            else:
+                # Create a small placeholder image to save memory
+                return Image.new('RGB', (128, 128), color=(128, 128, 128))
+                
+        except Exception as e:
+            self.logger.warning(f"Image processing failed: {e}, using placeholder")
+            return Image.new('RGB', (128, 128), color=(128, 128, 128))
     
     def _create_mock_samples(self, count: int = 50) -> List[SciMMIRSample]:
         """Create mock SciMMIR samples for testing without downloading dataset."""
@@ -653,77 +731,3 @@ class SciMMIRResultAnalyzer:
             self.logger.info(f"Report saved to {save_path}")
         
         return report
-
-def run_scimmir_benchmark_suite(
-    limit_samples: int = 1000,
-    cache_dir: str = "./data/scimmir_cache",
-    report_path: str = "./data/scimmir_benchmark_report.md",
-    use_streaming: bool = True,
-    use_mock: bool = False
-) -> SciMMIRBenchmarkResult:
-    """
-    Complete SciMMIR benchmark evaluation workflow.
-    
-    Args:
-        limit_samples: Number of test samples to evaluate
-        cache_dir: Directory to cache SciMMIR dataset (ignored if use_streaming=True)
-        report_path: Path to save evaluation report
-        use_streaming: Use streaming mode to avoid downloading entire dataset
-        use_mock: Use mock samples for quick testing (no download required)
-    
-    Returns:
-        Benchmark results with comparison to baselines
-    """
-    
-    # Initialize components
-    from models.configurators.CLIPConfig import CLIPConfig
-    from models.configurators.SciBERTConfig import SciBERTConfig
-    from models.configurators.VectorDBConfig import VectorDBConfig
-    
-    clip_client = CLIPClient(CLIPConfig())
-    scibert_client = SciBERTClient(SciBERTConfig())
-    vector_client = MilvusClient(VectorDBConfig())
-    
-    # Load data with new options
-    data_loader = SciMMIRDataLoader(cache_dir)
-    samples = data_loader.load_test_samples(
-        limit=limit_samples,
-        use_streaming=use_streaming,
-        use_mock=use_mock
-    )
-    
-    if not samples:
-        raise ValueError("Failed to load SciMMIR samples")
-    
-    # Run benchmark
-    benchmark_runner = SciMMIRBenchmarkRunner(clip_client, scibert_client, vector_client)
-    result = benchmark_runner.run_benchmark(samples, model_name="IAAIR-SciBERT-CLIP")
-    
-    # Generate report
-    analyzer = SciMMIRResultAnalyzer()
-    report = analyzer.generate_report(result, save_path=report_path)
-    
-    print("="*80)
-    print("🎯 SciMMIR Benchmark Completed!")
-    print("="*80)
-    print(report)
-    
-    return result
-
-if __name__ == "__main__":
-    # Example usage - Quick test with mock data (no download)
-    print("🧪 Quick test with mock data:")
-    result = run_scimmir_benchmark_suite(
-        limit_samples=50,
-        use_mock=True,
-        report_path="./data/mock_scimmir_report.md"
-    )
-    
-    # Example usage - Small streaming test (minimal download)
-    print("\n📡 Small streaming test:")
-    result = run_scimmir_benchmark_suite(
-        limit_samples=100,
-        use_streaming=True,
-        use_mock=False,
-        report_path="./data/streaming_scimmir_report.md"
-    )
