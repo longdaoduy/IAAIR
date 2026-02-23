@@ -423,16 +423,16 @@ class SciMMIRBenchmarkRunner:
         # Generate embeddings for all samples with batch processing
         text_embeddings, image_embeddings = self._generate_embeddings(samples, batch_size=batch_size)
 
-        # Text-to-Image retrieval
-        text2img_metrics = self._evaluate_text_to_image(text_embeddings, image_embeddings)
+        # Text-to-Image retrieval with batch processing
+        text2img_metrics = self._evaluate_text_to_image(text_embeddings, image_embeddings, batch_size)
 
-        # Image-to-Text retrieval
-        img2text_metrics = self._evaluate_image_to_text(text_embeddings, image_embeddings)
+        # Image-to-Text retrieval with batch processing
+        img2text_metrics = self._evaluate_image_to_text(text_embeddings, image_embeddings, batch_size)
 
-        # Evaluate subsets if requested (like CLIP-BERT methodology)
+        # Evaluate subsets if requested (like CLIP-BERT methodology) with batch processing
         subset_results = None
         if evaluate_subsets:
-            subset_results = self._evaluate_subsets(samples, text_embeddings, image_embeddings)
+            subset_results = self._evaluate_subsets(samples, text_embeddings, image_embeddings, batch_size)
 
         result = SciMMIRBenchmarkResult(
             model_name=model_name,
@@ -557,67 +557,106 @@ class SciMMIRBenchmarkRunner:
 
     @staticmethod
     def _evaluate_text_to_image(text_embeddings: List[List[float]],
-                                image_embeddings: List[List[float]]) -> Dict[str, float]:
-        """Evaluate text-to-image retrieval."""
-
+                                image_embeddings: List[List[float]],
+                                batch_size: int = 100) -> Dict[str, float]:
+        """Evaluate text-to-image retrieval with memory optimization."""
+        import gc
+        
         ranks = []
+        total_queries = len(text_embeddings)
+        
+        # Process queries in batches to avoid memory issues
+        for batch_start in range(0, total_queries, batch_size):
+            batch_end = min(batch_start + batch_size, total_queries)
+            batch_text_embeddings = text_embeddings[batch_start:batch_end]
+            
+            for local_i, query_text_emb in enumerate(batch_text_embeddings):
+                global_i = batch_start + local_i
+                
+                # Calculate similarities with all image embeddings
+                similarities = []
+                for j, doc_image_emb in enumerate(image_embeddings):
+                    sim = cosine_similarity(query_text_emb, doc_image_emb)
+                    similarities.append((sim, j))
 
-        for i, query_text_emb in enumerate(text_embeddings):
-            # Calculate similarities with all image embeddings
-            similarities = []
-            for j, doc_image_emb in enumerate(image_embeddings):
-                sim = cosine_similarity(query_text_emb, doc_image_emb)
-                similarities.append((sim, j))
+                # Sort by similarity (descending)
+                similarities.sort(reverse=True)
 
-            # Sort by similarity (descending)
-            similarities.sort(reverse=True)
+                # Find rank of correct match (same index)
+                correct_rank = None
+                for rank, (sim, idx) in enumerate(similarities, 1):
+                    if idx == global_i:  # Correct match
+                        correct_rank = rank
+                        break
 
-            # Find rank of correct match (same index)
-            correct_rank = None
-            for rank, (sim, idx) in enumerate(similarities, 1):
-                if idx == i:  # Correct match
-                    correct_rank = rank
-                    break
-
-            if correct_rank:
-                ranks.append(correct_rank)
+                if correct_rank:
+                    ranks.append(correct_rank)
+            
+            # Clear batch data and force garbage collection
+            del batch_text_embeddings
+            gc.collect()
+            
+            # Log progress for large datasets
+            if total_queries > 1000 and batch_start % (batch_size * 10) == 0:
+                progress = (batch_end / total_queries) * 100
+                print(f"Text-to-Image evaluation progress: {progress:.1f}%")
 
         return calculate_retrieval_metrics(ranks)
 
     @staticmethod
     def _evaluate_image_to_text(text_embeddings: List[List[float]],
-                                image_embeddings: List[List[float]]) -> Dict[str, float]:
-        """Evaluate image-to-text retrieval."""
-
+                                image_embeddings: List[List[float]],
+                                batch_size: int = 100) -> Dict[str, float]:
+        """Evaluate image-to-text retrieval with memory optimization."""
+        import gc
+        
         ranks = []
+        total_queries = len(image_embeddings)
+        
+        # Process queries in batches to avoid memory issues
+        for batch_start in range(0, total_queries, batch_size):
+            batch_end = min(batch_start + batch_size, total_queries)
+            batch_image_embeddings = image_embeddings[batch_start:batch_end]
+            
+            for local_i, query_image_emb in enumerate(batch_image_embeddings):
+                global_i = batch_start + local_i
+                
+                # Calculate similarities with all text embeddings
+                similarities = []
+                for j, doc_text_emb in enumerate(text_embeddings):
+                    sim = cosine_similarity(query_image_emb, doc_text_emb)
+                    similarities.append((sim, j))
 
-        for i, query_image_emb in enumerate(image_embeddings):
-            # Calculate similarities with all text embeddings
-            similarities = []
-            for j, doc_text_emb in enumerate(text_embeddings):
-                sim = cosine_similarity(query_image_emb, doc_text_emb)
-                similarities.append((sim, j))
+                # Sort by similarity (descending)
+                similarities.sort(reverse=True)
 
-            # Sort by similarity (descending)
-            similarities.sort(reverse=True)
+                # Find rank of correct match (same index)
+                correct_rank = None
+                for rank, (sim, idx) in enumerate(similarities, 1):
+                    if idx == global_i:  # Correct match
+                        correct_rank = rank
+                        break
 
-            # Find rank of correct match (same index)
-            correct_rank = None
-            for rank, (sim, idx) in enumerate(similarities, 1):
-                if idx == i:  # Correct match
-                    correct_rank = rank
-                    break
-
-            if correct_rank:
-                ranks.append(correct_rank)
+                if correct_rank:
+                    ranks.append(correct_rank)
+            
+            # Clear batch data and force garbage collection
+            del batch_image_embeddings
+            gc.collect()
+            
+            # Log progress for large datasets
+            if total_queries > 1000 and batch_start % (batch_size * 10) == 0:
+                progress = (batch_end / total_queries) * 100
+                print(f"Image-to-Text evaluation progress: {progress:.1f}%")
 
         return calculate_retrieval_metrics(ranks)
 
     def _evaluate_subsets(self, 
                          samples: List[SciMMIRSample], 
                          text_embeddings: List[List[float]], 
-                         image_embeddings: List[List[float]]) -> Dict[str, Dict[str, float]]:
-        """Evaluate performance on SciMMIR subsets like CLIP-BERT methodology.
+                         image_embeddings: List[List[float]],
+                         batch_size: int = 100) -> Dict[str, Dict[str, float]]:
+        """Evaluate performance on SciMMIR subsets like CLIP-BERT methodology with memory optimization.
         
         Based on the SciMMIR benchmark methodology:
         • Figure Subset (11,491 total test samples):
@@ -628,6 +667,7 @@ class SciMMIRBenchmarkRunner:
             ◦ Table Result: 4,229 samples
             ◦ Table Parameter: 543 samples
         """
+        import gc
         
         # Initialize data loader to get subset mapping
         data_loader = SciMMIRDataLoader()
@@ -646,21 +686,26 @@ class SciMMIRBenchmarkRunner:
         
         subset_results = {}
         
-        # Evaluate each subset
+        # Evaluate each subset with memory optimization
         for subset_name, indices in subset_groups.items():
             if len(indices) < 2:  # Need at least 2 samples for meaningful evaluation
                 self.logger.warning(f"Skipping subset {subset_name} with only {len(indices)} samples")
                 continue
                 
+            self.logger.info(f"Evaluating subset {subset_name} with {len(indices)} samples...")
+            
             # Extract embeddings for this subset
             subset_text_embeddings = [text_embeddings[i] for i in indices]
             subset_image_embeddings = [image_embeddings[i] for i in indices]
             
-            # Evaluate text-to-image for this subset
-            text2img_metrics = self._evaluate_text_to_image(subset_text_embeddings, subset_image_embeddings)
+            # Use smaller batch size for subsets to be more memory efficient
+            subset_batch_size = min(batch_size, max(10, len(indices) // 4))
             
-            # Evaluate image-to-text for this subset
-            img2text_metrics = self._evaluate_image_to_text(subset_text_embeddings, subset_image_embeddings)
+            # Evaluate text-to-image for this subset with batch processing
+            text2img_metrics = self._evaluate_text_to_image(subset_text_embeddings, subset_image_embeddings, subset_batch_size)
+            
+            # Evaluate image-to-text for this subset with batch processing
+            img2text_metrics = self._evaluate_image_to_text(subset_text_embeddings, subset_image_embeddings, subset_batch_size)
             
             # Store results
             subset_results[subset_name] = {
@@ -676,6 +721,10 @@ class SciMMIRBenchmarkRunner:
             }
             
             self.logger.info(f"Subset {subset_name}: T2I MRR={text2img_metrics['mrr']:.4f}, I2T MRR={img2text_metrics['mrr']:.4f}")
+            
+            # Clean up subset embeddings and force garbage collection
+            del subset_text_embeddings, subset_image_embeddings
+            gc.collect()
         
         return subset_results
 
