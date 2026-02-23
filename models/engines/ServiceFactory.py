@@ -73,7 +73,7 @@ class ServiceFactory:
         # Load data with memory management
         data_loader = SciMMIRDataLoader(cache_dir)
         samples = data_loader.load_test_samples(
-            limit=None
+            limit=limit_samples
         )
 
         if not samples:
