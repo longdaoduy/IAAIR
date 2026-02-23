@@ -55,9 +55,6 @@ class ServiceFactory:
             limit_samples: int = 50,
             cache_dir: str = "./data/scimmir_cache",
             report_path: str = "./data/scimmir_benchmark_report.md",
-            use_streaming: bool = True,
-            use_mock: bool = False,
-            memory_efficient: bool = True
     ) -> SciMMIRBenchmarkResult:
         """
         Complete SciMMIR benchmark evaluation workflow with memory management.
@@ -76,11 +73,7 @@ class ServiceFactory:
         # Load data with memory management
         data_loader = SciMMIRDataLoader(cache_dir)
         samples = data_loader.load_test_samples(
-            limit=limit_samples,
-            use_streaming=use_streaming,
-            use_mock=use_mock,
-            memory_efficient=memory_efficient,
-            batch_size=25  # Small batch size for memory efficiency
+            limit=limit_samples
         )
 
         if not samples:
@@ -104,6 +97,7 @@ class ServiceFactory:
     async def connect_all(self):
         """Standardize startup for all database clients"""
         self.vector_handler.connect()
+        self.clip_client.initialize()
         # await self.neo4j_handler.connect() if async
 
     async def disconnect_all(self):

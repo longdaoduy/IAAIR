@@ -1,5 +1,42 @@
 import re
 from difflib import SequenceMatcher
+from typing import List, Dict
+
+
+def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    """Calculate cosine similarity between two vectors."""
+    if len(vec1) != len(vec2):
+        return 0.0
+
+    dot_product = sum(a * b for a, b in zip(vec1, vec2))
+    norm1 = sum(a * a for a in vec1) ** 0.5
+    norm2 = sum(b * b for b in vec2) ** 0.5
+
+    if norm1 == 0.0 or norm2 == 0.0:
+        return 0.0
+
+    return dot_product / (norm1 * norm2)
+
+
+def calculate_retrieval_metrics(ranks: List[int]) -> Dict[str, float]:
+    """Calculate standard retrieval metrics from ranks."""
+    if not ranks:
+        return {'mrr': 0.0, 'recall_at_1': 0.0, 'recall_at_5': 0.0, 'recall_at_10': 0.0}
+
+    # MRR (Mean Reciprocal Rank)
+    mrr = sum(1.0 / rank for rank in ranks) / len(ranks)
+
+    # Recall@k
+    recall_at_1 = sum(1 for rank in ranks if rank <= 1) / len(ranks)
+    recall_at_5 = sum(1 for rank in ranks if rank <= 5) / len(ranks)
+    recall_at_10 = sum(1 for rank in ranks if rank <= 10) / len(ranks)
+
+    return {
+        'mrr': mrr,
+        'recall_at_1': recall_at_1,
+        'recall_at_5': recall_at_5,
+        'recall_at_10': recall_at_10
+    }
 
 
 def normalize_text(text: str) -> str:
@@ -50,17 +87,17 @@ def compute_confidence(paper_data, s2_paper) -> float:
     # ---------- STEP 1: Global ID matching ----------
     # DOI
     if (
-        openalex_paper.doi
-        and s2_paper.get("doi")
-        and openalex_paper.doi.lower() == s2_paper["doi"].lower()
+            openalex_paper.doi
+            and s2_paper.get("doi")
+            and openalex_paper.doi.lower() == s2_paper["doi"].lower()
     ):
         return 0.98
 
     # PMID
     if (
-        openalex_paper.pmid
-        and s2_paper.get("pmid")
-        and openalex_paper.pmid == s2_paper["pmid"]
+            openalex_paper.pmid
+            and s2_paper.get("pmid")
+            and openalex_paper.pmid == s2_paper["pmid"]
     ):
         return 0.97
 
@@ -74,9 +111,9 @@ def compute_confidence(paper_data, s2_paper) -> float:
     s2_year = s2_paper.get("year")
 
     same_year = (
-        isinstance(openalex_year, int)
-        and isinstance(s2_year, int)
-        and openalex_year == s2_year
+            isinstance(openalex_year, int)
+            and isinstance(s2_year, int)
+            and openalex_year == s2_year
     )
 
     same_authors = author_overlap(

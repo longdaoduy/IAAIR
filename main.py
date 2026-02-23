@@ -824,7 +824,7 @@ async def run_scimmir_benchmark(
         limit_samples: int = 50,
         generate_report: bool = True,
         use_streaming: bool = False,
-        use_mock: bool = True,
+        use_mock: bool = False,
         factory: ServiceFactory = Depends(get_services)
 ):
     """Run SciMMIR multi-modal benchmark evaluation.
@@ -844,9 +844,6 @@ async def run_scimmir_benchmark(
             limit_samples=limit_samples,
             cache_dir="./data/scimmir_cache",
             report_path="./data/scimmir_benchmark_report.md" if generate_report else None,
-            use_streaming=use_streaming,
-            use_mock=use_mock,
-            memory_efficient=True  # Always use memory-efficient mode via API
         )
 
         # Generate comparison analysis
@@ -879,22 +876,6 @@ async def run_scimmir_benchmark(
                 "total_models": comparison['performance_ranking']['total_models'],
                 "percentile": round(comparison['performance_ranking']['percentile'], 1),
                 "improvements": comparison['improvement_analysis']
-            },
-            "category_breakdown": {
-                category: {
-                    "sample_count": metrics["sample_count"],
-                    "text2img_mrr": round(metrics["text2img_mrr"], 4),
-                    "img2text_mrr": round(metrics["img2text_mrr"], 4)
-                }
-                for category, metrics in result.by_category.items()
-            },
-            "domain_breakdown": {
-                domain: {
-                    "sample_count": metrics["sample_count"],
-                    "text2img_mrr": round(metrics["text2img_mrr"], 4),
-                    "img2text_mrr": round(metrics["img2text_mrr"], 4)
-                }
-                for domain, metrics in result.by_domain.items()
             },
             "report_path": "./data/scimmir_benchmark_report.md" if generate_report else None
         }
