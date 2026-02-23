@@ -7,7 +7,7 @@ to evaluate multi-modal retrieval performance using scientific image-text pairs.
 
 import logging
 from typing import List, Dict, Optional, Tuple, Any
-from utils.similarity import cosine_similarity,calculate_retrieval_metrics
+from utils.similarity import cosine_similarity, calculate_retrieval_metrics
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,9 +19,9 @@ from clients.vector.MilvusClient import MilvusClient
 import pandas as pd
 import io
 import requests
-from urllib.parse import urlparse
 import psutil
 import gc
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +59,10 @@ class SciMMIRBenchmarkResult:
 
     timestamp: datetime
     evaluation_details: Dict[str, Any]
-    
+
     # Subset-specific results (like CLIP-BERT evaluation) - must be after non-default fields
     subset_results: Optional[Dict[str, Dict[str, float]]] = None  # e.g., "figure_result": {"text2img_mrr": 0.12, ...}
-    
+
     # Category-specific results
     # by_category: Dict[str, Dict[str, float]] = None
     # by_domain: Dict[str, Dict[str, float]] = None
@@ -77,15 +77,15 @@ class SciMMIRDataLoader:
         self.logger = logging.getLogger(__name__)
         self.base_url = "https://huggingface.co/datasets/m-a-p/SciMMIR/resolve/main/data/"
         self.parquet_files = ["test-00000-of-00004-758f4fffbab26e7d.parquet",
-                              "test-00001-of-00004-d23be0c1b862d0ff.parquet", 
+                              "test-00001-of-00004-d23be0c1b862d0ff.parquet",
                               "test-00002-of-00004-748ad69634d3bd2e.parquet",
                               "test-00003-of-00004-cdffbde35853be2a.parquet"]
-        
+
         # Subset mapping based on SciMMIR benchmark methodology
         self.subset_mapping = {
             # Figure subsets
             'fig_result': 'figure_result',
-            'fig_chart': 'figure_result', 
+            'fig_chart': 'figure_result',
             'fig_plot': 'figure_result',
             'fig_graph': 'figure_result',
             'fig_diagram': 'figure_illustration',
@@ -95,7 +95,7 @@ class SciMMIRDataLoader:
             'fig_architecture': 'figure_architecture',
             'fig_flowchart': 'figure_architecture',
             'fig_pipeline': 'figure_architecture',
-            
+
             # Table subsets
             'tab_result': 'table_result',
             'tab_comparison': 'table_result',
@@ -113,48 +113,48 @@ class SciMMIRDataLoader:
         """
         dataset_dir = self.cache_dir / 'scimmir_dataset'
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        
+
         success_count = 0
-        
+
         for filename in self.parquet_files:
             file_path = dataset_dir / filename
-            
+
             if file_path.exists():
                 self.logger.info(f"File {filename} already exists, skipping download")
                 success_count += 1
                 continue
-                
+
             url = f"{self.base_url}{filename}?download=true"
             self.logger.info(f"Downloading {filename} from {url}")
-            
+
             try:
                 response = requests.get(url, stream=True, timeout=300)
                 response.raise_for_status()
-                
+
                 # Get file size for progress tracking
                 total_size = int(response.headers.get('content-length', 0))
                 downloaded_size = 0
-                
+
                 with open(file_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
                             downloaded_size += len(chunk)
-                            
+
                             # Log progress every 10MB
                             if total_size > 0 and downloaded_size % (10 * 1024 * 1024) == 0:
                                 progress = (downloaded_size / total_size) * 100
                                 self.logger.info(f"Downloaded {progress:.1f}% of {filename}")
-                
-                self.logger.info(f"Successfully downloaded {filename} ({downloaded_size / (1024*1024):.1f} MB)")
+
+                self.logger.info(f"Successfully downloaded {filename} ({downloaded_size / (1024 * 1024):.1f} MB)")
                 success_count += 1
-                
+
             except Exception as e:
                 self.logger.error(f"Failed to download {filename}: {e}")
                 # Clean up partial download
                 if file_path.exists():
                     file_path.unlink()
-        
+
         self.logger.info(f"Downloaded {success_count}/{len(self.parquet_files)} files successfully")
         return success_count == len(self.parquet_files)
 
@@ -207,7 +207,7 @@ class SciMMIRDataLoader:
             return self._create_mock_samples(limit or 50)
 
     def load_test_samples(self, limit: Optional[int] = None) -> \
-    List[SciMMIRSample]:
+            List[SciMMIRSample]:
         """Load test samples from SciMMIR dataset with memory management.
         
         Args:
@@ -217,37 +217,38 @@ class SciMMIRDataLoader:
         dataset_dir = self.cache_dir / 'scimmir_dataset'
         if not dataset_dir.exists():
             dataset_dir.mkdir(parents=True, exist_ok=True)
-        
+
         parquet_files = list(dataset_dir.glob("*.parquet"))
         if not parquet_files:
             self.logger.info(f"No parquet files found in {dataset_dir}, attempting to download from Hugging Face")
             download_success = self.download_parquet_files()
-            
+
             if download_success:
                 parquet_files = list(dataset_dir.glob("*.parquet"))
                 self.logger.info(f"Successfully downloaded {len(parquet_files)} parquet files")
             else:
                 self.logger.warning(f"Failed to download parquet files, creating mock samples")
                 return self._create_mock_samples(limit or 50)
-        
+
         all_samples = []
         samples_loaded = 0
-        
+
         # Sort files to ensure consistent loading order
         parquet_files.sort()
-        
+
         for parquet_file in parquet_files:
             if limit and samples_loaded >= limit:
                 break
-                
+
             remaining_limit = limit - samples_loaded if limit else None
             samples = self.load_from_parquet(str(parquet_file), remaining_limit)
             all_samples.extend(samples)
             samples_loaded += len(samples)
-            
+
             self.logger.info(f"Loaded {len(samples)} samples from {parquet_file.name}, total: {samples_loaded}")
-        
-        self.logger.info(f"Successfully loaded {len(all_samples)} total samples from {len(parquet_files)} parquet files")
+
+        self.logger.info(
+            f"Successfully loaded {len(all_samples)} total samples from {len(parquet_files)} parquet files")
         return all_samples
 
     def get_subset_category(self, class_label: str, text: str = "") -> str:
@@ -263,10 +264,10 @@ class SciMMIRDataLoader:
         # Direct mapping from class label
         if class_label in self.subset_mapping:
             return self.subset_mapping[class_label]
-            
+
         # Fallback inference from text content
         text_lower = text.lower()
-        
+
         # Figure classifications
         if class_label.startswith('fig'):
             if any(term in text_lower for term in ['result', 'performance', 'accuracy', 'comparison', 'evaluation']):
@@ -275,17 +276,17 @@ class SciMMIRDataLoader:
                 return 'figure_architecture'
             else:
                 return 'figure_illustration'
-        
+
         # Table classifications  
         elif class_label.startswith('tab'):
             if any(term in text_lower for term in ['parameter', 'hyperparameter', 'config', 'setting']):
                 return 'table_parameter'
             else:
                 return 'table_result'
-        
+
         # Default fallback
         return 'figure_result' if 'fig' in class_label else 'table_result'
-    
+
     @staticmethod
     def _infer_domain(text: str) -> str:
         """Infer scientific domain from text content."""
@@ -340,6 +341,7 @@ class SciMMIRDataLoader:
         self.logger.info(f"Created {count} mock SciMMIR samples for testing")
         return samples
 
+
 class SciMMIRBenchmarkRunner:
     """Run SciMMIR benchmarks using your IAAIR system."""
 
@@ -376,26 +378,26 @@ class SciMMIRBenchmarkRunner:
         """
         memory_stats = self._get_memory_usage()
         available_mb = memory_stats.get('available_mb', 1000)  # Default fallback
-        
+
         # Conservative batch size calculation
         # Assume each sample uses ~10MB (text + image embeddings + overhead)
         estimated_mb_per_sample = 10
         safe_memory_limit = min(target_memory_mb, available_mb * 0.7)  # Use 70% of available
-        
+
         optimal_batch_size = max(1, int(safe_memory_limit / estimated_mb_per_sample))
-        
+
         # Clamp to reasonable bounds
         optimal_batch_size = min(optimal_batch_size, 128)  # Max 128
-        optimal_batch_size = max(optimal_batch_size, 8)    # Min 8
-        
+        optimal_batch_size = max(optimal_batch_size, 8)  # Min 8
+
         self.logger.info(f"Memory optimization: Available={available_mb:.0f}MB, "
-                        f"Target={target_memory_mb:.0f}MB, Batch size={optimal_batch_size}")
-        
+                         f"Target={target_memory_mb:.0f}MB, Batch size={optimal_batch_size}")
+
         return optimal_batch_size
 
     def run_benchmark(self,
                       samples: List[SciMMIRSample],
-                      model_name: str = "IAAIR-Hybrid",
+                      model_name: str = "IAAIR-Zero-Shot",
                       top_k: int = 10,
                       evaluate_subsets: bool = True,
                       batch_size: Optional[int] = None) -> SciMMIRBenchmarkResult:
@@ -412,17 +414,18 @@ class SciMMIRBenchmarkRunner:
         # Auto-optimize batch size if not provided
         if batch_size is None:
             batch_size = self._optimize_batch_size(len(samples))
-        
+
         self.logger.info(f"Starting SciMMIR benchmark with {len(samples)} samples (batch_size={batch_size})")
-        
+
         # Log initial memory usage
         initial_memory = self._get_memory_usage()
         self.logger.info(f"Initial memory usage: {initial_memory['rss_mb']:.1f}MB RSS, "
-                        f"{initial_memory['available_mb']:.1f}MB available")
+                         f"{initial_memory['available_mb']:.1f}MB available")
 
         # Generate embeddings for all samples with batch processing
         text_embeddings, image_embeddings = self._generate_embeddings(samples, batch_size=batch_size)
 
+        self.logger.info("Starting SciMMIR benchmark evaluation")
         # Text-to-Image retrieval with batch processing
         text2img_metrics = self._evaluate_text_to_image(text_embeddings, image_embeddings, batch_size)
 
@@ -454,35 +457,37 @@ class SciMMIRBenchmarkRunner:
                 'embedding_dim_text': len(text_embeddings[0]) if text_embeddings and text_embeddings[0] else 0,
                 'embedding_dim_image': len(image_embeddings[0]) if image_embeddings and image_embeddings[0] else 0,
                 'model_details': {
-                    'clip_model': getattr(self.clip_client.config, 'model_name', 'unknown') if hasattr(self.clip_client, 'config') and self.clip_client.config else 'unknown',
-                    'scibert_model': getattr(self.scibert_client.config, 'model_name', 'unknown') if hasattr(self.scibert_client, 'config') and self.scibert_client.config else 'unknown'
+                    'clip_model': getattr(self.clip_client.config, 'model_name', 'unknown') if hasattr(self.clip_client,
+                                                                                                       'config') and self.clip_client.config else 'unknown',
+                    'scibert_model': getattr(self.scibert_client.config, 'model_name', 'unknown') if hasattr(
+                        self.scibert_client, 'config') and self.scibert_client.config else 'unknown'
                 }
             }
         )
 
         return result
 
-    def _generate_embeddings(self, samples: List[SciMMIRSample], batch_size: int = 32) -> Tuple[List[List[float]], List[List[float]]]:
+    def _generate_embeddings(self, samples: List[SciMMIRSample], batch_size: int = 32) -> Tuple[
+        List[List[float]], List[List[float]]]:
         """Generate text and image embeddings for all samples with memory optimization.
         
         Args:
             samples: List of SciMMIR samples
             batch_size: Number of samples to process at once (reduce if OOM)
         """
-        import gc
-        
+
         text_embeddings = []
         image_embeddings = []
-        
+
         total_batches = (len(samples) + batch_size - 1) // batch_size
         self.logger.info(f"Generating embeddings in {total_batches} batches of {batch_size}...")
-        
+
         for batch_idx in range(0, len(samples), batch_size):
             batch_samples = samples[batch_idx:batch_idx + batch_size]
             batch_num = (batch_idx // batch_size) + 1
-            
+
             self.logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch_samples)} samples)")
-            
+
             # Process text embeddings for this batch
             batch_texts = [sample.text for sample in batch_samples]
             try:
@@ -501,16 +506,16 @@ class SciMMIRBenchmarkRunner:
                         if emb is None:
                             emb = [0.0] * 768  # Standard BERT dimension fallback
                         batch_text_embeddings.append(emb)
-                        
+
                 text_embeddings.extend(batch_text_embeddings)
-                
+
             except Exception as e:
                 self.logger.warning(f"Failed to generate text embeddings for batch {batch_num}: {e}")
                 # Create zero embeddings as fallback
                 fallback_dim = 768  # Standard BERT dimension
                 batch_text_embeddings = [[0.0] * fallback_dim for _ in batch_texts]
                 text_embeddings.extend(batch_text_embeddings)
-            
+
             # Process image embeddings for this batch
             batch_images = [sample.image for sample in batch_samples]
             try:
@@ -530,16 +535,16 @@ class SciMMIRBenchmarkRunner:
                             batch_image_embeddings.append(emb if emb is not None else [0.0] * 768)
                         else:
                             batch_image_embeddings.append([0.0] * 768)  # Standard CLIP dimension
-                            
+
                 image_embeddings.extend(batch_image_embeddings)
-                
+
             except Exception as e:
                 self.logger.warning(f"Failed to generate image embeddings for batch {batch_num}: {e}")
                 # Create zero embeddings as fallback
                 fallback_dim = 768  # Standard CLIP dimension
                 batch_image_embeddings = [[0.0] * fallback_dim for _ in batch_images]
                 image_embeddings.extend(batch_image_embeddings)
-            
+
             # Clear batch data and force garbage collection
             del batch_samples, batch_texts, batch_images
             if 'batch_text_embeddings' in locals():
@@ -547,11 +552,12 @@ class SciMMIRBenchmarkRunner:
             if 'batch_image_embeddings' in locals():
                 del batch_image_embeddings
             gc.collect()
-            
+
             # Progress update
             progress = (batch_num / total_batches) * 100
-            self.logger.info(f"Embedding generation progress: {progress:.1f}% ({len(text_embeddings)} samples processed)")
-        
+            self.logger.info(
+                f"Embedding generation progress: {progress:.1f}% ({len(text_embeddings)} samples processed)")
+
         self.logger.info(f"Completed embedding generation for {len(text_embeddings)} samples")
         return text_embeddings, image_embeddings
 
@@ -559,47 +565,39 @@ class SciMMIRBenchmarkRunner:
     def _evaluate_text_to_image(text_embeddings: List[List[float]],
                                 image_embeddings: List[List[float]],
                                 batch_size: int = 100) -> Dict[str, float]:
-        """Evaluate text-to-image retrieval with memory optimization."""
-        import gc
-        
+        """Highly optimized evaluation using Matrix Multiplication."""
+
+        # 1. Convert to NumPy arrays and Normalize once (Pre-calculation)
+        # Normalizing makes cosine similarity identical to a simple dot product
+        img_array = np.array(image_embeddings)
+        img_norms = np.linalg.norm(img_array, axis=1, keepdims=True)
+        # Avoid division by zero
+        img_array = np.divide(img_array, img_norms, out=np.zeros_like(img_array), where=img_norms != 0)
+
+        txt_array = np.array(text_embeddings)
+        txt_norms = np.linalg.norm(txt_array, axis=1, keepdims=True)
+        txt_array = np.divide(txt_array, txt_norms, out=np.zeros_like(txt_array), where=txt_norms != 0)
+
         ranks = []
-        total_queries = len(text_embeddings)
-        
-        # Process queries in batches to avoid memory issues
+        total_queries = len(txt_array)
+
         for batch_start in range(0, total_queries, batch_size):
             batch_end = min(batch_start + batch_size, total_queries)
-            batch_text_embeddings = text_embeddings[batch_start:batch_end]
-            
-            for local_i, query_text_emb in enumerate(batch_text_embeddings):
-                global_i = batch_start + local_i
-                
-                # Calculate similarities with all image embeddings
-                similarities = []
-                for j, doc_image_emb in enumerate(image_embeddings):
-                    sim = cosine_similarity(query_text_emb, doc_image_emb)
-                    similarities.append((sim, j))
+            batch_txt = txt_array[batch_start:batch_end]
 
-                # Sort by similarity (descending)
-                similarities.sort(reverse=True)
+            # 2. MATRIX MULTIPLICATION: This replaces your inner loops
+            # (Batch_Size x Dim) @ (Dim x Total_Images) -> (Batch_Size x Total_Images)
+            sim_matrix = np.matmul(batch_txt, img_array.T)
 
-                # Find rank of correct match (same index)
-                correct_rank = None
-                for rank, (sim, idx) in enumerate(similarities, 1):
-                    if idx == global_i:  # Correct match
-                        correct_rank = rank
-                        break
-
-                if correct_rank:
-                    ranks.append(correct_rank)
-            
-            # Clear batch data and force garbage collection
-            del batch_text_embeddings
-            gc.collect()
-            
-            # Log progress for large datasets
-            if total_queries > 1000 and batch_start % (batch_size * 10) == 0:
-                progress = (batch_end / total_queries) * 100
-                print(f"Text-to-Image evaluation progress: {progress:.1f}%")
+            # 3. Vectorized Ranking
+            # For each row, find the rank of the element at the 'correct' index
+            for i, global_idx in enumerate(range(batch_start, batch_end)):
+                scores = sim_matrix[i]
+                # argsort sorts ascending, so we subtract from total to get descending rank
+                # This finds how many scores are better than our target score
+                target_score = scores[global_idx]
+                rank = np.sum(scores > target_score) + 1
+                ranks.append(rank)
 
         return calculate_retrieval_metrics(ranks)
 
@@ -607,55 +605,55 @@ class SciMMIRBenchmarkRunner:
     def _evaluate_image_to_text(text_embeddings: List[List[float]],
                                 image_embeddings: List[List[float]],
                                 batch_size: int = 100) -> Dict[str, float]:
-        """Evaluate image-to-text retrieval with memory optimization."""
-        import gc
-        
+        """Highly optimized Image-to-Text evaluation using Matrix Ops."""
+
+        # 1. Convert to NumPy and Normalize (L2 Norm = 1.0)
+        # This turns Cosine Similarity into a simple Dot Product
+        txt_array = np.array(text_embeddings)
+        txt_norms = np.linalg.norm(txt_array, axis=1, keepdims=True)
+        # Handle zero-vectors to avoid NaN
+        txt_array = np.divide(txt_array, txt_norms, out=np.zeros_like(txt_array), where=txt_norms != 0)
+
+        img_array = np.array(image_embeddings)
+        img_norms = np.linalg.norm(img_array, axis=1, keepdims=True)
+        img_array = np.divide(img_array, img_norms, out=np.zeros_like(img_array), where=img_norms != 0)
+
         ranks = []
-        total_queries = len(image_embeddings)
-        
-        # Process queries in batches to avoid memory issues
+        total_queries = len(img_array)
+
         for batch_start in range(0, total_queries, batch_size):
             batch_end = min(batch_start + batch_size, total_queries)
-            batch_image_embeddings = image_embeddings[batch_start:batch_end]
-            
-            for local_i, query_image_emb in enumerate(batch_image_embeddings):
-                global_i = batch_start + local_i
-                
-                # Calculate similarities with all text embeddings
-                similarities = []
-                for j, doc_text_emb in enumerate(text_embeddings):
-                    sim = cosine_similarity(query_image_emb, doc_text_emb)
-                    similarities.append((sim, j))
 
-                # Sort by similarity (descending)
-                similarities.sort(reverse=True)
+            # Take a batch of query images
+            batch_img = img_array[batch_start:batch_end]
 
-                # Find rank of correct match (same index)
-                correct_rank = None
-                for rank, (sim, idx) in enumerate(similarities, 1):
-                    if idx == global_i:  # Correct match
-                        correct_rank = rank
-                        break
+            # 2. CALCULATE ALL SIMILARITIES AT ONCE
+            # Resulting shape: (batch_size, total_text_embeddings)
+            sim_matrix = np.dot(batch_img, txt_array.T)
 
-                if correct_rank:
-                    ranks.append(correct_rank)
-            
-            # Clear batch data and force garbage collection
-            del batch_image_embeddings
-            gc.collect()
-            
-            # Log progress for large datasets
+            # 3. VECTORIZED RANKING
+            for i, global_idx in enumerate(range(batch_start, batch_end)):
+                # scores[j] is the similarity between current image and text j
+                scores = sim_matrix[i]
+
+                # The 'correct' text embedding is at the same index as the image
+                target_score = scores[global_idx]
+
+                # Rank = (Number of elements strictly better than our target) + 1
+                rank = np.sum(scores > target_score) + 1
+                ranks.append(rank)
+
+            # Basic logging
             if total_queries > 1000 and batch_start % (batch_size * 10) == 0:
-                progress = (batch_end / total_queries) * 100
-                print(f"Image-to-Text evaluation progress: {progress:.1f}%")
+                print(f"Image-to-Text progress: {(batch_end / total_queries) * 100:.1f}%")
 
         return calculate_retrieval_metrics(ranks)
 
-    def _evaluate_subsets(self, 
-                         samples: List[SciMMIRSample], 
-                         text_embeddings: List[List[float]], 
-                         image_embeddings: List[List[float]],
-                         batch_size: int = 100) -> Dict[str, Dict[str, float]]:
+    def _evaluate_subsets(self,
+                          samples: List[SciMMIRSample],
+                          text_embeddings: List[List[float]],
+                          image_embeddings: List[List[float]],
+                          batch_size: int = 100) -> Dict[str, Dict[str, float]]:
         """Evaluate performance on SciMMIR subsets like CLIP-BERT methodology with memory optimization.
         
         Based on the SciMMIR benchmark methodology:
@@ -667,11 +665,10 @@ class SciMMIRBenchmarkRunner:
             ◦ Table Result: 4,229 samples
             ◦ Table Parameter: 543 samples
         """
-        import gc
-        
+
         # Initialize data loader to get subset mapping
         data_loader = SciMMIRDataLoader()
-        
+
         # Group samples by subset
         subset_groups = {}
         for i, sample in enumerate(samples):
@@ -679,34 +676,36 @@ class SciMMIRBenchmarkRunner:
             if subset_category not in subset_groups:
                 subset_groups[subset_category] = []
             subset_groups[subset_category].append(i)
-        
+
         self.logger.info(f"Evaluating {len(subset_groups)} subsets: {list(subset_groups.keys())}")
         for subset, indices in subset_groups.items():
             self.logger.info(f"  {subset}: {len(indices)} samples")
-        
+
         subset_results = {}
-        
+
         # Evaluate each subset with memory optimization
         for subset_name, indices in subset_groups.items():
             if len(indices) < 2:  # Need at least 2 samples for meaningful evaluation
                 self.logger.warning(f"Skipping subset {subset_name} with only {len(indices)} samples")
                 continue
-                
+
             self.logger.info(f"Evaluating subset {subset_name} with {len(indices)} samples...")
-            
+
             # Extract embeddings for this subset
             subset_text_embeddings = [text_embeddings[i] for i in indices]
             subset_image_embeddings = [image_embeddings[i] for i in indices]
-            
+
             # Use smaller batch size for subsets to be more memory efficient
             subset_batch_size = min(batch_size, max(10, len(indices) // 4))
-            
+
             # Evaluate text-to-image for this subset with batch processing
-            text2img_metrics = self._evaluate_text_to_image(subset_text_embeddings, subset_image_embeddings, subset_batch_size)
-            
+            text2img_metrics = self._evaluate_text_to_image(subset_text_embeddings, subset_image_embeddings,
+                                                            subset_batch_size)
+
             # Evaluate image-to-text for this subset with batch processing
-            img2text_metrics = self._evaluate_image_to_text(subset_text_embeddings, subset_image_embeddings, subset_batch_size)
-            
+            img2text_metrics = self._evaluate_image_to_text(subset_text_embeddings, subset_image_embeddings,
+                                                            subset_batch_size)
+
             # Store results
             subset_results[subset_name] = {
                 'sample_count': len(indices),
@@ -719,14 +718,16 @@ class SciMMIRBenchmarkRunner:
                 'img2text_recall_at_5': img2text_metrics['recall_at_5'],
                 'img2text_recall_at_10': img2text_metrics['recall_at_10']
             }
-            
-            self.logger.info(f"Subset {subset_name}: T2I MRR={text2img_metrics['mrr']:.4f}, I2T MRR={img2text_metrics['mrr']:.4f}")
-            
+
+            self.logger.info(
+                f"Subset {subset_name}: T2I MRR={text2img_metrics['mrr']:.4f}, I2T MRR={img2text_metrics['mrr']:.4f}")
+
             # Clean up subset embeddings and force garbage collection
             del subset_text_embeddings, subset_image_embeddings
             gc.collect()
-        
+
         return subset_results
+
 
 class SciMMIRResultAnalyzer:
     """Analyze and compare SciMMIR benchmark results."""
@@ -885,20 +886,20 @@ class SciMMIRResultAnalyzer:
             "performance_ranking": self._rank_performance(result, baselines),
             "improvement_analysis": self._analyze_improvements(result, baselines)
         }
-        
+
         # Add subset comparisons if available
         if result.subset_results:
             comparison["subset_performance"] = {
                 "figure_subset": {
-                    subset: metrics for subset, metrics in result.subset_results.items() 
+                    subset: metrics for subset, metrics in result.subset_results.items()
                     if subset.startswith('figure_')
                 },
                 "table_subset": {
-                    subset: metrics for subset, metrics in result.subset_results.items() 
+                    subset: metrics for subset, metrics in result.subset_results.items()
                     if subset.startswith('table_')
                 }
             }
-            
+
             # Calculate subset totals (like CLIP-BERT methodology)
             figure_total_samples = sum(
                 metrics['sample_count'] for subset, metrics in result.subset_results.items()
@@ -908,13 +909,13 @@ class SciMMIRResultAnalyzer:
                 metrics['sample_count'] for subset, metrics in result.subset_results.items()
                 if subset.startswith('table_')
             )
-            
+
             comparison["subset_totals"] = {
                 "figure_subset_samples": figure_total_samples,
                 "table_subset_samples": table_total_samples,
                 "total_subset_samples": figure_total_samples + table_total_samples
             }
-            
+
             # Add detailed subset-specific comparisons with baselines
             comparison["subset_baseline_comparison"] = self._compare_subset_performance(result, baselines)
 
@@ -923,10 +924,10 @@ class SciMMIRResultAnalyzer:
     def _compare_subset_performance(self, result: SciMMIRBenchmarkResult, baselines: Dict) -> Dict[str, Any]:
         """Compare subset-specific performance with baseline models."""
         subset_comparisons = {}
-        
+
         if not result.subset_results:
             return subset_comparisons
-        
+
         for subset_name, your_metrics in result.subset_results.items():
             subset_comparisons[subset_name] = {
                 "your_performance": {
@@ -939,7 +940,7 @@ class SciMMIRResultAnalyzer:
                 "baseline_comparison": {},
                 "ranking": {}
             }
-            
+
             # Compare with each baseline that has subset data
             baseline_scores = []
             for model_name, baseline_data in baselines.items():
@@ -951,25 +952,25 @@ class SciMMIRResultAnalyzer:
                         "text2img_hits_at_10": baseline_subset.get("text2img_hits_at_10", 0),
                         "img2text_hits_at_10": baseline_subset.get("img2text_hits_at_10", 0)
                     }
-                    
+
                     # Calculate average MRR for ranking
                     avg_mrr = (baseline_subset["text2img_mrr"] + baseline_subset["img2text_mrr"]) / 2
                     baseline_scores.append((model_name, avg_mrr))
-            
+
             # Add your model to ranking
             your_avg_mrr = (your_metrics['text2img_mrr'] + your_metrics['img2text_mrr']) / 2 * 100
             baseline_scores.append((result.model_name, your_avg_mrr))
             baseline_scores.sort(key=lambda x: x[1], reverse=True)
-            
+
             # Find your rank
             your_rank = next(i for i, (name, _) in enumerate(baseline_scores, 1) if name == result.model_name)
-            
+
             subset_comparisons[subset_name]["ranking"] = {
                 "your_rank": your_rank,
                 "total_models": len(baseline_scores),
                 "all_rankings": baseline_scores
             }
-        
+
         return subset_comparisons
 
     @staticmethod
@@ -1009,16 +1010,18 @@ class SciMMIRResultAnalyzer:
         best_baseline_img2text = 0
         best_text2img_model = ""
         best_img2text_model = ""
-        
+
         for model_name, baseline_data in baselines.items():
             if "text2img_mrr" in baseline_data and "img2text_mrr" in baseline_data:
-                t2i_mrr = baseline_data['text2img_mrr'] * 100 if baseline_data['text2img_mrr'] < 1 else baseline_data['text2img_mrr']
-                i2t_mrr = baseline_data['img2text_mrr'] * 100 if baseline_data['img2text_mrr'] < 1 else baseline_data['img2text_mrr']
-                
+                t2i_mrr = baseline_data['text2img_mrr'] * 100 if baseline_data['text2img_mrr'] < 1 else baseline_data[
+                    'text2img_mrr']
+                i2t_mrr = baseline_data['img2text_mrr'] * 100 if baseline_data['img2text_mrr'] < 1 else baseline_data[
+                    'img2text_mrr']
+
                 if t2i_mrr > best_baseline_text2img:
                     best_baseline_text2img = t2i_mrr
                     best_text2img_model = model_name
-                    
+
                 if i2t_mrr > best_baseline_img2text:
                     best_baseline_img2text = i2t_mrr
                     best_img2text_model = model_name
@@ -1033,7 +1036,7 @@ class SciMMIRResultAnalyzer:
 
         if result.text2img_recall_at_1 > 0.01:  # 1% threshold
             improvements.append(f"Strong Recall@1 performance: {result.text2img_recall_at_1 * 100:.2f}%")
-            
+
         # Check subset-specific improvements
         if result.subset_results:
             best_subset_performance = {}
@@ -1047,7 +1050,7 @@ class SciMMIRResultAnalyzer:
                             best_t2i = subset_data["text2img_mrr"]
                         if subset_data["img2text_mrr"] > best_i2t:
                             best_i2t = subset_data["img2text_mrr"]
-                
+
                 your_subset = result.subset_results[subset_name]
                 if your_subset['text2img_mrr'] * 100 > best_t2i:
                     improvements.append(f"Superior {subset_name.replace('_', ' ')} text-to-image performance")
@@ -1104,26 +1107,26 @@ class SciMMIRResultAnalyzer:
         # Add subset evaluation results (like CLIP-BERT methodology)
         if result.subset_results:
             report += "## 📋 Subset Performance (CLIP-BERT Methodology)\n\n"
-            
+
             # Add detailed baseline comparison table
             if "subset_baseline_comparison" in comparison:
                 report += "### 🏆 Subset Performance vs. Baselines\n\n"
-                
+
                 subset_comparison = comparison["subset_baseline_comparison"]
-                
+
                 # Create comparison table for each subset
                 for subset_name, subset_data in subset_comparison.items():
                     display_name = subset_name.replace('_', ' ').title()
                     report += f"#### {display_name}\n\n"
                     report += f"**Your Model Rank**: #{subset_data['ranking']['your_rank']} out of {subset_data['ranking']['total_models']} models\n\n"
-                    
+
                     # Performance table
                     report += "| Model | Text→Image MRR | Image→Text MRR | Text→Image Hits@10 | Image→Text Hits@10 |\n"
                     report += "|-------|----------------|----------------|--------------------|--------------------|\n"
-                    
+
                     # Sort by average performance for display
                     rankings = sorted(subset_data['ranking']['all_rankings'], key=lambda x: x[1], reverse=True)
-                    
+
                     for model_name, avg_score in rankings:
                         if model_name == result.model_name:
                             your_perf = subset_data['your_performance']
@@ -1131,15 +1134,15 @@ class SciMMIRResultAnalyzer:
                         elif model_name in subset_data['baseline_comparison']:
                             baseline_perf = subset_data['baseline_comparison'][model_name]
                             report += f"| {model_name} | {baseline_perf['text2img_mrr']:.3f}% | {baseline_perf['img2text_mrr']:.3f}% | {baseline_perf['text2img_hits_at_10']:.3f}% | {baseline_perf['img2text_hits_at_10']:.3f}% |\n"
-                    
+
                     report += "\n"
-            
+
             # Figure subset breakdown
             figure_subsets = {k: v for k, v in result.subset_results.items() if k.startswith('figure_')}
             if figure_subsets:
                 total_figure_samples = sum(metrics['sample_count'] for metrics in figure_subsets.values())
                 report += f"### Figure Subset ({total_figure_samples:,} total samples):\n\n"
-                
+
                 for subset_name, metrics in figure_subsets.items():
                     display_name = subset_name.replace('_', ' ').title()
                     report += f"**{display_name}**: {metrics['sample_count']:,} samples\n"
@@ -1147,13 +1150,13 @@ class SciMMIRResultAnalyzer:
                     report += f"- I2T MRR: {metrics['img2text_mrr']:.4f} ({metrics['img2text_mrr'] * 100:.2f}%)\n"
                     report += f"- T2I Recall@1: {metrics['text2img_recall_at_1']:.4f} ({metrics['text2img_recall_at_1'] * 100:.2f}%)\n"
                     report += f"- I2T Recall@1: {metrics['img2text_recall_at_1']:.4f} ({metrics['img2text_recall_at_1'] * 100:.2f}%)\n\n"
-            
+
             # Table subset breakdown
             table_subsets = {k: v for k, v in result.subset_results.items() if k.startswith('table_')}
             if table_subsets:
                 total_table_samples = sum(metrics['sample_count'] for metrics in table_subsets.values())
                 report += f"### Table Subset ({total_table_samples:,} total samples):\n\n"
-                
+
                 for subset_name, metrics in table_subsets.items():
                     display_name = subset_name.replace('_', ' ').title()
                     report += f"**{display_name}**: {metrics['sample_count']:,} samples\n"
@@ -1161,7 +1164,7 @@ class SciMMIRResultAnalyzer:
                     report += f"- I2T MRR: {metrics['img2text_mrr']:.4f} ({metrics['img2text_mrr'] * 100:.2f}%)\n"
                     report += f"- T2I Recall@1: {metrics['text2img_recall_at_1']:.4f} ({metrics['text2img_recall_at_1'] * 100:.2f}%)\n"
                     report += f"- I2T Recall@1: {metrics['img2text_recall_at_1']:.4f} ({metrics['img2text_recall_at_1'] * 100:.2f}%)\n\n"
-            
+
             # Expected subset distribution (based on your requirements)
             report += "### Expected SciMMIR Subset Distribution:\n"
             report += "- **Figure Result**: ~9,488 samples (Expected from CLIP-BERT evaluation)\n"

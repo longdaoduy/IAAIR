@@ -2,7 +2,7 @@
 # SciMMIR Benchmark Evaluation Report
 
 **Model**: IAAIR-SciBERT-CLIP  
-**Evaluation Date**: 2026-02-23 16:56:01  
+**Evaluation Date**: 2026-02-23 18:10:52  
 **Total Samples**: 500
 
 ## 📊 Overall Performance
