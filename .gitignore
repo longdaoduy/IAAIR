@@ -1,6 +1,6 @@
 # sphinx build directories
 _build/
-
+data/scimmir_cache/scimmir_dataset
 # dotfiles
 .*
 venv

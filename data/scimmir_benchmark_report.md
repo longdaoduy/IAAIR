@@ -2,7 +2,7 @@
 # SciMMIR Benchmark Evaluation Report
 
 **Model**: IAAIR-SciBERT-CLIP  
-**Evaluation Date**: 2026-02-22 21:21:37  
+**Evaluation Date**: 2026-02-23 10:52:44  
 **Total Samples**: 50
 
 ## 📊 Overall Performance
@@ -34,53 +34,4 @@
 
 - Text-to-Image retrieval improved by 1.55% over best baseline
 - Image-to-Text retrieval improved by 2.67% over best baseline
-
-## 📈 Performance by Category
-
-### Fig Illustration
-- Samples: 5
-- T2I MRR: 0.4733
-- I2T MRR: 0.4400
-
-### Fig Result
-- Samples: 27
-- T2I MRR: 0.1529
-- I2T MRR: 0.2209
-
-### Fig Architecture
-- Samples: 1
-- T2I MRR: 1.0000
-- I2T MRR: 1.0000
-
-### Table Parameter
-- Samples: 2
-- T2I MRR: 1.0000
-- I2T MRR: 0.7500
-
-### Table Result
-- Samples: 15
-- T2I MRR: 0.2675
-- I2T MRR: 0.3821
-
-## 🔬 Performance by Domain
-
-### Physics
-- Samples: 2
-- T2I MRR: 0.7500
-- I2T MRR: 0.7500
-
-### General
-- Samples: 40
-- T2I MRR: 0.1437
-- I2T MRR: 0.1853
-
-### Biomedical
-- Samples: 3
-- T2I MRR: 0.6111
-- I2T MRR: 0.6111
-
-### Cs
-- Samples: 5
-- T2I MRR: 0.4567
-- I2T MRR: 0.4467
 
