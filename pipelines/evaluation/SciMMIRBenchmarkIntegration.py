@@ -128,11 +128,6 @@ class SciMMIRDataLoader:
         
         self.logger.info(f"Downloaded {success_count}/{len(self.parquet_files)} files successfully")
         return success_count == len(self.parquet_files)
-        self.base_url = "https://huggingface.co/datasets/m-a-p/SciMMIR/resolve/main/data/"
-        self.parquet_files = ["test-00000-of-00004-758f4fffbab26e7d.parquet",
-                              "test-00001-of-00004-d23be0c1b862d0ff.parquet", 
-                              "test-00002-of-00004-748ad69634d3bd2e.parquet",
-                              "test-00003-of-00004-cdffbde35853be2a.parquet"]
 
     def load_from_parquet(self, parquet_path: str, limit: Optional[int] = None) -> List[SciMMIRSample]:
         """Load SciMMIR samples directly from a Parquet file.
