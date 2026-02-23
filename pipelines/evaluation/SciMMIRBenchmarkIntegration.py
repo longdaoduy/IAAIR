@@ -18,6 +18,8 @@ from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.vector.MilvusClient import MilvusClient
 import pandas as pd
 import io
+import requests
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,69 @@ class SciMMIRDataLoader:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(__name__)
+        self.base_url = "https://huggingface.co/datasets/m-a-p/SciMMIR/resolve/main/data/"
+        self.parquet_files = ["test-00000-of-00004-758f4fffbab26e7d.parquet",
+                              "test-00001-of-00004-d23be0c1b862d0ff.parquet", 
+                              "test-00002-of-00004-748ad69634d3bd2e.parquet",
+                              "test-00003-of-00004-cdffbde35853be2a.parquet"]
+
+    def download_parquet_files(self) -> bool:
+        """Download SciMMIR parquet files from Hugging Face.
+        
+        Returns:
+            bool: True if all files were downloaded successfully, False otherwise
+        """
+        dataset_dir = self.cache_dir / 'scimmir_dataset'
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        
+        success_count = 0
+        
+        for filename in self.parquet_files:
+            file_path = dataset_dir / filename
+            
+            if file_path.exists():
+                self.logger.info(f"File {filename} already exists, skipping download")
+                success_count += 1
+                continue
+                
+            url = f"{self.base_url}{filename}?download=true"
+            self.logger.info(f"Downloading {filename} from {url}")
+            
+            try:
+                response = requests.get(url, stream=True, timeout=300)
+                response.raise_for_status()
+                
+                # Get file size for progress tracking
+                total_size = int(response.headers.get('content-length', 0))
+                downloaded_size = 0
+                
+                with open(file_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            
+                            # Log progress every 10MB
+                            if total_size > 0 and downloaded_size % (10 * 1024 * 1024) == 0:
+                                progress = (downloaded_size / total_size) * 100
+                                self.logger.info(f"Downloaded {progress:.1f}% of {filename}")
+                
+                self.logger.info(f"Successfully downloaded {filename} ({downloaded_size / (1024*1024):.1f} MB)")
+                success_count += 1
+                
+            except Exception as e:
+                self.logger.error(f"Failed to download {filename}: {e}")
+                # Clean up partial download
+                if file_path.exists():
+                    file_path.unlink()
+        
+        self.logger.info(f"Downloaded {success_count}/{len(self.parquet_files)} files successfully")
+        return success_count == len(self.parquet_files)
+        self.base_url = "https://huggingface.co/datasets/m-a-p/SciMMIR/resolve/main/data/"
+        self.parquet_files = ["test-00000-of-00004-758f4fffbab26e7d.parquet",
+                              "test-00001-of-00004-d23be0c1b862d0ff.parquet", 
+                              "test-00002-of-00004-748ad69634d3bd2e.parquet",
+                              "test-00003-of-00004-cdffbde35853be2a.parquet"]
 
     def load_from_parquet(self, parquet_path: str, limit: Optional[int] = None) -> List[SciMMIRSample]:
         """Load SciMMIR samples directly from a Parquet file.
@@ -127,13 +192,19 @@ class SciMMIRDataLoader:
         # Load all parquet files in the dataset directory
         dataset_dir = self.cache_dir / 'scimmir_dataset'
         if not dataset_dir.exists():
-            self.logger.warning(f"Dataset directory {dataset_dir} not found, creating mock samples")
-            return self._create_mock_samples(limit or 50)
+            dataset_dir.mkdir(parents=True, exist_ok=True)
         
         parquet_files = list(dataset_dir.glob("*.parquet"))
         if not parquet_files:
-            self.logger.warning(f"No parquet files found in {dataset_dir}, creating mock samples")
-            return self._create_mock_samples(limit or 50)
+            self.logger.info(f"No parquet files found in {dataset_dir}, attempting to download from Hugging Face")
+            download_success = self.download_parquet_files()
+            
+            if download_success:
+                parquet_files = list(dataset_dir.glob("*.parquet"))
+                self.logger.info(f"Successfully downloaded {len(parquet_files)} parquet files")
+            else:
+                self.logger.warning(f"Failed to download parquet files, creating mock samples")
+                return self._create_mock_samples(limit or 50)
         
         all_samples = []
         samples_loaded = 0
