@@ -30,8 +30,8 @@ class ServiceFactory:
         self.neo4j_handler = GraphNeo4jHandler()
         self.vector_handler = MilvusClient()
         self.scibert_client = SciBERTClient()
-        self.clip_client = CLIPClient()
-        self.deepseek_client = None
+        self.clip_client = None
+        self.deepseek_client = DeepseekClient()
 
         # Pipelines & Engines
         self.query_handler = GraphQueryHandler()
@@ -97,7 +97,7 @@ class ServiceFactory:
     async def connect_all(self):
         """Standardize startup for all database clients"""
         self.vector_handler.connect()
-        self.clip_client.initialize()
+        # self.clip_client.initialize()
         # await self.neo4j_handler.connect() if async
 
     async def disconnect_all(self):

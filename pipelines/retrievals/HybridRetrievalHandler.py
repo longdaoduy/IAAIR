@@ -58,7 +58,9 @@ class HybridRetrievalHandler:
             List of similar papers with scores and IDs
         """
         try:
-
+            if not self.milvus_client.collection:
+                self.milvus_client.collection = Collection(self.milvus_client.config.collection_name)
+                self.milvus_client.collection.load()
             # Generate embedding for the query text
             query_embedding = self.embedding_client.generate_embedding(query_text)
 
