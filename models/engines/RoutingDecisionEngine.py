@@ -58,11 +58,12 @@ class RoutingDecisionEngine:
             performance_context = self._get_performance_context()
 
             # Create few-shot learning prompt
-            prompt = self._build_few_shot_prompt(query, performance_context)
+            user_prompt, system_prompt = self._build_few_shot_prompt(query, performance_context)
 
             # Use the Llama API to generate content
             response_text = self.ai_agent.generate_content(
-                prompt=prompt
+                prompt=user_prompt,
+                system_prompt=system_prompt
             )
 
             if not response_text:
@@ -99,8 +100,12 @@ class RoutingDecisionEngine:
 
         return examples
 
-    def _build_few_shot_prompt(self, query: str, performance_context: str) -> str:
-        """Build few-shot learning prompt for query classification and routing."""
+    def _build_few_shot_prompt(self, query: str, performance_context: str) -> tuple[str, str]:
+        """Build few-shot learning prompt for query classification and routing.
+        
+        Returns:
+            tuple: (user_prompt, system_prompt)
+        """
 
         # Format few-shot examples
         examples_text = ""
@@ -115,20 +120,7 @@ Analysis:
 - Reasoning: {example['reasoning']}
 """
 
-        prompt = f"""You are an expert system for academic paper search routing. Analyze the query and determine the optimal search strategy based on these examples:
-
-{examples_text}
-
-Performance Context: {performance_context}
-
-Now analyze this new query:
-Query: "{query}"
-
-Provide your analysis in this exact format:
-Query Type: [SEMANTIC|STRUCTURAL|FACTUAL|HYBRID]
-Routing Strategy: [VECTOR_FIRST|GRAPH_FIRST|PARALLEL]  
-Confidence: [0.0-1.0]
-Reasoning: [Brief explanation of your decision]
+        system_prompt = f"""You are an expert system for academic paper search routing. Analyze queries and determine the optimal search strategy based on provided examples and performance context.
 
 Guidelines:
 - STRUCTURAL queries involve specific IDs, authors, citations, relationships
@@ -140,8 +132,25 @@ Guidelines:
 - PARALLEL: Best for complex queries needing both approaches
 - Consider performance history when available
 - Confidence should reflect certainty in classification and routing choice
-"""
-        return prompt
+
+Always respond in this exact format:
+Query Type: [SEMANTIC|STRUCTURAL|FACTUAL|HYBRID]
+Routing Strategy: [VECTOR_FIRST|GRAPH_FIRST|PARALLEL]  
+Confidence: [0.0-1.0]
+Reasoning: [Brief explanation of your decision]"""
+
+        user_prompt = f"""Based on these examples:
+
+{examples_text}
+
+Performance Context: {performance_context}
+
+Now analyze this new query:
+Query: "{query}"
+
+Provide your analysis in the required format."""
+
+        return user_prompt, system_prompt
 
     def _parse_few_shot_response(self, response_text: str) -> Optional[Tuple[RoutingStrategy, QueryType, float]]:
         """Parse the structured response from few-shot learning."""

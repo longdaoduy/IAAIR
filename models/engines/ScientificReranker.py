@@ -2,6 +2,7 @@ from typing import List
 import logging
 import torch
 from models.entities.retrieval.SearchResult import SearchResult
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,6 @@ class ScientificReranker:
             return
             
         try:
-            from transformers import AutoTokenizer, AutoModelForSequenceClassification
-            
             logger.info(f"Loading BGE reranker model: {self.model_name}")
             
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)

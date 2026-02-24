@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 class HybridRetrievalHandler:
     """Unified handler for vector and graph-based retrieval operations."""
 
-    def __init__(self, vector_db: Optional[MilvusClient], graph_db: GraphQueryHandler, llm_client: Optional[DeepseekClient],
+    def __init__(self, vector_db: Optional[MilvusClient], graph_db: GraphQueryHandler,
+                 llm_client: Optional[DeepseekClient],
                  embedder: SciBERTClient):
         self.milvus_client = vector_db
         self.embedding_client = embedder
@@ -31,7 +32,7 @@ class HybridRetrievalHandler:
     async def execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
         """Execute vector search."""
         try:
-            if not self.milvus_client or not self.milvus_client.connect():
+            if not self.milvus_client:
                 logger.warning("Vector search failed: Could not connect to Zilliz")
                 return []
 
@@ -57,16 +58,9 @@ class HybridRetrievalHandler:
             List of similar papers with scores and IDs
         """
         try:
-            if not self.milvus_client.collection:
-                self.milvus_client.collection = Collection(self.milvus_client.config.collection_name)
-                self.milvus_client.collection.load()
 
             # Generate embedding for the query text
             query_embedding = self.embedding_client.generate_embedding(query_text)
-
-            if query_embedding is None:
-                print("❌ Failed to generate query embedding")
-                return []
 
             if use_hybrid and self.milvus_client.is_tfidf_fitted:
                 return self.milvus_client._hybrid_search(query_text, query_embedding, top_k)
