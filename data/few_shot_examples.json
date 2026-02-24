@@ -1,105 +1,105 @@
 {
   "few_shot_examples": [
     {
-      "query": "who is the author of paper have id = W2036113194",
+      "query": "who is the author of paper with id W1775749144",
       "query_type": "STRUCTURAL",
       "routing": "GRAPH_FIRST",
       "confidence": 0.95,
       "reasoning": "Specific paper ID with author lookup - requires graph traversal for exact match"
     },
     {
-      "query": "papers about machine learning in healthcare",
+      "query": "papers about protein measurement and biochemical analysis",
       "query_type": "SEMANTIC",
       "routing": "VECTOR_FIRST",
       "confidence": 0.90,
       "reasoning": "Conceptual topic search - vector embeddings capture semantic similarity best"
     },
     {
-      "query": "find papers similar to deep learning applications",
+      "query": "find papers similar to deep residual learning for image recognition",
       "query_type": "SEMANTIC",
       "routing": "VECTOR_FIRST",
       "confidence": 0.88,
-      "reasoning": "Similarity search with broad concept - vector space excels at semantic matching"
+      "reasoning": "Similarity search with specific technique - vector space excels at semantic matching"
     },
     {
-      "query": "papers authored by Geoffrey Hinton",
+      "query": "papers authored by Kaiming He",
       "query_type": "STRUCTURAL",
       "routing": "GRAPH_FIRST",
       "confidence": 0.92,
       "reasoning": "Author-specific search - graph relationships provide exact authorship matches"
     },
     {
-      "query": "collaboration network of researchers in computer vision",
+      "query": "collaboration network of researchers publishing in Nature",
       "query_type": "STRUCTURAL",
       "routing": "GRAPH_FIRST",
       "confidence": 0.87,
       "reasoning": "Network analysis requiring relationship traversal - graph structure essential"
     },
     {
-      "query": "recent trends and applications of neural networks in NLP",
+      "query": "recent trends in gradient approximation methods for computational chemistry",
       "query_type": "HYBRID",
       "routing": "PARALLEL",
       "confidence": 0.85,
       "reasoning": "Complex query combining trends (semantic) with specific domain (structural) - needs both approaches"
     },
     {
-      "query": "papers with DOI:10.1038/nature14539",
+      "query": "papers with DOI 10.1016/s0021-9258(19)52451-6",
       "query_type": "STRUCTURAL",
       "routing": "GRAPH_FIRST",
       "confidence": 0.98,
       "reasoning": "Direct DOI lookup - exact identifier requires precise graph matching"
     },
     {
-      "query": "what are the most cited papers about artificial intelligence",
+      "query": "what are the most cited papers in bioinformatics",
       "query_type": "HYBRID",
       "routing": "PARALLEL",
       "confidence": 0.83,
-      "reasoning": "Combines citation analysis (structural) with topic search (semantic) - parallel approach optimal"
+      "reasoning": "Combines citation analysis (structural) with domain filtering (semantic) - parallel approach optimal"
     },
     {
-      "query": "research related to climate change and sustainability",
+      "query": "research related to gene expression analysis and qPCR methods",
       "query_type": "SEMANTIC",
       "routing": "VECTOR_FIRST",
       "confidence": 0.86,
-      "reasoning": "Broad thematic search across related concepts - vector embeddings capture topical similarity"
+      "reasoning": "Broad thematic search across related molecular biology concepts - vector embeddings capture topical similarity"
     },
     {
-      "query": "papers co-authored by John Smith and Mary Johnson in 2023",
+      "query": "papers co-authored by Georg Kresse and J. Furthmüller",
       "query_type": "STRUCTURAL",
       "routing": "GRAPH_FIRST",
       "confidence": 0.94,
-      "reasoning": "Specific authorship and temporal constraints - requires precise graph filtering"
+      "reasoning": "Specific co-authorship query - requires precise graph relationship matching"
     },
     {
-      "query": "interdisciplinary research combining biology and computer science",
+      "query": "interdisciplinary research combining analytical biochemistry and molecular biology",
       "query_type": "HYBRID",
       "routing": "PARALLEL",
       "confidence": 0.81,
-      "reasoning": "Cross-domain research requires both semantic understanding and structural analysis"
+      "reasoning": "Cross-domain research requires both semantic understanding and structural venue analysis"
     },
     {
-      "query": "how many papers cite the transformer architecture paper",
+      "query": "how many papers cite W2194775991",
       "query_type": "FACTUAL",
       "routing": "GRAPH_FIRST",
       "confidence": 0.89,
-      "reasoning": "Citation count query requires graph traversal to count incoming edges"
+      "reasoning": "Citation count query requires graph traversal to count incoming citation edges"
     },
     {
-      "query": "studies concerning artificial intelligence ethics",
+      "query": "studies concerning plasma physics and fusion research",
       "query_type": "SEMANTIC",
       "routing": "VECTOR_FIRST",
       "confidence": 0.87,
-      "reasoning": "Ethics is a conceptual domain best captured through semantic similarity"
+      "reasoning": "Physics domain concepts best captured through semantic similarity matching"
     },
     {
-      "query": "collaborative research between MIT and Stanford on robotics",
+      "query": "papers published in Physical Review B with more than 1000 citations",
       "query_type": "HYBRID",
       "routing": "PARALLEL",
       "confidence": 0.84,
-      "reasoning": "Combines institutional collaboration (structural) with topic filtering (semantic)"
+      "reasoning": "Combines venue filtering (structural) with citation analysis (structural) - parallel approach for efficiency"
     },
     {
-      "query": "evolution of machine learning techniques in medical diagnosis",
+      "query": "evolution of deep learning architectures in computer vision",
       "query_type": "SEMANTIC",
       "routing": "VECTOR_FIRST",
       "confidence": 0.88,

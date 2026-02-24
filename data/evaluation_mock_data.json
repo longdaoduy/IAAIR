@@ -1,0 +1,582 @@
+{
+  "evaluation_questions": [
+    {
+      "id": "graph_001",
+      "question": "Who are the authors of paper W1775749144?",
+      "type": "graph",
+      "category": "authors",
+      "expected_evidence": {
+        "paper_ids": ["W1775749144"],
+        "cypher_query": "MATCH (p:Paper {id: 'W1775749144'})-[:AUTHORED_BY]->(a:Author) RETURN a.name",
+        "expected_result": ["OliverH. Lowry", "NiraJ. Rosebrough", "A. Farr", "RoseJ. Randall"],
+        "expected_ai_response": "The paper W1775749144 is authored by four researchers: OliverH. Lowry, NiraJ. Rosebrough, A. Farr, and RoseJ. Randall. This is the famous paper on protein measurement with the Folin phenol reagent, a widely cited work in analytical biochemistry."
+      }
+    },
+    {
+      "id": "graph_002",
+      "question": "What papers has Kaiming He authored?",
+      "type": "graph",
+      "category": "authors",
+      "expected_evidence": {
+        "paper_ids": ["W2194775991"],
+        "cypher_query": "MATCH (a:Author {name: 'Kaiming He'})<-[:AUTHORED_BY]-(p:Paper) RETURN p.id, p.title",
+        "expected_result": [{"id": "W2194775991", "title": "Deep Residual Learning for Image Recognition"}]
+      }
+    },
+    {
+      "id": "graph_003",
+      "question": "How many citations does paper W2100837269 have?",
+      "type": "graph",
+      "category": "citations",
+      "expected_evidence": {
+        "paper_ids": ["W2100837269"],
+        "cypher_query": "MATCH (p:Paper {id: 'W2100837269'}) RETURN p.citation_count",
+        "expected_result": 229636,
+        "expected_ai_response": "Paper W2100837269 has 229,636 citations. This is Ulrich K. Laemmli's seminal paper on 'Cleavage of Structural Proteins during the Assembly of the Head of Bacteriophage T4', which introduced the widely used SDS-PAGE protein separation technique. The high citation count reflects its fundamental importance in molecular biology and biochemistry research."
+      }
+    },
+    {
+      "id": "graph_004",
+      "question": "Which papers cite W2128635872?",
+      "type": "graph",
+      "category": "citations",
+      "expected_evidence": {
+        "paper_ids": ["W2128635872"],
+        "cypher_query": "MATCH (cited:Paper {id: 'W2128635872'})<-[:CITES]-(citing:Paper) RETURN citing.id, citing.title LIMIT 10",
+        "expected_result": "Multiple citing papers"
+      }
+    },
+    {
+      "id": "graph_005",
+      "question": "What venue published paper W3038568908?",
+      "type": "graph",
+      "category": "venues",
+      "expected_evidence": {
+        "paper_ids": ["W3038568908"],
+        "cypher_query": "MATCH (p:Paper {id: 'W3038568908'})-[:PUBLISHED_IN]->(v:Venue) RETURN v.name",
+        "expected_result": "Plasma and Fusion Research",
+        "expected_ai_response": "Paper W3038568908 was published in 'Plasma and Fusion Research'. This paper describes a radiation resistant camera system for monitoring deuterium plasma discharges in the Large Helical Device, representing important research in plasma physics and fusion technology."
+      }
+    },
+    {
+      "id": "graph_006",
+      "question": "Which papers were published in Nature?",
+      "type": "graph",
+      "category": "venues",
+      "expected_evidence": {
+        "paper_ids": ["W2100837269"],
+        "cypher_query": "MATCH (v:Venue {name: 'Nature'})<-[:PUBLISHED_IN]-(p:Paper) RETURN p.id, p.title LIMIT 10",
+        "expected_result": [{"id": "W2100837269", "title": "Cleavage of Structural Proteins during the Assembly of the Head of Bacteriophage T4"}]
+      }
+    },
+    {
+      "id": "graph_007",
+      "question": "Who are the co-authors of Georg Kresse?",
+      "type": "graph",
+      "category": "authors",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (a1:Author {name: 'Georg Kresse'})<-[:AUTHORED_BY]-(p:Paper)-[:AUTHORED_BY]->(a2:Author) WHERE a1 <> a2 RETURN DISTINCT a2.name",
+        "expected_result": ["J. Furthmüller", "Others"]
+      }
+    },
+    {
+      "id": "graph_008",
+      "question": "What is the DOI of paper W1979290264?",
+      "type": "graph",
+      "category": "metadata",
+      "expected_evidence": {
+        "paper_ids": ["W1979290264"],
+        "cypher_query": "MATCH (p:Paper {id: 'W1979290264'}) RETURN p.doi",
+        "expected_result": "DOI for thematic analysis paper"
+      }
+    },
+    {
+      "id": "graph_009",
+      "question": "How many papers are published in Analytical Biochemistry?",
+      "type": "graph",
+      "category": "venues",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (v:Venue {name: 'Analytical Biochemistry'})<-[:PUBLISHED_IN]-(p:Paper) RETURN count(p)",
+        "expected_result": 5
+      }
+    },
+    {
+      "id": "graph_010",
+      "question": "Which authors have published more than 2 papers in the dataset?",
+      "type": "graph",
+      "category": "authors",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (a:Author)<-[:AUTHORED_BY]-(p:Paper) WITH a, count(p) as paper_count WHERE paper_count > 2 RETURN a.name, paper_count",
+        "expected_result": ["Georg Kresse", "Jacques Ferlay", "Ahmedin Jemal", "Freddie Bray"]
+      }
+    },
+    {
+      "id": "graph_011",
+      "question": "What papers are co-authored by Kaiming He and Jian Sun?",
+      "type": "graph",
+      "category": "authors",
+      "expected_evidence": {
+        "paper_ids": ["W2194775991"],
+        "cypher_query": "MATCH (a1:Author {name: 'Kaiming He'})<-[:AUTHORED_BY]-(p:Paper)-[:AUTHORED_BY]->(a2:Author {name: 'Jian Sun'}) RETURN p.id, p.title",
+        "expected_result": [{"id": "W2194775991", "title": "Deep Residual Learning for Image Recognition"}]
+      }
+    },
+    {
+      "id": "graph_012",
+      "question": "Which paper has the highest citation count?",
+      "type": "graph",
+      "category": "citations",
+      "expected_evidence": {
+        "paper_ids": ["W1775749144"],
+        "cypher_query": "MATCH (p:Paper) RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC LIMIT 1",
+        "expected_result": {"id": "W1775749144", "citations": 299198}
+      }
+    },
+    {
+      "id": "graph_013",
+      "question": "What venues has David Moher published in?",
+      "type": "graph",
+      "category": "venues",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (a:Author {name: 'David Moher'})<-[:AUTHORED_BY]-(p:Paper)-[:PUBLISHED_IN]->(v:Venue) RETURN DISTINCT v.name",
+        "expected_result": ["BMJ", "Other venues"]
+      }
+    },
+    {
+      "id": "graph_014",
+      "question": "How many papers were published in Physical Review B?",
+      "type": "graph",
+      "category": "venues",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (v:Venue {name: 'Physical review. B, Condensed matter'})<-[:PUBLISHED_IN]-(p:Paper) RETURN count(p)",
+        "expected_result": 4
+      }
+    },
+    {
+      "id": "graph_015",
+      "question": "Which papers cite both W1775749144 and W2100837269?",
+      "type": "graph",
+      "category": "citations",
+      "expected_evidence": {
+        "paper_ids": ["W1775749144", "W2100837269"],
+        "cypher_query": "MATCH (p1:Paper {id: 'W1775749144'})<-[:CITES]-(citing:Paper)-[:CITES]->(p2:Paper {id: 'W2100837269'}) RETURN citing.id, citing.title",
+        "expected_result": "Papers citing both high-impact biochemistry papers"
+      }
+    },
+    {
+      "id": "graph_016",
+      "question": "What is the publication year of paper W2107277218?",
+      "type": "graph",
+      "category": "metadata",
+      "expected_evidence": {
+        "paper_ids": ["W2107277218"],
+        "cypher_query": "MATCH (p:Paper {id: 'W2107277218'}) RETURN p.publication_year",
+        "expected_result": "Publication year of gene expression analysis paper"
+      }
+    },
+    {
+      "id": "graph_017",
+      "question": "Which authors are affiliated with multiple institutions?",
+      "type": "graph",
+      "category": "authors",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (a:Author)-[:AFFILIATED_WITH]->(i:Institution) WITH a, count(i) as inst_count WHERE inst_count > 1 RETURN a.name, inst_count",
+        "expected_result": "Authors with multiple affiliations"
+      }
+    },
+    {
+      "id": "graph_018",
+      "question": "What papers have been published in CA A Cancer Journal for Clinicians?",
+      "type": "graph",
+      "category": "venues",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (v:Venue {name: 'CA A Cancer Journal for Clinicians'})<-[:PUBLISHED_IN]-(p:Paper) RETURN p.id, p.title",
+        "expected_result": "Cancer research papers in high-impact journal"
+      }
+    },
+    {
+      "id": "graph_019",
+      "question": "Which paper has authors from the most institutions?",
+      "type": "graph",
+      "category": "authors",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED_BY]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WITH p, count(DISTINCT i) as inst_count RETURN p.id, p.title, inst_count ORDER BY inst_count DESC LIMIT 1",
+        "expected_result": "Paper with highest institutional diversity"
+      }
+    },
+    {
+      "id": "graph_020",
+      "question": "What is the average citation count for papers in Bioinformatics?",
+      "type": "graph",
+      "category": "citations",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (v:Venue {name: 'Bioinformatics'})<-[:PUBLISHED_IN]-(p:Paper) RETURN avg(p.citation_count)",
+        "expected_result": "Average citations for bioinformatics papers"
+      }
+    },
+    {
+      "id": "graph_021",
+      "question": "Which papers were authored by both Georg Kresse and J. Furthmüller?",
+      "type": "graph",
+      "category": "authors",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (a1:Author {name: 'Georg Kresse'})<-[:AUTHORED_BY]-(p:Paper)-[:AUTHORED_BY]->(a2:Author {name: 'J. Furthmüller'}) RETURN p.id, p.title",
+        "expected_result": "Collaborative papers in computational physics"
+      }
+    },
+    {
+      "id": "graph_022",
+      "question": "What is the ORCID of author Ulrich K. Laemmli?",
+      "type": "graph",
+      "category": "authors",
+      "expected_evidence": {
+        "paper_ids": ["W2100837269"],
+        "cypher_query": "MATCH (a:Author {name: 'Ulrich K. Laemmli'}) RETURN a.orcid",
+        "expected_result": "ORCID identifier if available"
+      }
+    },
+    {
+      "id": "graph_023",
+      "question": "How many papers cite works published in Nature?",
+      "type": "graph",
+      "category": "citations",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (nature:Venue {name: 'Nature'})<-[:PUBLISHED_IN]-(nature_paper:Paper)<-[:CITES]-(citing:Paper) RETURN count(DISTINCT citing)",
+        "expected_result": "Total citations to Nature papers"
+      }
+    },
+    {
+      "id": "graph_024",
+      "question": "Which venues have published papers with more than 100,000 citations?",
+      "type": "graph",
+      "category": "venues",
+      "expected_evidence": {
+        "paper_ids": ["W1775749144", "W2100837269", "W2128635872"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE p.citation_count > 100000 RETURN DISTINCT v.name",
+        "expected_result": ["Nature", "Journal of Biological Chemistry", "Analytical Biochemistry"]
+      }
+    },
+    {
+      "id": "graph_025",
+      "question": "What is the collaboration network size of Stephen F. Altschul?",
+      "type": "graph",
+      "category": "authors",
+      "expected_evidence": {
+        "paper_ids": [],
+        "cypher_query": "MATCH (a1:Author {name: 'Stephen F. Altschul'})<-[:AUTHORED_BY]-(p:Paper)-[:AUTHORED_BY]->(a2:Author) WHERE a1 <> a2 RETURN count(DISTINCT a2)",
+        "expected_result": "Number of unique collaborators"
+      }
+    },
+    {
+      "id": "semantic_001",
+      "question": "Find papers about protein quantification methods",
+      "type": "semantic",
+      "category": "topic",
+      "expected_evidence": {
+        "paper_ids": ["W1775749144", "W2128635872", "W4293247451"],
+        "semantic_keywords": ["protein", "quantification", "measurement", "assay", "biochemical analysis"],
+        "expected_result": "Papers on Bradford assay, Lowry method, and other protein quantification techniques",
+        "expected_ai_response": "Based on the search results, I found several important papers on protein quantification methods. The most significant include the Lowry protein assay method (W1775749144) and the Bradford protein assay (W2128635872, W4293247451). These are fundamental techniques in biochemistry for measuring protein concentration, with the Lowry method using Folin phenol reagent and the Bradford method using Coomassie dye binding. Both methods are widely used in laboratories for protein analysis and have been cited extensively in the scientific literature."
+      }
+    },
+    {
+      "id": "semantic_002",
+      "question": "Research on deep learning architectures for computer vision",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W2194775991"],
+        "semantic_keywords": ["deep learning", "neural networks", "computer vision", "image recognition", "ResNet"],
+        "expected_result": "Papers on deep residual networks and related computer vision architectures",
+        "expected_ai_response": "The search results include significant research on deep learning architectures for computer vision, particularly the ResNet paper (W2194775991) by Kaiming He and colleagues on 'Deep Residual Learning for Image Recognition'. This work introduced residual networks with skip connections, which solved the vanishing gradient problem in very deep networks and achieved breakthrough performance on ImageNet. ResNet architectures have become foundational in computer vision, enabling training of networks with hundreds of layers and significantly advancing the field of deep learning for image recognition tasks."
+      }
+    },
+    {
+      "id": "semantic_003",
+      "question": "Studies on gene expression analysis and quantitative methods",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W2107277218"],
+        "semantic_keywords": ["gene expression", "qPCR", "quantitative", "RNA analysis", "molecular biology"],
+        "expected_result": "Papers on quantitative gene expression analysis methods",
+        "expected_ai_response": "The search results include important work on quantitative gene expression analysis, particularly the paper by Livak and Schmittgen (W2107277218) on 'Analysis of Relative Gene Expression Data Using Real-Time Quantitative PCR'. This work describes the widely-used 2^(-ΔΔCt) method for analyzing relative gene expression data from qPCR experiments. These quantitative methods are fundamental for measuring RNA levels and understanding gene regulation in molecular biology research."
+      }
+    },
+    {
+      "id": "semantic_004",
+      "question": "Research on plasma physics and fusion technology",
+      "type": "semantic",
+      "category": "topic",
+      "expected_evidence": {
+        "paper_ids": ["W3038568908"],
+        "semantic_keywords": ["plasma physics", "fusion", "deuterium", "magnetic confinement", "tokamak"],
+        "expected_result": "Papers on plasma physics research and fusion device monitoring"
+      }
+    },
+    {
+      "id": "semantic_005",
+      "question": "Computational chemistry and density functional theory methods",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W1981368803"],
+        "semantic_keywords": ["density functional theory", "DFT", "computational chemistry", "electronic structure", "quantum mechanics"],
+        "expected_result": "Papers on DFT methods and computational quantum chemistry"
+      }
+    },
+    {
+      "id": "semantic_006",
+      "question": "Cancer epidemiology and statistical analysis research",
+      "type": "semantic",
+      "category": "topic",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["cancer epidemiology", "oncology", "statistical analysis", "population studies", "disease incidence"],
+        "expected_result": "Papers by cancer research authors like Jacques Ferlay, Ahmedin Jemal"
+      }
+    },
+    {
+      "id": "semantic_007",
+      "question": "Systematic review methodologies and meta-analysis",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["systematic review", "meta-analysis", "research methodology", "evidence synthesis", "clinical research"],
+        "expected_result": "Papers on research methodology and systematic review techniques"
+      }
+    },
+    {
+      "id": "semantic_008",
+      "question": "Biochemical assays and analytical techniques",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W1775749144", "W2128635872"],
+        "semantic_keywords": ["biochemical assay", "analytical chemistry", "spectrophotometry", "quantitative analysis", "laboratory methods"],
+        "expected_result": "Papers on biochemical measurement and analytical chemistry methods"
+      }
+    },
+    {
+      "id": "semantic_009",
+      "question": "Molecular biology techniques and cloning methods",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W2144634347"],
+        "semantic_keywords": ["molecular cloning", "recombinant DNA", "PCR", "genetic engineering", "laboratory protocols"],
+        "expected_result": "Papers on molecular biology techniques and cloning protocols"
+      }
+    },
+    {
+      "id": "semantic_010",
+      "question": "Qualitative research methods in psychology and social sciences",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W1979290264"],
+        "semantic_keywords": ["qualitative research", "thematic analysis", "psychology", "social science methodology", "interpretive research"],
+        "expected_result": "Papers on qualitative research methodologies and thematic analysis"
+      }
+    },
+    {
+      "id": "semantic_011",
+      "question": "Structural biology and protein crystallography findings",
+      "type": "semantic",
+      "category": "finding",
+      "expected_evidence": {
+        "paper_ids": ["W2100837269"],
+        "semantic_keywords": ["structural biology", "protein structure", "crystallography", "SDS-PAGE", "protein folding"],
+        "expected_result": "Papers on protein structure analysis and biochemical techniques"
+      }
+    },
+    {
+      "id": "semantic_012",
+      "question": "Bioinformatics tools and computational biology software",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W2134526812"],
+        "semantic_keywords": ["bioinformatics", "computational biology", "software tools", "genomics", "data analysis"],
+        "expected_result": "Papers on HTSeq and other bioinformatics software tools",
+        "expected_ai_response": "The search results include significant bioinformatics software contributions, particularly the HTSeq framework paper (W2134526812) by Anders, Pyl, and Huber. HTSeq is a Python framework for working with high-throughput sequencing data, providing essential tools for processing and analyzing RNA-seq, ChIP-seq, and other genomics datasets. This software has become a cornerstone tool in computational biology, enabling researchers to efficiently analyze large-scale sequencing data and extract meaningful biological insights."
+      }
+    },
+    {
+      "id": "semantic_013",
+      "question": "Radiation effects and detector technology research",
+      "type": "semantic",
+      "category": "finding",
+      "expected_evidence": {
+        "paper_ids": ["W3038568908"],
+        "semantic_keywords": ["radiation effects", "detector technology", "nuclear physics", "instrumentation", "radiation hardening"],
+        "expected_result": "Papers on radiation-resistant instrumentation and detector physics"
+      }
+    },
+    {
+      "id": "semantic_014",
+      "question": "Statistical methods for biological data analysis",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["statistical analysis", "biostatistics", "data analysis", "statistical modeling", "biological statistics"],
+        "expected_result": "Papers on statistical methods applied to biological and medical research"
+      }
+    },
+    {
+      "id": "semantic_015",
+      "question": "Medical research reporting standards and guidelines",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["research reporting", "clinical guidelines", "medical methodology", "research standards", "evidence-based medicine"],
+        "expected_result": "Papers on medical research methodology and reporting standards"
+      }
+    },
+    {
+      "id": "semantic_016",
+      "question": "Sequence analysis algorithms and bioinformatics methods",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["sequence analysis", "BLAST", "alignment algorithms", "computational genomics", "bioinformatics algorithms"],
+        "expected_result": "Papers by Stephen F. Altschul and others on sequence analysis algorithms"
+      }
+    },
+    {
+      "id": "semantic_017",
+      "question": "Materials science and condensed matter physics research",
+      "type": "semantic",
+      "category": "topic",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["materials science", "condensed matter physics", "solid state physics", "electronic properties", "computational materials"],
+        "expected_result": "Papers published in Physical Review B and related materials science journals"
+      }
+    },
+    {
+      "id": "semantic_018",
+      "question": "High-throughput sequencing data analysis methods",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W2134526812"],
+        "semantic_keywords": ["high-throughput sequencing", "RNA-seq", "genomics", "next-generation sequencing", "transcriptomics"],
+        "expected_result": "Papers on HTSeq framework and high-throughput sequencing analysis"
+      }
+    },
+    {
+      "id": "semantic_019",
+      "question": "Image processing and computer vision techniques",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W2194775991"],
+        "semantic_keywords": ["image processing", "computer vision", "pattern recognition", "machine learning", "artificial intelligence"],
+        "expected_result": "Papers on deep learning approaches to image recognition and computer vision"
+      }
+    },
+    {
+      "id": "semantic_020",
+      "question": "Protein separation and electrophoresis techniques",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W2100837269"],
+        "semantic_keywords": ["protein separation", "electrophoresis", "SDS-PAGE", "gel electrophoresis", "protein analysis"],
+        "expected_result": "Papers on protein separation techniques and gel electrophoresis methods"
+      }
+    },
+    {
+      "id": "semantic_021",
+      "question": "Epidemiological studies on disease patterns and public health",
+      "type": "semantic",
+      "category": "finding",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["epidemiology", "public health", "disease surveillance", "population health", "health statistics"],
+        "expected_result": "Papers on cancer epidemiology and global disease patterns"
+      }
+    },
+    {
+      "id": "semantic_022",
+      "question": "Laboratory protocols and experimental methodologies",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W2144634347"],
+        "semantic_keywords": ["laboratory protocols", "experimental methods", "research techniques", "laboratory manual", "scientific methodology"],
+        "expected_result": "Papers on molecular cloning protocols and laboratory methodologies"
+      }
+    },
+    {
+      "id": "semantic_023",
+      "question": "Quantum mechanical calculations and theoretical chemistry",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W1981368803"],
+        "semantic_keywords": ["quantum mechanics", "theoretical chemistry", "ab initio calculations", "electronic structure theory", "computational physics"],
+        "expected_result": "Papers on quantum mechanical methods and computational chemistry approaches"
+      }
+    },
+    {
+      "id": "semantic_024",
+      "question": "Research methodology and data analysis techniques",
+      "type": "semantic",
+      "category": "method",
+      "expected_evidence": {
+        "paper_ids": ["W1979290264"],
+        "semantic_keywords": ["research methodology", "data analysis", "qualitative methods", "mixed methods", "research design"],
+        "expected_result": "Papers on research methodologies and data analysis approaches"
+      }
+    },
+    {
+      "id": "semantic_025",
+      "question": "Plasma diagnostics and fusion device monitoring",
+      "type": "semantic",
+      "category": "finding",
+      "expected_evidence": {
+        "paper_ids": ["W3038568908"],
+        "semantic_keywords": ["plasma diagnostics", "fusion diagnostics", "magnetic confinement", "plasma monitoring", "tokamak physics"],
+        "expected_result": "Papers on plasma physics diagnostics and fusion research instrumentation"
+      }
+    }
+  ],
+  "metadata": {
+    "total_questions": 50,
+    "graph_questions": 25,
+    "semantic_questions": 25,
+    "categories": {
+      "graph": {
+        "authors": 10,
+        "citations": 7,
+        "venues": 6,
+        "metadata": 2
+      },
+      "semantic": {
+        "topic": 6,
+        "method": 15,
+        "finding": 4
+      }
+    },
+    "based_on_dataset": "enriched_openalex_papers_20260221_045518.json",
+    "created_date": "2026-02-24",
+    "description": "Mock evaluation data with 50 questions based on enriched OpenAlex academic papers data, designed to test both graph-based and semantic search capabilities"
+  }
+}

@@ -33,6 +33,11 @@ from models.entities.retrieval.SearchRequest import SearchRequest
 from pipelines.evaluation.SciMMIRBenchmarkIntegration import (
     SciMMIRResultAnalyzer
 )
+from pipelines.evaluation.MockDataEvaluator import (
+    MockDataEvaluator,
+    MockEvaluationResult,
+    MockEvaluationSummary
+)
 from models.entities.retrieval.SearchResponse import SearchResponse
 from models.entities.retrieval.HybridSearchResponse import HybridSearchResponse
 from models.entities.retrieval.RoutingStrategy import RoutingStrategy
@@ -98,6 +103,7 @@ async def root():
                 "/evaluation/attribution-fidelity": "POST - Evaluate attribution accuracy",
                 "/evaluation/verification": "POST - Run SciFact claim verification",
                 "/evaluation/regression-test": "POST - Run performance regression testing",
+                "/evaluation/mock-data": "POST - Evaluate system on 50-question mock dataset",
                 "/evaluation/scimmir-benchmark": "POST - Run SciMMIR multi-modal benchmark evaluation"
             },
             "system": {
@@ -814,6 +820,173 @@ async def execute_custom_query(request: GraphQueryRequest, factory: ServiceFacto
 #     except Exception as e:
 #         logger.error(f"Regression test error: {e}")
 #         raise HTTPException(status_code=500, detail=f"Regression test failed: {str(e)}")
+
+
+@app.get("/evaluation/mock-data/preview")
+async def preview_mock_data():
+    """Preview the mock evaluation dataset questions."""
+    try:
+        from pipelines.evaluation.MockDataEvaluator import MockDataEvaluator
+        
+        # Create temporary evaluator just to load data
+        evaluator = MockDataEvaluator(None)  # Don't need service factory for data loading
+        questions = evaluator.load_mock_data()
+        
+        if not questions:
+            raise HTTPException(status_code=404, detail="Mock data not found")
+        
+        # Group questions by type and category
+        graph_questions = [q for q in questions if q['type'] == 'graph']
+        semantic_questions = [q for q in questions if q['type'] == 'semantic']
+        
+        # Category breakdown
+        categories = {}
+        for q in questions:
+            category = q['category']
+            if category not in categories:
+                categories[category] = []
+            categories[category].append({
+                'id': q['id'],
+                'question': q['question'],
+                'type': q['type']
+            })
+        
+        return {
+            "success": True,
+            "total_questions": len(questions),
+            "breakdown": {
+                "graph_questions": len(graph_questions),
+                "semantic_questions": len(semantic_questions)
+            },
+            "categories": {
+                category: len(questions) 
+                for category, questions in categories.items()
+            },
+            "sample_questions": {
+                "graph_sample": [
+                    {
+                        'id': q['id'],
+                        'question': q['question'],
+                        'category': q['category'],
+                        'expected_papers': q['expected_evidence'].get('paper_ids', [])
+                    }
+                    for q in graph_questions[:3]
+                ],
+                "semantic_sample": [
+                    {
+                        'id': q['id'],
+                        'question': q['question'],
+                        'category': q['category'],
+                        'expected_papers': q['expected_evidence'].get('paper_ids', [])
+                    }
+                    for q in semantic_questions[:3]
+                ]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Mock data preview error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to preview mock data: {str(e)}")
+
+
+@app.post("/evaluation/mock-data")
+async def evaluate_mock_data(
+        limit_questions: int = None,
+        save_results: bool = True,
+        factory: ServiceFactory = Depends(get_services)
+):
+    """Evaluate system performance on mock evaluation dataset.
+    
+    This endpoint runs evaluation on the 50-question mock dataset covering:
+    - 25 graph questions (authors, citations, venues)
+    - 25 semantic questions (topics, methods, findings)
+    
+    Args:
+        limit_questions: Limit number of questions to evaluate (default: all 50)
+        save_results: Save detailed results and report to files
+    """
+    try:
+        logger.info("Starting mock data evaluation")
+        start_time = datetime.now()
+        
+        # Initialize evaluator
+        evaluator = MockDataEvaluator(factory)
+        
+        # Run evaluation
+        results = evaluator.run_evaluation(limit=limit_questions)
+        
+        if not results:
+            raise HTTPException(status_code=500, detail="No evaluation results generated")
+        
+        # Generate summary
+        summary = evaluator.generate_summary(results)
+        
+        # Save results if requested
+        saved_files = {}
+        if save_results:
+            saved_files = evaluator.save_results(results, summary)
+            logger.info(f"Saved results to: {saved_files}")
+        
+        # Generate report
+        report = evaluator.generate_detailed_report(results, summary)
+        
+        evaluation_time = (datetime.now() - start_time).total_seconds()
+        
+        # Prepare detailed results for API response
+        detailed_results = []
+        for result in results[:10]:  # Limit to first 10 for API response
+            detailed_results.append({
+                "question_id": result.question_id,
+                "question": result.question,
+                "type": result.question_type,
+                "category": result.category,
+                "success": result.success,
+                "response_time": result.response_time,
+                "retrieved_count": len(result.retrieved_papers),
+                "expected_count": len(result.expected_papers),
+                "precision": result.precision,
+                "recall": result.recall,
+                "f1_score": result.f1_score,
+                "ai_response": result.ai_response[:200] + "..." if result.ai_response and len(result.ai_response) > 200 else result.ai_response,
+                "ai_response_similarity": result.ai_response_similarity,
+                "ai_generation_time": result.ai_generation_time,
+                "error": result.error_message
+            })
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "evaluation_time": evaluation_time,
+            "summary": {
+                "total_questions": summary.total_questions,
+                "successful_questions": summary.successful_questions,
+                "failed_questions": summary.failed_questions,
+                "success_rate": summary.successful_questions / summary.total_questions * 100,
+                "avg_response_time": summary.avg_response_time,
+                "overall_metrics": {
+                    "precision": summary.overall_precision,
+                    "recall": summary.overall_recall,
+                    "f1_score": summary.overall_f1
+                },
+                "ai_response_metrics": {
+                    "success_rate": summary.ai_response_success_rate * 100,
+                    "avg_generation_time": summary.avg_ai_generation_time,
+                    "avg_similarity_score": summary.avg_ai_response_similarity
+                }
+            },
+            "performance_by_type": {
+                "graph": summary.graph_performance,
+                "semantic": summary.semantic_performance
+            },
+            "category_breakdown": summary.category_breakdown,
+            "sample_results": detailed_results,
+            "report_preview": report[:1000] + "..." if len(report) > 1000 else report,
+            "saved_files": saved_files
+        }
+        
+    except Exception as e:
+        logger.error(f"Mock data evaluation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Mock evaluation failed: {str(e)}")
 
 
 @app.post("/evaluation/scimmir-benchmark")
