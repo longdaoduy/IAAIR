@@ -7,7 +7,7 @@
       "category": "authors",
       "expected_evidence": {
         "paper_ids": ["W1775749144"],
-        "cypher_query": "MATCH (p:Paper {id: 'W1775749144'})-[:AUTHORED_BY]->(a:Author) RETURN a.name",
+        "cypher_query": "MATCH (p:Paper {id: 'W1775749144'})-[:AUTHORED]->(a:Author) RETURN a.name",
         "expected_result": ["OliverH. Lowry", "NiraJ. Rosebrough", "A. Farr", "RoseJ. Randall"],
         "expected_ai_response": "The paper W1775749144 is authored by four researchers: OliverH. Lowry, NiraJ. Rosebrough, A. Farr, and RoseJ. Randall. This is the famous paper on protein measurement with the Folin phenol reagent, a widely cited work in analytical biochemistry."
       }
@@ -19,7 +19,7 @@
       "category": "authors",
       "expected_evidence": {
         "paper_ids": ["W2194775991"],
-        "cypher_query": "MATCH (a:Author {name: 'Kaiming He'})<-[:AUTHORED_BY]-(p:Paper) RETURN p.id, p.title",
+        "cypher_query": "MATCH (a:Author {name: 'Kaiming He'})<-[:AUTHORED]-(p:Paper) RETURN p.id, p.title",
         "expected_result": [{"id": "W2194775991", "title": "Deep Residual Learning for Image Recognition"}]
       }
     },
@@ -76,7 +76,7 @@
       "category": "authors",
       "expected_evidence": {
         "paper_ids": [],
-        "cypher_query": "MATCH (a1:Author {name: 'Georg Kresse'})<-[:AUTHORED_BY]-(p:Paper)-[:AUTHORED_BY]->(a2:Author) WHERE a1 <> a2 RETURN DISTINCT a2.name",
+        "cypher_query": "MATCH (a1:Author {name: 'Georg Kresse'})<-[:AUTHORED]-(p:Paper)-[:AUTHORED]->(a2:Author) WHERE a1 <> a2 RETURN DISTINCT a2.name",
         "expected_result": ["J. Furthmüller", "Others"]
       }
     },
@@ -109,7 +109,7 @@
       "category": "authors",
       "expected_evidence": {
         "paper_ids": [],
-        "cypher_query": "MATCH (a:Author)<-[:AUTHORED_BY]-(p:Paper) WITH a, count(p) as paper_count WHERE paper_count > 2 RETURN a.name, paper_count",
+        "cypher_query": "MATCH (a:Author)<-[:AUTHORED]-(p:Paper) WITH a, count(p) as paper_count WHERE paper_count > 2 RETURN a.name, paper_count",
         "expected_result": ["Georg Kresse", "Jacques Ferlay", "Ahmedin Jemal", "Freddie Bray"]
       }
     },
@@ -120,7 +120,7 @@
       "category": "authors",
       "expected_evidence": {
         "paper_ids": ["W2194775991"],
-        "cypher_query": "MATCH (a1:Author {name: 'Kaiming He'})<-[:AUTHORED_BY]-(p:Paper)-[:AUTHORED_BY]->(a2:Author {name: 'Jian Sun'}) RETURN p.id, p.title",
+        "cypher_query": "MATCH (a1:Author {name: 'Kaiming He'})<-[:AUTHORED]-(p:Paper)-[:AUTHORED]->(a2:Author {name: 'Jian Sun'}) RETURN p.id, p.title",
         "expected_result": [{"id": "W2194775991", "title": "Deep Residual Learning for Image Recognition"}]
       }
     },
@@ -142,7 +142,7 @@
       "category": "venues",
       "expected_evidence": {
         "paper_ids": [],
-        "cypher_query": "MATCH (a:Author {name: 'David Moher'})<-[:AUTHORED_BY]-(p:Paper)-[:PUBLISHED_IN]->(v:Venue) RETURN DISTINCT v.name",
+        "cypher_query": "MATCH (a:Author {name: 'David Moher'})<-[:AUTHORED]-(p:Paper)-[:PUBLISHED_IN]->(v:Venue) RETURN DISTINCT v.name",
         "expected_result": ["BMJ", "Other venues"]
       }
     },
@@ -208,7 +208,7 @@
       "category": "authors",
       "expected_evidence": {
         "paper_ids": [],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED_BY]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WITH p, count(DISTINCT i) as inst_count RETURN p.id, p.title, inst_count ORDER BY inst_count DESC LIMIT 1",
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WITH p, count(DISTINCT i) as inst_count RETURN p.id, p.title, inst_count ORDER BY inst_count DESC LIMIT 1",
         "expected_result": "Paper with highest institutional diversity"
       }
     },
@@ -230,7 +230,7 @@
       "category": "authors",
       "expected_evidence": {
         "paper_ids": [],
-        "cypher_query": "MATCH (a1:Author {name: 'Georg Kresse'})<-[:AUTHORED_BY]-(p:Paper)-[:AUTHORED_BY]->(a2:Author {name: 'J. Furthmüller'}) RETURN p.id, p.title",
+        "cypher_query": "MATCH (a1:Author {name: 'Georg Kresse'})<-[:AUTHORED]-(p:Paper)-[:AUTHORED]->(a2:Author {name: 'J. Furthmüller'}) RETURN p.id, p.title",
         "expected_result": "Collaborative papers in computational physics"
       }
     },
@@ -274,7 +274,7 @@
       "category": "authors",
       "expected_evidence": {
         "paper_ids": [],
-        "cypher_query": "MATCH (a1:Author {name: 'Stephen F. Altschul'})<-[:AUTHORED_BY]-(p:Paper)-[:AUTHORED_BY]->(a2:Author) WHERE a1 <> a2 RETURN count(DISTINCT a2)",
+        "cypher_query": "MATCH (a1:Author {name: 'Stephen F. Altschul'})<-[:AUTHORED]-(p:Paper)-[:AUTHORED]->(a2:Author) WHERE a1 <> a2 RETURN count(DISTINCT a2)",
         "expected_result": "Number of unique collaborators"
       }
     },
