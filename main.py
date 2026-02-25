@@ -434,23 +434,8 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             # Graph search first, then vector similarity
             graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k * 2)
 
-            # Check if this is a specific paper ID query BEFORE checking if graph_results exist
-            if factory.retrieval_handler._is_paper_id_query(request.query):
-                # For paper ID queries, return only the graph results, no vector search
-                logger.info("Paper ID query detected - using only graph search results")
-                vector_results = []
-                if graph_results:
-                    graph_results = graph_results[:1]  # Limit to single exact match
-                    logger.info(
-                        f"GRAPH_FIRST paper ID: graph_results count: {len(graph_results)}, vector_results count: {len(vector_results)}")
-                else:
-                    logger.warning("Graph search returned no results for paper ID query")
-            elif graph_results and not factory.retrieval_handler._is_paper_id_query(request.query):
-                # Use graph results to inform vector search for general queries
-                paper_ids = [r.get('paper_id', r.get('id')) for r in graph_results[:request.top_k]]
-                vector_results = await factory.retrieval_handler._execute_vector_refinement(paper_ids, request.query)
-            else:
-                vector_results = []
+            logger.info("Paper ID query detected - using only graph search results")
+            vector_results = []
 
         elif routing_strategy == RoutingStrategy.PARALLEL:
             logger.info('Parallel')
@@ -723,7 +708,7 @@ async def execute_custom_query(request: GraphQueryRequest, factory: ServiceFacto
 #         # Initialize verification pipeline
 #         verification_pipeline = SciFractVerificationPipeline(
 #             retrieval_client=factory.retrieval_handler,
-#             llm_client=factory.deepseek_client
+#             ai_agent=factory.deepseek_client
 #         )
 #
 #         from pipelines.evaluation.SciFractVerificationPipeline import (

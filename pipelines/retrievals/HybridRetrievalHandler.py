@@ -22,12 +22,12 @@ class HybridRetrievalHandler:
     """Unified handler for vector and graph-based retrieval operations."""
 
     def __init__(self, vector_db: Optional[MilvusClient], graph_db: GraphQueryHandler,
-                 llm_client: Optional[DeepseekClient],
+                 ai_agent: Optional[DeepseekClient],
                  embedder: SciBERTClient):
         self.milvus_client = vector_db
         self.embedding_client = embedder
         self.graph_handler = graph_db
-        self.llm_client = llm_client
+        self.ai_agent = ai_agent
 
     async def execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
         """Execute vector search."""
@@ -113,6 +113,143 @@ class HybridRetrievalHandler:
         return (paper_id_pattern.search(query) or
                 any(pattern.search(query) for pattern in author_patterns))
 
+    def _extract_author_names(self, query: str) -> List[str]:
+        """Extract author names from query text using AI agent for better accuracy."""
+        try:
+            # First try AI-powered extraction if available
+            if self.ai_agent:
+                ai_extracted_names = self._ai_extract_author_names(query)
+                if ai_extracted_names:
+                    return ai_extracted_names
+        except Exception as e:
+            logger.warning(f"AI author extraction failed, falling back to regex: {e}")
+        
+        # Fallback to regex-based extraction
+        return self._regex_extract_author_names(query)
+
+    def _ai_extract_author_names(self, query: str) -> List[str]:
+        """Use AI agent to extract author names from query text."""
+        prompt = f"""
+Extract author names from the following query. Return only the author names, one per line, with no additional text.
+
+Query: "{query}"
+
+Rules:
+1. Extract only proper names that appear to be human authors
+2. Include full names when available (First Last, First Middle Last)
+3. Handle variations like "papers by John Smith", "authored by Mary Johnson and Bob Wilson"
+4. Return each name on a separate line
+5. If no author names are found, return "NONE"
+6. Remove any quotes or extra formatting
+
+Author names:
+"""
+
+        try:
+            response = self.ai_agent.generate_content(prompt=prompt)
+            if not response or response.strip().upper() == "NONE":
+                return []
+
+            # Parse the AI response
+            names = []
+            lines = response.strip().split('\n')
+            for line in lines:
+                name = line.strip()
+                # Clean up any numbering or bullet points
+                name = re.sub(r'^\d+\.\s*', '', name)
+                name = re.sub(r'^[-*•]\s*', '', name)
+                name = name.strip('"\'')
+                
+                # Validate name format (at least 2 words, proper capitalization)
+                if (len(name.split()) >= 2 and 
+                    any(c.isupper() for c in name) and
+                    not name.lower() in ['no author', 'none', 'not found']):
+                    names.append(name)
+
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_names = []
+            for name in names:
+                name_clean = name.lower().strip()
+                if name_clean not in seen:
+                    seen.add(name_clean)
+                    unique_names.append(name)
+
+            return unique_names
+
+        except Exception as e:
+            logger.error(f"Error in AI author extraction: {e}")
+            return []
+
+    def _regex_extract_author_names(self, query: str) -> List[str]:
+        """Fallback regex-based author name extraction."""
+        author_names = []
+
+        # Pattern 1: "papers by John Smith"
+        author_patterns = [
+            r'papers?\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)',
+            r'authored?\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)',
+            r'written\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)',
+            r'authors?\s+(["\']?)([^"\']+?)\1(?:\s|and\s+)',
+            r'co-?authored?\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)'
+        ]
+
+        for pattern in author_patterns:
+            matches = re.finditer(pattern, query, re.IGNORECASE)
+            for match in matches:
+                name = match.group(2).strip()
+                if len(name.split()) >= 2:  # At least first and last name
+                    author_names.append(name)
+
+        # Pattern 2: "John Smith and Mary Johnson"
+        and_pattern = r'([A-Z][a-z]+\s+[A-Z][a-z]+)(?:\s+and\s+([A-Z][a-z]+\s+[A-Z][a-z]+))*'
+        and_matches = re.findall(and_pattern, query)
+        for match_group in and_matches:
+            for name in match_group:
+                if name and len(name.split()) >= 2:
+                    author_names.append(name.strip())
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_names = []
+        for name in author_names:
+            name_clean = name.lower().strip()
+            if name_clean not in seen:
+                seen.add(name_clean)
+                unique_names.append(name)
+
+        return unique_names
+
+    def _extract_keywords(self, query: str) -> List[str]:
+        """Extract meaningful keywords from query text."""
+        # Remove common stop words and query patterns
+        stop_words = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
+            'by', 'about', 'papers', 'paper', 'research', 'study', 'studies', 'find', 'search',
+            'what', 'where', 'when', 'who', 'how', 'why', 'which', 'is', 'are', 'was', 'were',
+            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
+            'related', 'concerning', 'regarding', 'involving'
+        }
+
+        # Clean and tokenize
+        clean_query = re.sub(r'[^\w\s]', ' ', query.lower())
+        words = clean_query.split()
+
+        # Filter meaningful keywords
+        keywords = []
+        for word in words:
+            if (len(word) > 2 and
+                    word not in stop_words and
+                    not word.isdigit() and
+                    not re.match(r'^w\d+$', word)):  # Not paper IDs
+                keywords.append(word)
+
+        # Add the original query as a keyword for exact matches
+        if query.strip():
+            keywords.append(query.strip())
+
+        return list(set(keywords))  # Remove duplicates
+
     def _is_paper_id_query(self, query: str) -> bool:
         """Check if this query contains a specific paper ID"""
         # Enhanced pattern to match various paper ID formats and contexts
@@ -120,84 +257,198 @@ class HybridRetrievalHandler:
         return bool(paper_id_pattern.search(query))
 
     def _build_intelligent_cypher_query(self, query: str, top_k: int) -> tuple:
-        """Build Cypher query based on intelligent query analysis."""
+        """Build Cypher query based on intelligent query analysis with support for multiple entities."""
         query_lower = query.lower()
 
-        # Pattern 1: "who is the author of paper have id = W2036113194"
-        paper_id_match = re.search(
-            r'(id\s*=\s*|with\s+id\s+|have\s+id\s+|paper\s+id\s+)(["\'?])(W\d+|DOI:[^\s]+|doi:[^\s]+)(\2)', query,
-            re.IGNORECASE)
-        if paper_id_match and any(word in query_lower for word in ['author', 'wrote', 'written']):
-            paper_id = paper_id_match.group(3)
-            cypher_query = """
-            MATCH (p:Paper {id: $paper_id})
-            OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                   p.doi as doi, p.publication_date as publication_date,
-                   collect(DISTINCT a.name) as authors,
-                   v.name as venue
-            """
-            return cypher_query, {"paper_id": paper_id}
+        # Extract multiple paper IDs from query
+        paper_ids = re.findall(r'\b(W\d+)\b', query)
 
-        # Pattern 2: Direct paper ID query
-        paper_id_match = re.search(r'\b(W\d+)\b', query)
-        if paper_id_match:
-            paper_id = paper_id_match.group(1)
-            cypher_query = """
-            MATCH (p:Paper {id: $paper_id})
-            OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                   p.doi as doi, p.publication_date as publication_date,
-                   collect(DISTINCT a.name) as authors,
-                   v.name as venue
-            """
-            return cypher_query, {"paper_id": paper_id}
+        # Extract multiple author names from query
+        author_names = self._extract_author_names(query)
 
-        # Pattern 3: Author name query
-        author_query_patterns = [
-            r'papers?\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)',
-            r'authored?\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)',
-            r'written\s+by\s+(["\']?)([^"\']+?)\1(?:\s|$)'
-        ]
+        # Extract DOIs
+        dois = re.findall(r'(doi:[^\s]+|DOI:[^\s]+)', query, re.IGNORECASE)
 
-        for pattern in author_query_patterns:
-            match = re.search(pattern, query, re.IGNORECASE)
-            if match:
-                author_name = match.group(2).strip()
+        # Pattern 1: Multiple paper IDs query
+        if paper_ids:
+            if any(word in query_lower for word in ['author', 'wrote', 'written']):
+                # Authors of specific papers
                 cypher_query = """
-                MATCH (a:Author)-[:AUTHORED]->(p:Paper)
-                WHERE toLower(a.name) CONTAINS toLower($author_name)
+                MATCH (p:Paper)
+                WHERE p.id IN $paper_ids
+                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
                 OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
                 RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
                        p.doi as doi, p.publication_date as publication_date,
                        collect(DISTINCT a.name) as authors,
                        v.name as venue
+                ORDER BY p.id
+                """
+                return cypher_query, {"paper_ids": paper_ids}
+
+            elif any(word in query_lower for word in ['citation', 'cite', 'cited']):
+                # Citation information for papers
+                cypher_query = """
+                MATCH (p:Paper)
+                WHERE p.id IN $paper_ids
+                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+                OPTIONAL MATCH (p)-[:CITES]->(cited:Paper)
+                OPTIONAL MATCH (citing:Paper)-[:CITES]->(p)
+                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+                       p.doi as doi, p.publication_date as publication_date,
+                       collect(DISTINCT a.name) as authors,
+                       v.name as venue,
+                       count(DISTINCT cited) as citations_made,
+                       count(DISTINCT citing) as citations_received
+                ORDER BY p.id
+                """
+                return cypher_query, {"paper_ids": paper_ids}
+
+            else:
+                # General paper information
+                cypher_query = """
+                MATCH (p:Paper)
+                WHERE p.id IN $paper_ids
+                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+                       p.doi as doi, p.publication_date as publication_date,
+                       collect(DISTINCT a.name) as authors,
+                       v.name as venue
+                ORDER BY p.id
+                """
+                return cypher_query, {"paper_ids": paper_ids}
+
+        # Pattern 2: Multiple author names query
+        if author_names:
+            if any(word in query_lower for word in ['collaboration', 'coauthor', 'co-author', 'together']):
+                # Collaboration between authors
+                logger.info("author_names: {}".format(author_names))
+                cypher_query = """
+                MATCH (a1:Author)-[:AUTHORED]->(p:Paper)<-[:AUTHORED]-(a2:Author)
+                WHERE any(name IN $author_names WHERE toLower(a1.name) CONTAINS toLower(name))
+                  AND any(name IN $author_names WHERE toLower(a2.name) CONTAINS toLower(name))
+                  AND a1 <> a2
+                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+                       p.doi as doi, p.publication_date as publication_date,
+                       collect(DISTINCT a1.name + ', ' + a2.name) as collaboration_authors,
+                       v.name as venue,
+                       collect(DISTINCT a.name) as authors,
                 LIMIT $limit
                 """
-                return cypher_query, {"author_name": author_name, "limit": top_k}
+                return cypher_query, {"author_names": author_names, "limit": top_k}
 
-        # Pattern 4: Citation-based queries
-        if any(word in query_lower for word in ['cited', 'citations', 'references']):
+            else:
+                # Papers by multiple authors (OR condition)
+                cypher_query = """
+                MATCH (a:Author)-[:AUTHORED]->(p:Paper)
+                WHERE any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))
+                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+                OPTIONAL MATCH (all_authors:Author)-[:AUTHORED]->(p)
+                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+                       p.doi as doi, p.publication_date as publication_date,
+                       collect(DISTINCT all_authors.name) as authors,
+                       v.name as venue
+                LIMIT $limit
+                """
+                return cypher_query, {"author_names": author_names, "limit": top_k}
+
+        # Pattern 3: DOI-based queries
+        if dois:
+            cypher_query = """
+            MATCH (p:Paper)
+            WHERE any(doi IN $dois WHERE p.doi CONTAINS doi)
+            OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+                   p.doi as doi, p.publication_date as publication_date,
+                   collect(DISTINCT a.name) as authors,
+                   v.name as venue
+            ORDER BY p.doi
+            """
+            return cypher_query, {"dois": dois}
+
+        # Pattern 4: Venue-based queries
+        venue_patterns = [
+            r'published\s+in\s+(["\']?)([^"\']+?)\1',
+            r'from\s+journal\s+(["\']?)([^"\']+?)\1',
+            r'in\s+(["\']?)([A-Z][^"\']*(?:journal|review|proceedings|conference)[^"\']*?)\1'
+        ]
+
+        venues = []
+        for pattern in venue_patterns:
+            matches = re.findall(pattern, query, re.IGNORECASE)
+            venues.extend([match[1].strip() for match in matches])
+
+        if venues:
+            cypher_query = """
+            MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue)
+            WHERE any(venue IN $venues WHERE toLower(v.name) CONTAINS toLower(venue))
+            OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+                   p.doi as doi, p.publication_date as publication_date,
+                   collect(DISTINCT a.name) as authors,
+                   v.name as venue
+            LIMIT $limit
+            """
+            return cypher_query, {"venues": venues, "limit": top_k}
+
+        # Pattern 5: Citation count queries
+        if any(word in query_lower for word in ['most cited', 'highest citation', 'citation count']):
             cypher_query = """
             MATCH (p:Paper)
             WHERE p.title CONTAINS $query OR p.abstract CONTAINS $query
             OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
             OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-            OPTIONAL MATCH (p)-[:CITES]->(cited:Paper)
-            WITH p, collect(DISTINCT a.name) as authors, v, count(cited) as citations_made
+            OPTIONAL MATCH (citing:Paper)-[:CITES]->(p)
             RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
                    p.doi as doi, p.publication_date as publication_date,
-                   authors, v.name as venue, citations_made
+                   collect(DISTINCT a.name) as authors,
+                   v.name as venue,
+                   count(DISTINCT citing) as citation_count
+            ORDER BY citation_count DESC
             LIMIT $limit
             """
             return cypher_query, {"query": query, "limit": top_k}
 
-        # Default: Generic text search with improved author retrievals
+        # Pattern 6: Institution/affiliation queries
+        institution_patterns = [
+            r'from\s+(["\']?)([^"\']*(?:university|institute|laboratory|lab|college|school)[^"\']*?)\1',
+            r'at\s+(["\']?)([^"\']*(?:university|institute|laboratory|lab|college|school)[^"\']*?)\1'
+        ]
+
+        institutions = []
+        for pattern in institution_patterns:
+            matches = re.findall(pattern, query, re.IGNORECASE)
+            institutions.extend([match[1].strip() for match in matches])
+
+        if institutions:
+            cypher_query = """
+            MATCH (a:Author)-[:AFFILIATED_WITH]->(i:Institution)
+            WHERE any(inst IN $institutions WHERE toLower(i.name) CONTAINS toLower(inst))
+            MATCH (a)-[:AUTHORED]->(p:Paper)
+            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+                   p.doi as doi, p.publication_date as publication_date,
+                   collect(DISTINCT a.name) as authors,
+                   v.name as venue,
+                   collect(DISTINCT i.name) as institutions
+            LIMIT $limit
+            """
+            return cypher_query, {"institutions": institutions, "limit": top_k}
+
+        # Default: Enhanced text search with multiple keyword support
+        keywords = self._extract_keywords(query)
         cypher_query = """
         MATCH (p:Paper)
-        WHERE p.title CONTAINS $query OR p.abstract CONTAINS $query
+        WHERE any(keyword IN $keywords WHERE 
+                  p.title CONTAINS keyword OR 
+                  p.abstract CONTAINS keyword OR
+                  toLower(p.title) CONTAINS toLower(keyword) OR
+                  toLower(p.abstract) CONTAINS toLower(keyword))
         OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
         OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
         RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
@@ -206,7 +457,7 @@ class HybridRetrievalHandler:
                v.name as venue
         LIMIT $limit
         """
-        return cypher_query, {"query": query, "limit": top_k}
+        return cypher_query, {"keywords": keywords, "limit": top_k}
 
     async def _execute_graph_refinement(self, paper_ids: List[str], query: str, top_k: int) -> List[Dict]:
         """Refine vector results using graph relationships."""
@@ -272,7 +523,7 @@ class HybridRetrievalHandler:
         """Generate AI response using Llama based on search results from vector and graph searches."""
         try:
             # Use the routing engine's Llama model for response generation
-            if not self.llm_client:
+            if not self.ai_agent:
                 logger.info("Llama not available for response generation")
                 return None
 
@@ -355,7 +606,7 @@ Instructions:
 Answer:"""
 
             # Generate response using Llama
-            ai_answer = self.llm_client.generate_content(
+            ai_answer = self.ai_agent.generate_content(
                 prompt=prompt
             )
 

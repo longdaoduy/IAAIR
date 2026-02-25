@@ -99,16 +99,27 @@ class MockDataEvaluator:
                 cypher_query = expected_evidence['cypher_query']
                 
                 # Use graph query handler to execute the query
-                result = self.service_factory.query_handler.execute_query(cypher_query)
+                result = self.service_factory.query_handler.execute_cypher_query(cypher_query)
                 
                 # Extract paper IDs from result if available
                 retrieved_papers = []
                 if result and 'data' in result:
                     for record in result['data']:
                         # Try to find paper IDs in the record
-                        for value in record.values():
-                            if isinstance(value, str) and value.startswith('W'):
+                        for key, value in record.items():
+                            if key in ['paper_id', 'id'] and isinstance(value, str) and value.startswith('W'):
                                 retrieved_papers.append(value)
+                            elif isinstance(value, str) and value.startswith('W'):
+                                retrieved_papers.append(value)
+                
+                # Remove duplicates while preserving order
+                seen = set()
+                unique_papers = []
+                for paper_id in retrieved_papers:
+                    if paper_id not in seen:
+                        seen.add(paper_id)
+                        unique_papers.append(paper_id)
+                retrieved_papers = unique_papers
                 
                 # Calculate metrics
                 precision, recall, f1 = self._calculate_metrics(retrieved_papers, expected_papers)
