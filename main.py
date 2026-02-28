@@ -578,14 +578,14 @@ async def preview_mock_data():
         # Create temporary evaluator just to load data
         evaluator = MockDataEvaluator(None)  # Don't need service factory for data loading
         questions = evaluator.load_mock_data()
-        
+
         if not questions:
             raise HTTPException(status_code=404, detail="Mock data not found")
-        
+
         # Group questions by type and category
         graph_questions = [q for q in questions if q['type'] == 'graph']
         semantic_questions = [q for q in questions if q['type'] == 'semantic']
-        
+
         # Category breakdown
         categories = {}
         for q in questions:
@@ -597,7 +597,7 @@ async def preview_mock_data():
                 'question': q['question'],
                 'type': q['type']
             })
-        
+
         return {
             "success": True,
             "total_questions": len(questions),
@@ -606,7 +606,7 @@ async def preview_mock_data():
                 "semantic_questions": len(semantic_questions)
             },
             "categories": {
-                category: len(questions) 
+                category: len(questions)
                 for category, questions in categories.items()
             },
             "sample_questions": {
@@ -630,7 +630,7 @@ async def preview_mock_data():
                 ]
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Mock data preview error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to preview mock data: {str(e)}")
@@ -643,11 +643,11 @@ async def evaluate_mock_data(
         factory: ServiceFactory = Depends(get_services)
 ):
     """Evaluate system performance on mock evaluation dataset.
-    
+
     This endpoint runs evaluation on the 50-question mock dataset covering:
     - 25 graph questions (authors, citations, venues)
     - 25 semantic questions (topics, methods, findings)
-    
+
     Args:
         limit_questions: Limit number of questions to evaluate (default: all 50)
         save_results: Save detailed results and report to files
@@ -655,30 +655,30 @@ async def evaluate_mock_data(
     try:
         logger.info("Starting mock data evaluation")
         start_time = datetime.now()
-        
+
         # Initialize evaluator
         evaluator = MockDataEvaluator(factory)
-        
+
         # Run evaluation
         results = evaluator.run_evaluation(limit=limit_questions)
-        
+
         if not results:
             raise HTTPException(status_code=500, detail="No evaluation results generated")
-        
+
         # Generate summary
         summary = evaluator.generate_summary(results)
-        
+
         # Save results if requested
         saved_files = {}
         if save_results:
             saved_files = evaluator.save_results(results, summary)
             logger.info(f"Saved results to: {saved_files}")
-        
+
         # Generate report
         report = evaluator.generate_detailed_report(results, summary)
-        
+
         evaluation_time = (datetime.now() - start_time).total_seconds()
-        
+
         # Prepare detailed results for API response
         detailed_results = []
         for result in results[:10]:  # Limit to first 10 for API response
@@ -694,12 +694,13 @@ async def evaluate_mock_data(
                 "precision": result.precision,
                 "recall": result.recall,
                 "f1_score": result.f1_score,
-                "ai_response": result.ai_response[:200] + "..." if result.ai_response and len(result.ai_response) > 200 else result.ai_response,
+                "ai_response": result.ai_response[:200] + "..." if result.ai_response and len(
+                    result.ai_response) > 200 else result.ai_response,
                 "ai_response_similarity": result.ai_response_similarity,
                 "ai_generation_time": result.ai_generation_time,
                 "error": result.error_message
             })
-        
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -730,10 +731,245 @@ async def evaluate_mock_data(
             "report_preview": report[:1000] + "..." if len(report) > 1000 else report,
             "saved_files": saved_files
         }
-        
+
     except Exception as e:
         logger.error(f"Mock data evaluation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Mock evaluation failed: {str(e)}")
+
+
+@app.post("/evaluation/comprehensive")
+async def run_comprehensive_evaluation(version: str = "current", factory: ServiceFactory = Depends(get_services)):
+    """Run comprehensive evaluation across all dimensions."""
+    try:
+        logger.info(f"Starting comprehensive evaluation for version {version}")
+
+        # Initialize evaluation suite
+        eval_suite = ComprehensiveEvaluationSuite(factory)
+
+        # Run full evaluation
+        results = eval_suite.run_full_evaluation(version)
+
+        # Generate report
+        report = eval_suite.generate_evaluation_report(results)
+
+        return {
+            "success": True,
+            "version": version,
+            "timestamp": datetime.now().isoformat(),
+            "results": results,
+            "report": report,
+            "overall_score": results.get('overall_score', 0.0)
+        }
+
+    except Exception as e:
+        logger.error(f"Comprehensive evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
+
+@app.post("/evaluation/retrieval-quality")
+async def evaluate_retrieval_quality(factory: ServiceFactory = Depends(get_services)):
+    """Evaluate retrieval quality using nDCG@k and other metrics."""
+    try:
+        logger.info("Starting retrieval quality evaluation")
+
+        # Initialize components
+        evaluator = RetrievalEvaluator()
+        benchmark_loader = ScientificBenchmarkLoader()
+        benchmarks = benchmark_loader.load_default_benchmarks()
+
+        # Define retrieval function
+        def retrieval_function(query_text: str):
+            return factory.retrieval_handler.search_similar_papers(
+                query_text=query_text,
+                top_k=20,
+                use_hybrid=True
+            )
+
+        # Run evaluation
+        results = evaluator.evaluate_benchmark_suite(benchmarks, retrieval_function)
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "metrics": {
+                "avg_ndcg_at_10": results.avg_ndcg_at_10,
+                "avg_ndcg_at_5": results.avg_ndcg_at_5,
+                "avg_mrr": results.avg_mrr,
+                "avg_precision_at_10": results.avg_precision_at_10,
+                "avg_recall_at_10": results.avg_recall_at_10
+            },
+            "by_query_type": results.by_query_type,
+            "by_domain": results.by_domain,
+            "total_queries": results.total_queries
+        }
+
+    except Exception as e:
+        logger.error(f"Retrieval evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Retrieval evaluation failed: {str(e)}")
+
+
+@app.post("/evaluation/attribution-fidelity")
+async def evaluate_attribution_fidelity(factory: ServiceFactory = Depends(get_services)):
+    """Evaluate attribution fidelity and exact span matching."""
+    try:
+        logger.info("Starting attribution fidelity evaluation")
+
+        # Initialize components
+        evaluator = AttributionFidelityEvaluator()
+        from pipelines.evaluation.AttributionFidelityEvaluator import AttributionBenchmarkLoader
+        benchmark_loader = AttributionBenchmarkLoader()
+        benchmarks = benchmark_loader.load_default_attribution_benchmarks()
+
+        # Generate search results with attributions
+        search_results = []
+        for benchmark in benchmarks:
+            results = factory.retrieval_handler.search_similar_papers(
+                query_text=benchmark.query_text,
+                top_k=10,
+                use_hybrid=True
+            )
+
+            # Add attribution tracking
+            if results:
+                results = factory.attribution_tracker.track_attributions(
+                    results, benchmark.query_text
+                )
+
+            search_results.extend(results)
+
+        # Evaluate attribution quality
+        metrics = evaluator.evaluate_attribution_quality(search_results, benchmarks)
+
+        # Generate report
+        report = evaluator.create_attribution_report(metrics)
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "metrics": {
+                "exact_span_match_rate": metrics.exact_span_match_rate,
+                "partial_span_match_rate": metrics.partial_span_match_rate,
+                "citation_coverage": metrics.citation_coverage,
+                "wrong_source_rate": metrics.wrong_source_rate,
+                "attribution_precision": metrics.attribution_precision,
+                "attribution_recall": metrics.attribution_recall,
+                "average_confidence": metrics.average_confidence,
+                "high_confidence_rate": metrics.high_confidence_rate
+            },
+            "report": report
+        }
+
+    except Exception as e:
+        logger.error(f"Attribution evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Attribution evaluation failed: {str(e)}")
+
+
+@app.post("/evaluation/verification")
+async def evaluate_verification(factory: ServiceFactory = Depends(get_services)):
+    """Run SciFact-style claim verification evaluation."""
+    try:
+        logger.info("Starting scientific claim verification evaluation")
+
+        # Initialize verification pipeline
+        verification_pipeline = SciFractVerificationPipeline(
+            retrieval_client=factory.retrieval_handler,
+            llm_client=factory.deepseek_client
+        )
+
+        from pipelines.evaluation.SciFractVerificationPipeline import (
+            create_verification_benchmarks,
+            VerificationEvaluator
+        )
+
+        # Load benchmarks
+        benchmarks = create_verification_benchmarks()
+
+        # Run verification on each benchmark
+        verification_results = []
+        for benchmark in benchmarks:
+            try:
+                result = verification_pipeline.verify_claim(benchmark.claim)
+                verification_results.append(result)
+            except Exception as e:
+                logger.warning(f"Error verifying claim {benchmark.claim.claim_id}: {e}")
+                continue
+
+        # Evaluate verification accuracy
+        evaluator = VerificationEvaluator()
+        metrics = evaluator.evaluate_verification(verification_results, benchmarks)
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "metrics": metrics,
+            "verified_claims": len(verification_results),
+            "benchmark_claims": len(benchmarks),
+            "verification_results": [{
+                "claim_id": result.claim.claim_id,
+                "claim_text": result.claim.claim_text,
+                "predicted_label": result.final_label.value,
+                "confidence": result.confidence,
+                "evidence_count": len(result.evidence_pieces),
+                "reasoning": result.reasoning
+            } for result in verification_results]
+        }
+
+    except Exception as e:
+        logger.error(f"Verification evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Verification evaluation failed: {str(e)}")
+
+
+@app.post("/evaluation/regression-test")
+async def run_regression_test(version: str = "current", baseline: str = "latest",
+                              factory: ServiceFactory = Depends(get_services)):
+    """Run performance regression testing against baseline."""
+    try:
+        logger.info(f"Running regression test for version {version} against baseline {baseline}")
+
+        # Initialize regression tester
+        regression_tester = PerformanceRegressionTester()
+
+        # Load benchmarks for performance testing
+        benchmark_loader = ScientificBenchmarkLoader()
+        benchmarks = benchmark_loader.load_default_benchmarks()
+
+        try:
+            # Try to run regression test against existing baseline
+            result = regression_tester.run_regression_test(factory, benchmarks, baseline)
+
+            # Generate report
+            report = regression_tester.generate_regression_report(result)
+
+            return {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                "test_passed": result.passed,
+                "regressions": result.regressions,
+                "improvements": result.improvements,
+                "current_metrics": result.current_metrics,
+                "baseline_metrics": result.baseline_metrics,
+                "report": report
+            }
+
+        except ValueError:
+            # No baseline exists, create one
+            logger.info(f"No baseline found for {baseline}, creating new baseline")
+            baseline_result = regression_tester.capture_performance_baseline(
+                factory, benchmarks, version
+            )
+
+            return {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                "baseline_created": True,
+                "baseline_version": version,
+                "baseline_metrics": baseline_result.__dict__,
+                "message": f"Created new performance baseline for version {version}"
+            }
+
+    except Exception as e:
+        logger.error(f"Regression test error: {e}")
+        raise HTTPException(status_code=500, detail=f"Regression test failed: {str(e)}")
 
 
 @app.post("/evaluation/scimmir-benchmark")
