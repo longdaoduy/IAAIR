@@ -30,6 +30,12 @@ from models.entities.retrieval.GraphQueryRequest import GraphQueryRequest
 from models.entities.retrieval.GraphQueryResponse import GraphQueryResponse
 from models.entities.retrieval.SearchRequest import SearchRequest
 
+# Import evaluation components
+from pipelines.evaluation.ComprehensiveEvaluationSuite import ComprehensiveEvaluationSuite
+from pipelines.evaluation.RetrievalEvaluator import RetrievalEvaluator, ScientificBenchmarkLoader
+from pipelines.evaluation.AttributionFidelityEvaluator import AttributionFidelityEvaluator
+from pipelines.evaluation.SciFractVerificationPipeline import SciFractVerificationPipeline
+from pipelines.evaluation.PerformanceRegressionTester import PerformanceRegressionTester
 from pipelines.evaluation.SciMMIRBenchmarkIntegration import (
     SciMMIRResultAnalyzer
 )
@@ -416,7 +422,6 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         fusion_start = datetime.now()
 
         if routing_strategy == RoutingStrategy.VECTOR_FIRST:
-            logger.info('Vector-first')
             # Vector search first, then graph refinement
             vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k * 2)
             if vector_results:
@@ -426,7 +431,6 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
                                                                                           request.top_k)
 
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
-            logger.info('Graph-first')
             # Graph search first, then vector similarity
             graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k * 2)
 
@@ -434,7 +438,6 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             vector_results = []
 
         elif routing_strategy == RoutingStrategy.PARALLEL:
-            logger.info('Parallel')
             # Execute both searches in parallel
             vector_task = factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
             graph_task = factory.retrieval_handler.execute_graph_search(request.query, request.top_k)

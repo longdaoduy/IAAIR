@@ -32,7 +32,7 @@ class HybridRetrievalHandler:
     async def execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
         """Execute vector search."""
         try:
-            if not self.milvus_client:
+            if not self.milvus_client or not self.milvus_client.connect():
                 logger.warning("Vector search failed: Could not connect to Zilliz")
                 return []
 
@@ -63,6 +63,10 @@ class HybridRetrievalHandler:
                 self.milvus_client.collection.load()
             # Generate embedding for the query text
             query_embedding = self.embedding_client.generate_embedding(query_text)
+
+            if query_embedding is None:
+                print("❌ Failed to generate query embedding")
+                return []
 
             if use_hybrid and self.milvus_client.is_tfidf_fitted:
                 return self.milvus_client._hybrid_search(query_text, query_embedding, top_k)
