@@ -542,10 +542,6 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             
             response_generation_time = (datetime.now() - response_start).total_seconds()
 
-        # Update routing performance tracking
-        avg_relevance = sum(r.relevance_score for r in fused_results) / len(fused_results) if fused_results else 0
-        factory.routing_engine.update_performance(routing_strategy, query_type, total_time, avg_relevance)
-
         # Finish performance tracking
         factory.performance_monitor.finish_query_tracking()
 

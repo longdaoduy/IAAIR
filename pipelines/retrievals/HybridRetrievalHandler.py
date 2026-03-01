@@ -548,11 +548,15 @@ Author names:
 
             # Find related papers through citations and collaborations
             cypher_query = """
-            MATCH (seed:Paper) 
-            WHERE seed.id IN $paper_ids 
-            MATCH (related:Paper)-[:CITES*0..2]-(seed) 
-            RETURN DISTINCT related.id as paper_id, related.title as title, related.abstract as abstract, related.doi as doi, related.publication_date as publication_date, [(related)<-[:AUTHORED]-(a:Author) | a.name] as authors, [(related)-[:PUBLISHED_IN]->(v:Venue) | v.name][0] as venue 
-            LIMIT $top_k
+                MATCH (p:Paper)
+                WHERE p.id IN $paper_ids
+                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+                       p.doi as doi, p.publication_date as publication_date,
+                       collect(DISTINCT a.name) as authors,
+                       v.name as venue
+                ORDER BY p.id
             """
 
             logger.info(paper_ids)
