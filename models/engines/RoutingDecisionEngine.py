@@ -26,24 +26,152 @@ class RoutingDecisionEngine:
         self.few_shot_examples = self._load_few_shot_examples()
 
     def decide_routing(self, query: str, request: HybridSearchRequest) -> RoutingStrategy:
-        """Decide routing strategy based on query analysis using Few-Shot Learning with Llama AI."""
+        """Decide routing strategy based on query analysis with intelligent optimizations."""
+        
+        # First, check for obvious structural queries that should skip vector search entirely
+        if self._is_purely_structural_query(query):
+            logger.info("Query identified as purely structural - using graph-only routing")
+            return RoutingStrategy.GRAPH_FIRST
+        
+        # Check for obvious semantic queries that should skip graph search 
+        if self._is_purely_semantic_query(query):
+            logger.info("Query identified as purely semantic - using vector-only routing")
+            return RoutingStrategy.VECTOR_FIRST
+
+        # For complex queries, use AI-powered routing
         routing_result = self._few_shot_route_decision(query, request)
 
         if routing_result is None:
             logger.warning("Few-shot routing failed, falling back to rule-based routing")
-            # Fallback to rule-based routing
+            # Enhanced fallback with performance consideration
             query_type, confidence = self.query_classifier.classify_query(query)
-            if query_type == QueryType.STRUCTURAL:
+            
+            # Use performance history to guide decisions
+            if self._should_prefer_graph_based_on_performance(query_type):
                 return RoutingStrategy.GRAPH_FIRST
-            elif query_type == QueryType.SEMANTIC:
+            elif self._should_prefer_vector_based_on_performance(query_type):
                 return RoutingStrategy.VECTOR_FIRST
             else:
-                return RoutingStrategy.PARALLEL
+                # Only use parallel for uncertain cases to avoid dual latency
+                if confidence < 0.7:
+                    return RoutingStrategy.PARALLEL
+                elif query_type == QueryType.STRUCTURAL:
+                    return RoutingStrategy.GRAPH_FIRST
+                else:
+                    return RoutingStrategy.VECTOR_FIRST
 
         strategy, query_type, confidence = routing_result
         logger.info(
-            f"Few-shot learning selected: {strategy.value} (query_type: {query_type}, confidence: {confidence})")
+            f"AI routing selected: {strategy.value} (query_type: {query_type}, confidence: {confidence})")
         return strategy
+
+    def _is_purely_structural_query(self, query: str) -> bool:
+        """Check if query is purely structural and should skip vector search."""
+        query_lower = query.lower().strip()
+        
+        # Paper ID lookups
+        if any(pattern in query_lower for pattern in [
+            'paper id', 'paper_id', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9',
+            'doi:', 'pmid:', 'arxiv:', 'paper with id'
+        ]):
+            return True
+            
+        # Author-specific queries
+        author_patterns = [
+            'papers by ', 'author ', 'authored by ', 'written by ',
+            'publications by ', 'works by ', 'co-authored by '
+        ]
+        if any(pattern in query_lower for pattern in author_patterns):
+            return True
+            
+        # Citation queries  
+        citation_patterns = [
+            'cites paper', 'cited by', 'citations of', 'references of',
+            'citing papers', 'cited papers'
+        ]
+        if any(pattern in query_lower for pattern in citation_patterns):
+            return True
+            
+        # Venue/journal queries
+        venue_patterns = [
+            'published in ', 'journal ', 'conference ', 'venue '
+        ]
+        if any(pattern in query_lower for pattern in venue_patterns):
+            return True
+            
+        return False
+
+    def _is_purely_semantic_query(self, query: str) -> bool:
+        """Check if query is purely semantic and should skip graph search."""
+        query_lower = query.lower().strip()
+        
+        # Topic/concept queries without specific constraints
+        semantic_indicators = [
+            'about ', 'related to ', 'similar to ', 'concerning ',
+            'research on ', 'studies on ', 'papers on ',
+            'machine learning', 'deep learning', 'neural network',
+            'algorithm for', 'method for', 'approach to'
+        ]
+        
+        # Must have semantic indicators
+        has_semantic = any(indicator in query_lower for indicator in semantic_indicators)
+        
+        # Must NOT have structural constraints
+        structural_indicators = [
+            'author', 'cited by', 'published in', 'journal',
+            'conference', 'year', 'paper id', 'doi:'
+        ]
+        has_structural = any(indicator in query_lower for indicator in structural_indicators)
+        
+        return has_semantic and not has_structural
+
+    def _should_prefer_graph_based_on_performance(self, query_type: QueryType) -> bool:
+        """Check if graph search performs better for this query type."""
+        graph_key = f"{RoutingStrategy.GRAPH_FIRST}_{query_type}"
+        vector_key = f"{RoutingStrategy.VECTOR_FIRST}_{query_type}"
+        
+        if graph_key in self.performance_history and vector_key in self.performance_history:
+            graph_metrics = self.performance_history[graph_key]
+            vector_metrics = self.performance_history[vector_key]
+            
+            if (graph_metrics['latencies'] and vector_metrics['latencies'] and
+                graph_metrics['relevance_scores'] and vector_metrics['relevance_scores']):
+                
+                graph_avg_latency = sum(graph_metrics['latencies']) / len(graph_metrics['latencies'])
+                vector_avg_latency = sum(vector_metrics['latencies']) / len(vector_metrics['latencies'])
+                
+                graph_avg_relevance = sum(graph_metrics['relevance_scores']) / len(graph_metrics['relevance_scores'])
+                vector_avg_relevance = sum(vector_metrics['relevance_scores']) / len(vector_metrics['relevance_scores'])
+                
+                # Prefer graph if significantly faster or much more relevant
+                return (graph_avg_latency < vector_avg_latency * 0.7 or 
+                        graph_avg_relevance > vector_avg_relevance * 1.2)
+        
+        return False
+
+    def _should_prefer_vector_based_on_performance(self, query_type: QueryType) -> bool:
+        """Check if vector search performs better for this query type."""
+        graph_key = f"{RoutingStrategy.GRAPH_FIRST}_{query_type}"
+        vector_key = f"{RoutingStrategy.VECTOR_FIRST}_{query_type}"
+        
+        if graph_key in self.performance_history and vector_key in self.performance_history:
+            graph_metrics = self.performance_history[graph_key]
+            vector_metrics = self.performance_history[vector_key]
+            
+            if (graph_metrics['latencies'] and vector_metrics['latencies'] and
+                graph_metrics['relevance_scores'] and vector_metrics['relevance_scores']):
+                
+                graph_avg_latency = sum(graph_metrics['latencies']) / len(graph_metrics['latencies'])
+                vector_avg_latency = sum(vector_metrics['latencies']) / len(vector_metrics['latencies'])
+                
+                graph_avg_relevance = sum(graph_metrics['relevance_scores']) / len(graph_metrics['relevance_scores'])
+                vector_avg_relevance = sum(vector_metrics['relevance_scores']) / len(vector_metrics['relevance_scores'])
+                
+                # Prefer vector if significantly faster or much more relevant
+                return (vector_avg_latency < graph_avg_latency * 0.7 or 
+                        vector_avg_relevance > graph_avg_relevance * 1.2)
+        
+        return False
 
     def _few_shot_route_decision(self, query: str, request: HybridSearchRequest) -> Optional[
         Tuple[RoutingStrategy, QueryType, float]]:

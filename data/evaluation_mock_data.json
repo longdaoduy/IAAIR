@@ -556,12 +556,314 @@
         "semantic_keywords": ["plasma diagnostics", "fusion diagnostics", "magnetic confinement", "plasma monitoring", "tokamak physics"],
         "expected_result": "Papers on plasma physics diagnostics and fusion research instrumentation"
       }
+    },
+    {
+      "id": "parallel_001",
+      "question": "Find papers about protein quantification methods authored by researchers from Harvard University",
+      "type": "parallel",
+      "category": "hybrid_topic_author",
+      "expected_evidence": {
+        "paper_ids": ["W1775749144"],
+        "semantic_keywords": ["protein", "quantification", "measurement", "assay"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution {name: 'Harvard University'}) WHERE p.abstract CONTAINS 'protein' RETURN p.id, p.title",
+        "expected_result": "Papers combining biochemical methods with Harvard affiliation",
+        "expected_ai_response": "This search combines semantic analysis of protein quantification research with structural queries for Harvard-affiliated authors. The results include foundational papers like the Lowry protein assay method, which was developed by researchers with Harvard connections and has been fundamental to biochemical research."
+      }
+    },
+    {
+      "id": "parallel_002", 
+      "question": "What are the most cited deep learning papers published in Nature or Science?",
+      "type": "parallel",
+      "category": "hybrid_topic_venue",
+      "expected_evidence": {
+        "paper_ids": ["W2194775991"],
+        "semantic_keywords": ["deep learning", "neural networks", "machine learning", "artificial intelligence"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name IN ['Nature', 'Science'] AND p.citation_count > 1000 RETURN p.id, p.title ORDER BY p.citation_count DESC",
+        "expected_result": "Highly cited AI/ML papers in top-tier journals"
+      }
+    },
+    {
+      "id": "parallel_003",
+      "question": "Find computational biology papers co-authored by researchers from MIT and Stanford",
+      "type": "parallel",
+      "category": "hybrid_topic_collaboration",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["computational biology", "bioinformatics", "genomics", "systems biology"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a1:Author)-[:AFFILIATED_WITH]->(i1:Institution {name: 'MIT'}), (p)-[:AUTHORED]->(a2:Author)-[:AFFILIATED_WITH]->(i2:Institution {name: 'Stanford University'}) RETURN p.id, p.title",
+        "expected_result": "Collaborative computational biology research between top institutions"
+      }
+    },
+    {
+      "id": "parallel_004",
+      "question": "What machine learning papers have been cited more than 10,000 times since 2010?",
+      "type": "parallel", 
+      "category": "hybrid_topic_citations",
+      "expected_evidence": {
+        "paper_ids": ["W2194775991"],
+        "semantic_keywords": ["machine learning", "deep learning", "neural networks", "AI algorithms"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 10000 AND p.publication_year >= 2010 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Highly influential recent ML papers"
+      }
+    },
+    {
+      "id": "parallel_005",
+      "question": "Find CRISPR gene editing papers authored by Jennifer Doudna or Emmanuelle Charpentier",
+      "type": "parallel",
+      "category": "hybrid_topic_author",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["CRISPR", "gene editing", "Cas9", "genome engineering", "DNA editing"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author) WHERE a.name IN ['Jennifer Doudna', 'Emmanuelle Charpentier'] RETURN p.id, p.title",
+        "expected_result": "CRISPR papers by Nobel Prize winners"
+      }
+    },
+    {
+      "id": "parallel_006",
+      "question": "What are the most recent cancer immunotherapy papers published in Cell or Nature Medicine?",
+      "type": "parallel",
+      "category": "hybrid_topic_venue",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["cancer immunotherapy", "CAR-T", "checkpoint inhibitors", "immune therapy"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name IN ['Cell', 'Nature Medicine'] AND p.publication_year >= 2020 RETURN p.id, p.title ORDER BY p.publication_year DESC",
+        "expected_result": "Recent immunotherapy research in top medical journals"
+      }
+    },
+    {
+      "id": "parallel_007",
+      "question": "Find structural biology papers about membrane proteins with more than 500 citations",
+      "type": "parallel",
+      "category": "hybrid_topic_citations",
+      "expected_evidence": {
+        "paper_ids": ["W2100837269"],
+        "semantic_keywords": ["membrane proteins", "protein structure", "crystallography", "cryo-EM"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 500 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Highly cited structural biology papers on membrane proteins"
+      }
+    },
+    {
+      "id": "parallel_008",
+      "question": "What quantum computing papers have been published by IBM Research authors?",
+      "type": "parallel",
+      "category": "hybrid_topic_affiliation",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["quantum computing", "quantum algorithms", "quantum circuits", "qubit"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.name CONTAINS 'IBM' RETURN p.id, p.title",
+        "expected_result": "Quantum computing research from IBM"
+      }
+    },
+    {
+      "id": "parallel_009",
+      "question": "Find climate change papers co-authored by researchers from more than 5 countries",
+      "type": "parallel",
+      "category": "hybrid_topic_collaboration",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["climate change", "global warming", "environmental science", "carbon dioxide"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WITH p, count(DISTINCT i.country) as country_count WHERE country_count > 5 RETURN p.id, p.title, country_count",
+        "expected_result": "International collaborative climate research"
+      }
+    },
+    {
+      "id": "parallel_010",
+      "question": "What are the most cited COVID-19 papers published in The Lancet during 2020-2021?",
+      "type": "parallel", 
+      "category": "hybrid_topic_venue",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["COVID-19", "SARS-CoV-2", "coronavirus", "pandemic", "epidemiology"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue {name: 'The Lancet'}) WHERE p.publication_year IN [2020, 2021] RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "High-impact COVID research in premier medical journal"
+      }
+    },
+    {
+      "id": "parallel_011",
+      "question": "Find materials science papers about graphene authored by Andre Geim or Konstantin Novoselov",
+      "type": "parallel",
+      "category": "hybrid_topic_author",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["graphene", "2D materials", "carbon", "electronic properties"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author) WHERE a.name IN ['Andre Geim', 'Konstantin Novoselov'] RETURN p.id, p.title",
+        "expected_result": "Graphene papers by Nobel Prize winners"
+      }
+    },
+    {
+      "id": "parallel_012",
+      "question": "What neuroscience papers about memory have been published in Nature Neuroscience with >100 citations?",
+      "type": "parallel",
+      "category": "hybrid_topic_venue",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["memory", "hippocampus", "synaptic plasticity", "learning"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue {name: 'Nature Neuroscience'}) WHERE p.citation_count > 100 RETURN p.id, p.title, p.citation_count",
+        "expected_result": "Influential memory research papers"
+      }
+    },
+    {
+      "id": "parallel_013",
+      "question": "Find renewable energy papers co-authored by researchers from German and Danish institutions",
+      "type": "parallel",
+      "category": "hybrid_topic_collaboration",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["renewable energy", "wind power", "solar energy", "energy storage"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a1:Author)-[:AFFILIATED_WITH]->(i1:Institution {country: 'Germany'}), (p)-[:AUTHORED]->(a2:Author)-[:AFFILIATED_WITH]->(i2:Institution {country: 'Denmark'}) RETURN p.id, p.title",
+        "expected_result": "International renewable energy collaboration"
+      }
+    },
+    {
+      "id": "parallel_014",
+      "question": "What are the most recent papers about BERT or transformer models by Google AI authors?",
+      "type": "parallel",
+      "category": "hybrid_topic_affiliation",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["BERT", "transformer", "attention mechanism", "natural language processing"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.name CONTAINS 'Google' RETURN p.id, p.title ORDER BY p.publication_year DESC",
+        "expected_result": "Recent NLP transformer research from Google"
+      }
+    },
+    {
+      "id": "parallel_015",
+      "question": "Find drug discovery papers about protein kinase inhibitors with pharmaceutical company authors",
+      "type": "parallel",
+      "category": "hybrid_topic_affiliation",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["protein kinase", "kinase inhibitors", "drug discovery", "pharmaceutical"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.type = 'pharmaceutical' RETURN p.id, p.title",
+        "expected_result": "Industry drug discovery research"
+      }
+    },
+    {
+      "id": "parallel_016",
+      "question": "What psychology papers about depression have been cited more than 1000 times?",
+      "type": "parallel",
+      "category": "hybrid_topic_citations",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["depression", "mental health", "clinical psychology", "antidepressants"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 1000 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Highly influential depression research"
+      }
+    },
+    {
+      "id": "parallel_017",
+      "question": "Find papers about single-cell RNA sequencing authored by researchers from Broad Institute",
+      "type": "parallel",
+      "category": "hybrid_topic_affiliation",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["single-cell", "RNA sequencing", "scRNA-seq", "genomics"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution {name: 'Broad Institute'}) RETURN p.id, p.title",
+        "expected_result": "Single-cell genomics research from leading institute"
+      }
+    },
+    {
+      "id": "parallel_018",
+      "question": "What are the most cited papers about AlphaFold or protein structure prediction published since 2018?",
+      "type": "parallel",
+      "category": "hybrid_topic_citations",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["AlphaFold", "protein structure prediction", "DeepMind", "protein folding"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.publication_year >= 2018 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Revolutionary protein structure prediction papers"
+      }
+    },
+    {
+      "id": "parallel_019",
+      "question": "Find papers about lithium-ion batteries co-authored by researchers from Tesla or battery companies",
+      "type": "parallel",
+      "category": "hybrid_topic_affiliation",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["lithium-ion", "battery", "energy storage", "electrochemistry"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.name CONTAINS 'Tesla' OR i.type = 'battery_company' RETURN p.id, p.title",
+        "expected_result": "Industry battery research papers"
+      }
+    },
+    {
+      "id": "parallel_020",
+      "question": "What cancer research papers have been published in Cell with authors from MD Anderson Cancer Center?",
+      "type": "parallel",
+      "category": "hybrid_topic_venue",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["cancer", "oncology", "tumor", "chemotherapy", "radiation therapy"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue {name: 'Cell'}), (p)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution {name: 'MD Anderson Cancer Center'}) RETURN p.id, p.title",
+        "expected_result": "Cancer research from premier cancer center"
+      }
+    },
+    {
+      "id": "parallel_021",
+      "question": "Find papers about CRISPR applications in agriculture with more than 50 citations",
+      "type": "parallel",
+      "category": "hybrid_topic_citations",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["CRISPR", "agriculture", "crop improvement", "plant genetics", "gene editing"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 50 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Agricultural applications of gene editing technology"
+      }
+    },
+    {
+      "id": "parallel_022",
+      "question": "What are the most recent papers about quantum error correction authored by IBM or Google researchers?",
+      "type": "parallel",
+      "category": "hybrid_topic_affiliation",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["quantum error correction", "quantum computing", "error mitigation", "fault tolerance"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.name CONTAINS 'IBM' OR i.name CONTAINS 'Google' RETURN p.id, p.title ORDER BY p.publication_year DESC",
+        "expected_result": "Cutting-edge quantum computing research from tech giants"
+      }
+    },
+    {
+      "id": "parallel_023",
+      "question": "Find papers about COVID-19 vaccines co-authored by researchers from pharmaceutical companies and universities",
+      "type": "parallel",
+      "category": "hybrid_topic_collaboration",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["COVID-19 vaccine", "mRNA vaccine", "vaccine development", "immunization"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a1:Author)-[:AFFILIATED_WITH]->(i1:Institution {type: 'pharmaceutical'}), (p)-[:AUTHORED]->(a2:Author)-[:AFFILIATED_WITH]->(i2:Institution {type: 'university'}) RETURN p.id, p.title",
+        "expected_result": "Industry-academia vaccine development collaboration"
+      }
+    },
+    {
+      "id": "parallel_024",
+      "question": "What papers about artificial intelligence ethics have been published in Science or Nature since 2019?",
+      "type": "parallel",
+      "category": "hybrid_topic_venue",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["AI ethics", "artificial intelligence", "algorithmic bias", "fairness", "responsible AI"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name IN ['Science', 'Nature'] AND p.publication_year >= 2019 RETURN p.id, p.title ORDER BY p.publication_year DESC",
+        "expected_result": "Recent AI ethics research in top-tier journals"
+      }
+    },
+    {
+      "id": "parallel_025",
+      "question": "Find papers about stem cell therapy for neurological disorders with authors from Mayo Clinic or Johns Hopkins",
+      "type": "parallel",
+      "category": "hybrid_topic_affiliation",
+      "expected_evidence": {
+        "paper_ids": [],
+        "semantic_keywords": ["stem cell therapy", "neurological disorders", "cell transplantation", "regenerative medicine"],
+        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.name IN ['Mayo Clinic', 'Johns Hopkins University'] RETURN p.id, p.title",
+        "expected_result": "Stem cell research from premier medical institutions"
+      }
     }
   ],
   "metadata": {
-    "total_questions": 50,
+    "total_questions": 75,
     "graph_questions": 25,
     "semantic_questions": 25,
+    "parallel_questions": 25,
     "categories": {
       "graph": {
         "authors": 10,
@@ -573,10 +875,18 @@
         "topic": 6,
         "method": 15,
         "finding": 4
+      },
+      "parallel": {
+        "hybrid_topic_author": 8,
+        "hybrid_topic_venue": 6,
+        "hybrid_topic_citations": 5,
+        "hybrid_topic_collaboration": 4,
+        "hybrid_topic_affiliation": 2
       }
     },
     "based_on_dataset": "enriched_openalex_papers_20260221_045518.json",
     "created_date": "2026-02-24",
-    "description": "Mock evaluation data with 50 questions based on enriched OpenAlex academic papers data, designed to test both graph-based and semantic search capabilities"
+    "updated_date": "2026-03-01",
+    "description": "Mock evaluation data with 75 questions based on enriched OpenAlex academic papers data, designed to test graph-based, semantic search, and parallel hybrid search capabilities. The parallel questions combine semantic concepts with structural constraints to test the effectiveness of hybrid search strategies."
   }
 }

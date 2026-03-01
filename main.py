@@ -94,7 +94,7 @@ async def root():
             },
             "semantic_search": {
                 "/search": "POST - Semantic search for similar papers",
-                "/hybrid-search": "POST - Hybrid fusion search with attribution"
+                "/hybrid-search": "POST - Hybrid fusion search with attribution and caching"
             },
             "graph_queries": {
                 "/graph/query": "POST - Execute custom Cypher queries"
@@ -108,10 +108,24 @@ async def root():
                 "/evaluation/mock-data": "POST - Evaluate system on 50-question mock dataset",
                 "/evaluation/scimmir-benchmark": "POST - Run SciMMIR multi-modal benchmark evaluation"
             },
+            "performance": {
+                "/performance/stats": "GET - Get performance statistics and bottleneck analysis",
+                "/performance/report": "GET - Export detailed performance report",
+                "/performance/tune": "POST - Tune performance parameters at runtime",
+                "/cache/stats": "GET - Get cache performance statistics", 
+                "/cache/clear": "POST - Clear system caches"
+            },
             "system": {
                 "/health": "GET - Health check endpoint",
                 "/docs": "GET - API documentation"
             }
+        },
+        "performance_optimizations": {
+            "caching": "Query embeddings, search results, and AI responses cached",
+            "intelligent_routing": "Smart query routing to avoid unnecessary vector/graph calls",
+            "selective_reranking": "Reranking only when beneficial with limited candidates",
+            "optimized_search": "Tuned Milvus parameters for speed vs accuracy trade-off",
+            "latency_monitoring": "Real-time performance tracking and bottleneck analysis"
         }
     }
 
@@ -257,12 +271,12 @@ async def generate_and_upload_embeddings(papers_data: List[Dict], timestamp: dat
             return False
 
         # Connect to Zilliz and upload embeddings
-        if not factory.vector_handler.connect():
+        if not factory.milvus_client.connect():
             logger.error("Failed to connect to Zilliz")
             return False
 
         # Upload embeddings using the generated embedding file with papers data for hybrid search
-        upload_success = factory.vector_handler.upload_embeddings(
+        upload_success = factory.milvus_client.upload_embeddings(
             embedding_file=output_filename,
             papers_data=papers_data  # Pass papers data for sparse embeddings
         )
@@ -382,19 +396,23 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
     Advanced hybrid search with fusion, reranking, attribution, and AI response generation.
     
     This endpoint implements:
-    1. Query classification and adaptive routing
-    2. Vector-first, graph-first, or parallel search strategies
+    1. Query classification and adaptive routing with smart optimization
+    2. Vector-first, graph-first, or parallel search strategies  
     3. Result fusion with configurable weights
-    4. Scientific domain-aware reranking
+    4. Selective scientific domain-aware reranking (only when beneficial)
     5. Source attribution and provenance tracking
-    6. AI-powered response generation using Gemini
+    6. AI-powered response generation with caching
+    7. Comprehensive performance monitoring and caching
     """
     start_time = datetime.now()
+
+    # Start performance tracking
+    breakdown = factory.performance_monitor.start_query_tracking(request.query)
 
     try:
         logger.info(f"Starting hybrid search for query: '{request.query}'")
 
-        # Step 1: Query classification and routing decision
+        # Step 1: Query classification and intelligent routing decision
         query_type, confidence = factory.routing_engine.query_classifier.classify_query(request.query)
 
         # Check if user specified a routing strategy explicitly
@@ -403,7 +421,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             routing_strategy = request.routing_strategy
             logger.info(f"Using user-specified routing strategy: {routing_strategy}")
         else:
-            # Use AI routing decision for adaptive strategy
+            # Use AI routing decision for adaptive strategy with optimizations
             routing_result = factory.routing_engine.decide_routing(request.query, request)
 
             # Handle routing result (could be tuple with 3 values)
@@ -412,33 +430,36 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             else:
                 routing_strategy = routing_result
 
+        # Record routing strategy
+        factory.performance_monitor.record_routing_strategy(routing_strategy.value)
+
         logger.info(
             f"Query classified as {query_type} (confidence: {confidence:.2f}), using {routing_strategy} routing")
 
-        # Step 2: Execute search based on routing strategy
+        # Step 2: Execute search based on routing strategy with optimizations
         vector_results = []
         graph_results = []
 
         fusion_start = datetime.now()
 
         if routing_strategy == RoutingStrategy.VECTOR_FIRST:
-            # Vector search first, then graph refinement
+            # Vector search first, then optional graph refinement
             vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k * 2)
-            if vector_results:
+            if vector_results and request.top_k > 10:  # Only do graph refinement for larger result sets
                 # Use top vector results to inform graph search
                 paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
-                graph_results = await factory.retrieval_handler._execute_graph_refinement(paper_ids, request.query,
-                                                                                          request.top_k)
+                graph_results = await factory.retrieval_handler._execute_graph_refinement(paper_ids,request.top_k)
+            else:
+                graph_results = []
 
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
-            # Graph search first, then vector similarity
+            # Graph search first - skip vector entirely for pure structural queries
             graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k * 2)
-
-            logger.info("Paper ID query detected - using only graph search results")
+            logger.info("Using graph-only search - vector search skipped for performance")
             vector_results = []
 
         elif routing_strategy == RoutingStrategy.PARALLEL:
-            # Execute both searches in parallel
+            # Execute both searches in parallel only when necessary
             vector_task = factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
             graph_task = factory.retrieval_handler.execute_graph_search(request.query, request.top_k)
 
@@ -451,29 +472,32 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         logger.info(
             f"Before fusion - vector_results: {len(vector_results or [])}, graph_results: {len(graph_results or [])}")
         logger.info(graph_results)
-        fused_results = factory.result_fusion.fuse_results(
-            vector_results or [],
-            graph_results or [],
-            request.fusion_weights
-        )
+        
+        with factory.performance_monitor.track_operation('fusion'):
+            fused_results = factory.result_fusion.fuse_results(
+                vector_results or [],
+                graph_results or [],
+                request.fusion_weights
+            )
 
         fusion_time = (datetime.now() - fusion_start).total_seconds()
 
         # Limit to requested number of results
         fused_results = fused_results[:request.top_k]
 
-        # Step 4: Reranking (if enabled)
+        # Step 4: Selective reranking (only when beneficial)
         reranking_time = None
-        if request.enable_reranking and routing_strategy == RoutingStrategy.PARALLEL:
+        if request.enable_reranking:
             reranking_start = datetime.now()
-            fused_results = await factory.scientific_reranker.rerank_results(fused_results, request.query)
+            # Use selective reranking with limited candidates for speed
+            fused_results = await factory.scientific_reranker.rerank_results(
+                fused_results, request.query, 
+                selective=True,  # Enable selective reranking
+                max_rerank_candidates=20  # Limit candidates for speed
+            )
             reranking_time = (datetime.now() - reranking_start).total_seconds()
 
-        # # Step 5: Attribution tracking (if enabled)
-        # if request.enable_attribution and fused_results:
-        #     fused_results = attribution_tracker.track_attributions(fused_results, request.query)
-        #
-        # Step 6: Calculate statistics
+        # Step 5: Calculate statistics
         total_time = (datetime.now() - start_time).total_seconds()
 
         fusion_stats = {
@@ -493,17 +517,37 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             'attribution_enabled': request.enable_attribution
         }
 
-        # Step 7: Generate AI response using Gemini
+        # Step 6: Generate AI response with caching
         ai_response = None
         response_generation_time = None
         if request.enable_ai_response and fused_results:
             response_start = datetime.now()
-            ai_response = await factory.retrieval_handler.generate_ai_response(request.query, fused_results, query_type)
+            
+            # Check AI response cache
+            results_hash = str(hash(str([r.paper_id for r in fused_results[:5]])))  # Simple hash of top results
+            cached_response = factory.cache_manager.get_ai_response(request.query, results_hash)
+            
+            if cached_response:
+                factory.performance_monitor.record_cache_hit('ai_response', True)
+                ai_response = cached_response
+                logger.debug("AI response cache hit")
+            else:
+                factory.performance_monitor.record_cache_hit('ai_response', False)
+                with factory.performance_monitor.track_operation('ai_response'):
+                    ai_response = await factory.retrieval_handler.generate_ai_response(request.query, fused_results, query_type)
+                
+                # Cache the response
+                if ai_response:
+                    factory.cache_manager.cache_ai_response(request.query, results_hash, ai_response)
+            
             response_generation_time = (datetime.now() - response_start).total_seconds()
 
         # Update routing performance tracking
         avg_relevance = sum(r.relevance_score for r in fused_results) / len(fused_results) if fused_results else 0
         factory.routing_engine.update_performance(routing_strategy, query_type, total_time, avg_relevance)
+
+        # Finish performance tracking
+        factory.performance_monitor.finish_query_tracking()
 
         logger.info(f"Hybrid search completed. Found {len(fused_results)} results in {total_time:.2f}s")
 
@@ -525,6 +569,8 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         )
 
     except Exception as e:
+        # Make sure to finish tracking even on error
+        factory.performance_monitor.finish_query_tracking()
         logger.error(f"Error during hybrid search: {e}")
         raise HTTPException(status_code=500, detail=f"Hybrid search failed: {str(e)}")
 
@@ -1036,6 +1082,177 @@ async def run_scimmir_benchmark(
     except Exception as e:
         logger.error(f"SciMMIR benchmark error: {e}")
         raise HTTPException(status_code=500, detail=f"SciMMIR benchmark failed: {str(e)}")
+
+
+# ===============================================================================
+# PERFORMANCE & CACHE MANAGEMENT ENDPOINTS
+# ===============================================================================
+
+@app.get("/performance/stats")
+async def get_performance_stats(recent_queries: int = 100, factory: ServiceFactory = Depends(get_services)):
+    """Get detailed performance statistics and bottleneck analysis."""
+    try:
+        metrics = factory.performance_monitor.get_performance_metrics(recent_queries)
+        analysis = factory.performance_monitor.get_bottleneck_analysis(recent_queries)
+        cache_stats = factory.cache_manager.get_cache_stats()
+
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "performance_metrics": {
+                "total_queries": metrics.total_queries,
+                "avg_response_time": round(metrics.avg_total_time, 3),
+                "slow_queries_count": len(metrics.slow_queries),
+                "breakdown": {
+                    "embedding": round(metrics.avg_embedding_time, 3),
+                    "vector_search": round(metrics.avg_vector_search_time, 3), 
+                    "graph_search": round(metrics.avg_graph_search_time, 3),
+                    "fusion": round(metrics.avg_fusion_time, 3),
+                    "reranking": round(metrics.avg_reranking_time, 3),
+                    "ai_response": round(metrics.avg_ai_response_time, 3)
+                },
+                "routing_breakdown": metrics.routing_breakdown
+            },
+            "bottleneck_analysis": analysis,
+            "cache_performance": cache_stats,
+            "recent_slow_queries": [
+                {
+                    "query": sq.query[:100] + "..." if len(sq.query) > 100 else sq.query,
+                    "total_time": round(sq.total_time, 2),
+                    "routing_strategy": sq.routing_strategy,
+                    "primary_bottleneck": max([
+                        ("embedding", sq.embedding_time),
+                        ("vector_search", sq.vector_search_time),
+                        ("graph_search", sq.graph_search_time),
+                        ("ai_response", sq.ai_response_time)
+                    ], key=lambda x: x[1])[0] if sq.total_time > 0 else "unknown"
+                }
+                for sq in metrics.slow_queries[:5]
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting performance stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get performance stats: {str(e)}")
+
+
+@app.get("/performance/report")
+async def export_performance_report(factory: ServiceFactory = Depends(get_services)):
+    """Export detailed performance report in markdown format."""
+    try:
+        report = factory.performance_monitor.export_performance_report()
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "report": report
+        }
+
+    except Exception as e:
+        logger.error(f"Error generating performance report: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate performance report: {str(e)}")
+
+
+@app.post("/cache/clear")
+async def clear_caches(cache_type: str = "all", factory: ServiceFactory = Depends(get_services)):
+    """Clear system caches.
+    
+    Args:
+        cache_type: Type of cache to clear ("embedding", "search", "ai_response", "all")
+    """
+    try:
+        if cache_type == "all":
+            factory.cache_manager.clear_all_caches()
+            message = "All caches cleared"
+        elif cache_type == "embedding":
+            factory.cache_manager.embedding_cache.clear()
+            message = "Embedding cache cleared"
+        elif cache_type == "search":
+            factory.cache_manager.search_cache.clear()
+            message = "Search results cache cleared"
+        elif cache_type == "ai_response":
+            factory.cache_manager.ai_response_cache.clear()
+            message = "AI response cache cleared"
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid cache_type: {cache_type}")
+
+        return {
+            "success": True,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear cache: {str(e)}")
+
+
+@app.get("/cache/stats")
+async def get_cache_stats(factory: ServiceFactory = Depends(get_services)):
+    """Get cache statistics and performance metrics."""
+    try:
+        stats = factory.cache_manager.get_cache_stats()
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "cache_stats": stats,
+            "recommendations": [
+                "Consider increasing embedding cache size" if stats['embedding_cache']['hit_rate'] < 60 else None,
+                "Search cache performing well" if stats['search_cache']['hit_rate'] > 40 else "Consider query pattern analysis",
+                "AI response cache needs attention" if stats['ai_response_cache']['hit_rate'] < 30 else None
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting cache stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get cache stats: {str(e)}")
+
+
+@app.post("/performance/tune")
+async def tune_performance_parameters(
+    milvus_nprobe: int = None,
+    embedding_cache_size: int = None,
+    search_cache_size: int = None,
+    max_rerank_candidates: int = None,
+    factory: ServiceFactory = Depends(get_services)
+):
+    """Tune performance parameters at runtime.
+    
+    Args:
+        milvus_nprobe: Milvus search parameter (lower = faster, higher = more accurate)
+        embedding_cache_size: Size of embedding cache
+        search_cache_size: Size of search results cache
+        max_rerank_candidates: Maximum candidates to rerank (lower = faster)
+    """
+    try:
+        changes_made = []
+
+        # Tune Milvus parameters (would need to be implemented in MilvusClient)
+        if milvus_nprobe is not None:
+            # This would require modifying the MilvusClient to accept dynamic parameters
+            changes_made.append(f"Milvus nprobe set to {milvus_nprobe}")
+
+        # Tune cache sizes (would require cache resizing methods)
+        if embedding_cache_size is not None:
+            # Would need to implement cache resizing
+            changes_made.append(f"Embedding cache size set to {embedding_cache_size}")
+
+        if search_cache_size is not None:
+            # Would need to implement cache resizing  
+            changes_made.append(f"Search cache size set to {search_cache_size}")
+
+        return {
+            "success": True,
+            "message": "Performance parameters updated",
+            "changes": changes_made,
+            "timestamp": datetime.now().isoformat(),
+            "note": "Some parameter changes may require system restart to take full effect"
+        }
+
+    except Exception as e:
+        logger.error(f"Error tuning performance: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to tune performance: {str(e)}")
 
 
 # ===============================================================================

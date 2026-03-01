@@ -22,25 +22,56 @@ class HybridRetrievalHandler:
     """Unified handler for vector and graph-based retrieval operations."""
 
     def __init__(self, vector_db: Optional[MilvusClient], graph_db: GraphQueryHandler,
-                 ai_agent: Optional[DeepseekClient],
-                 embedder: SciBERTClient):
+                 ai_agent: Optional[DeepseekClient], embedder: SciBERTClient,
+                 cache_manager=None, performance_monitor=None):
         self.milvus_client = vector_db
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
+        self.cache_manager = cache_manager
+        self.performance_monitor = performance_monitor
 
     async def execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
-        """Execute vector search."""
+        """Execute vector search with performance tracking."""
+        if self.performance_monitor:
+            with self.performance_monitor.track_operation('vector_search'):
+                return await self._execute_vector_search_internal(query, top_k)
+        else:
+            return await self._execute_vector_search_internal(query, top_k)
+
+    async def _execute_vector_search_internal(self, query: str, top_k: int) -> List[Dict]:
+        """Internal vector search implementation."""
         try:
-            if not self.milvus_client or not self.milvus_client.connect():
-                logger.warning("Vector search failed: Could not connect to Zilliz")
-                return []
+            # Check cache first
+            if self.cache_manager:
+                cached_results = self.cache_manager.get_search_results(
+                    query, top_k, use_hybrid=True, routing_strategy="vector"
+                )
+                if cached_results is not None:
+                    if self.performance_monitor:
+                        self.performance_monitor.record_cache_hit('search', True)
+                        self.performance_monitor.record_result_count('vector', len(cached_results))
+                    logger.debug(f"Vector search cache hit for: {query[:50]}...")
+                    return cached_results
+
+            if self.performance_monitor:
+                self.performance_monitor.record_cache_hit('search', False)
 
             results = self.search_similar_papers(
                 query_text=query,
                 top_k=top_k,
                 use_hybrid=True
             )
+
+            # Cache results
+            if self.cache_manager and results:
+                self.cache_manager.cache_search_results(
+                    query, results, top_k, use_hybrid=True, routing_strategy="vector"
+                )
+
+            if self.performance_monitor:
+                self.performance_monitor.record_result_count('vector', len(results or []))
+
             return results or []
         except Exception as e:
             logger.error(f"Vector search error: {e}")
@@ -61,25 +92,67 @@ class HybridRetrievalHandler:
             if not self.milvus_client.collection:
                 self.milvus_client.collection = Collection(self.milvus_client.config.collection_name)
                 self.milvus_client.collection.load()
-            # Generate embedding for the query text
-            query_embedding = self.embedding_client.generate_embedding(query_text)
+
+            # Check embedding cache first
+            query_embedding = None
+            if self.cache_manager:
+                query_embedding = self.cache_manager.get_embedding(query_text)
+                if query_embedding is not None and self.performance_monitor:
+                    self.performance_monitor.record_cache_hit('embedding', True)
+
+            # Generate embedding if not cached
+            if query_embedding is None:
+                if self.performance_monitor:
+                    self.performance_monitor.record_cache_hit('embedding', False)
+                    with self.performance_monitor.track_operation('embedding'):
+                        query_embedding = self.embedding_client.generate_embedding(query_text)
+                else:
+                    query_embedding = self.embedding_client.generate_embedding(query_text)
+
+                # Cache the embedding
+                if self.cache_manager and query_embedding is not None:
+                    self.cache_manager.cache_embedding(query_text, query_embedding)
 
             if query_embedding is None:
                 print("❌ Failed to generate query embedding")
                 return []
 
+            # Execute search with optimized parameters
             if use_hybrid and self.milvus_client.is_tfidf_fitted:
-                return self.milvus_client._hybrid_search(query_text, query_embedding, top_k)
+                return self.milvus_client._hybrid_search_optimized(query_text, query_embedding, top_k)
             else:
-                return self.milvus_client._dense_search(query_embedding, top_k)
+                return self.milvus_client._dense_search_optimized(query_embedding, top_k)
 
         except Exception as e:
             print(f"❌ Search failed: {e}")
             return []
 
     async def execute_graph_search(self, query: str, top_k: int) -> List[Dict]:
-        """Execute graph search using Cypher query with intelligent query parsing."""
+        """Execute graph search using Cypher query with intelligent query parsing and caching."""
+        if self.performance_monitor:
+            with self.performance_monitor.track_operation('graph_search'):
+                return await self._execute_graph_search_internal(query, top_k)
+        else:
+            return await self._execute_graph_search_internal(query, top_k)
+
+    async def _execute_graph_search_internal(self, query: str, top_k: int) -> List[Dict]:
+        """Internal graph search implementation with caching."""
         try:
+            # Check cache first
+            if self.cache_manager:
+                cached_results = self.cache_manager.get_search_results(
+                    query, top_k, use_hybrid=False, routing_strategy="graph"
+                )
+                if cached_results is not None:
+                    if self.performance_monitor:
+                        self.performance_monitor.record_cache_hit('search', True)
+                        self.performance_monitor.record_result_count('graph', len(cached_results))
+                    logger.debug(f"Graph search cache hit for: {query[:50]}...")
+                    return cached_results
+
+            if self.performance_monitor:
+                self.performance_monitor.record_cache_hit('search', False)
+
             if not self.graph_handler:
                 logger.error("Graph handler not initialized")
                 return []
@@ -98,6 +171,15 @@ class HybridRetrievalHandler:
             # Add basic relevance scores based on query type
             for result in results:
                 result['relevance_score'] = 0.8 if self._is_structured_query(query) else 0.5
+
+            # Cache results
+            if self.cache_manager and results:
+                self.cache_manager.cache_search_results(
+                    query, results, top_k, use_hybrid=False, routing_strategy="graph"
+                )
+
+            if self.performance_monitor:
+                self.performance_monitor.record_result_count('graph', len(results))
 
             return results
         except Exception as e:
@@ -127,7 +209,7 @@ class HybridRetrievalHandler:
                     return ai_extracted_names
         except Exception as e:
             logger.warning(f"AI author extraction failed, falling back to regex: {e}")
-        
+
         # Fallback to regex-based extraction
         return self._regex_extract_author_names(query)
 
@@ -163,9 +245,9 @@ Author names:
                 name = re.sub(r'^\d+\.\s*', '', name)
                 name = re.sub(r'^[-*•]\s*', '', name)
                 name = name.strip('"\'')
-                
+
                 # Validate name format (at least 2 words, proper capitalization)
-                if (len(name.split()) >= 2 and 
+                if (len(name.split()) >= 2 and
                     any(c.isupper() for c in name) and
                     not name.lower() in ['no author', 'none', 'not found']):
                     names.append(name)
@@ -253,12 +335,6 @@ Author names:
             keywords.append(query.strip())
 
         return list(set(keywords))  # Remove duplicates
-
-    def _is_paper_id_query(self, query: str) -> bool:
-        """Check if this query contains a specific paper ID"""
-        # Enhanced pattern to match various paper ID formats and contexts
-        paper_id_pattern = re.compile(r'\b(W\d+|DOI:|doi:|pmid:|arxiv:)', re.IGNORECASE)
-        return bool(paper_id_pattern.search(query))
 
     def _build_intelligent_cypher_query(self, query: str, top_k: int) -> tuple:
         """Build Cypher query based on intelligent query analysis with support for multiple entities."""
@@ -463,7 +539,7 @@ Author names:
         """
         return cypher_query, {"keywords": keywords, "limit": top_k}
 
-    async def _execute_graph_refinement(self, paper_ids: List[str], query: str, top_k: int) -> List[Dict]:
+    async def _execute_graph_refinement(self, paper_ids: List[str], top_k: int) -> List[Dict]:
         """Refine vector results using graph relationships."""
         try:
             if not self.graph_handler:
@@ -498,9 +574,6 @@ Author names:
     async def _execute_vector_refinement(self, paper_ids: List[str], query: str) -> List[Dict]:
         """Refine graph results using vector similarity."""
         try:
-            if not self.milvus_client or not self.milvus_client.connect():
-                logger.warning("Vector refinement failed: Could not connect to Zilliz")
-                return []
 
             # Use paper IDs to find similar papers in vector space
             # This would require additional implementation in MilvusClient
@@ -524,11 +597,10 @@ Author names:
             search_results: List,
             query_type: QueryType
     ) -> Optional[str]:
-        """Generate AI response using Llama based on search results from vector and graph searches."""
+        """Generate AI response from vector and graph searches."""
         try:
-            # Use the routing engine's Llama model for response generation
             if not self.ai_agent:
-                logger.info("Llama not available for response generation")
+                logger.info("AI Agent is not available for response generation")
                 return None
 
             # Prepare context from search results

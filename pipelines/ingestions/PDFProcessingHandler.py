@@ -380,11 +380,6 @@ class PDFProcessingHandler:
             return True
 
         try:
-            # Connect to Milvus if not connected
-            if not self.milvus_client.is_connected and not self.milvus_client.connect():
-                self.logger.error("Failed to connect to Milvus")
-                return False
-
             # Fit TF-IDF vectorizer once for all descriptions
             if not self.milvus_client.is_tfidf_fitted:
                 all_descriptions = [fig.description for fig in figures if fig.description]
@@ -452,11 +447,6 @@ class PDFProcessingHandler:
             return True
 
         try:
-            # Connect to Milvus if not connected
-            if not self.milvus_client.is_connected and not self.milvus_client.connect():
-                self.logger.error("Failed to connect to Milvus")
-                return False
-
             # Fit TF-IDF vectorizer once for all descriptions and table texts
             if not self.milvus_client.is_tfidf_fitted:
                 all_texts = []

@@ -14,6 +14,8 @@ from models.engines.RoutingDecisionEngine import RoutingDecisionEngine
 from models.engines.ResultFusion import ResultFusion
 from models.engines.ScientificReranker import ScientificReranker
 from models.engines.AttributionTracker import AttributionTracker
+from models.engines.CacheManager import CacheManager
+from models.engines.PerformanceMonitor import PerformanceMonitor
 from pipelines.evaluation.SciMMIRBenchmarkIntegration import (
     SciMMIRBenchmarkResult,
     SciMMIRResultAnalyzer,
@@ -28,10 +30,18 @@ class ServiceFactory:
     def __init__(self):
         # Clients
         self.neo4j_handler = GraphNeo4jHandler()
-        self.vector_handler = MilvusClient()
+        self.milvus_client = MilvusClient()
         self.scibert_client = SciBERTClient()
         self.clip_client = None
-        self.deepseek_client = DeepseekClient()
+        self.deepseek_client = None
+
+        # Performance & Caching
+        self.cache_manager = CacheManager(
+            embedding_cache_size=5000,
+            search_cache_size=2000,
+            persistent_cache_dir="./cache"
+        )
+        self.performance_monitor = PerformanceMonitor(slow_query_threshold=5.0)
 
         # Pipelines & Engines
         self.query_handler = GraphQueryHandler()
@@ -41,13 +51,15 @@ class ServiceFactory:
         self.attribution_tracker = AttributionTracker()
 
         # Complex Handlers
-        self.ingestion_handler = IngestionHandler(self.scibert_client, self.clip_client)
+        self.ingestion_handler = IngestionHandler(self.scibert_client, self.clip_client, self.milvus_client)
         self.embedding_handler = EmbeddingSciBERTHandler(self.scibert_client)
         self.retrieval_handler = HybridRetrievalHandler(
-            self.vector_handler,
+            self.milvus_client,
             self.query_handler,
             self.deepseek_client,
-            self.scibert_client
+            self.scibert_client,
+            self.cache_manager,
+            self.performance_monitor
         )
 
     def run_scimmir_benchmark_suite(
@@ -80,7 +92,7 @@ class ServiceFactory:
             raise ValueError("Failed to load SciMMIR samples")
 
         # Run benchmark
-        benchmark_runner = SciMMIRBenchmarkRunner(self.clip_client, self.scibert_client, self.vector_handler)
+        benchmark_runner = SciMMIRBenchmarkRunner(self.clip_client, self.scibert_client, self.milvus_client)
         result = benchmark_runner.run_benchmark(samples, model_name="IAAIR-SciBERT-CLIP")
 
         # Generate report
@@ -96,10 +108,10 @@ class ServiceFactory:
 
     async def connect_all(self):
         """Standardize startup for all database clients"""
-        self.vector_handler.connect()
+        self.milvus_client.connect()
         # self.clip_client.initialize()
         # await self.neo4j_handler.connect() if async
 
     async def disconnect_all(self):
         """Cleanup connections on shutdown"""
-        self.vector_handler.disconnect()
+        self.milvus_client.disconnect()

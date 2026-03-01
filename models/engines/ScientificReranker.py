@@ -51,10 +51,32 @@ class ScientificReranker:
             logger.error(f"Failed to initialize BGE reranker: {e}")
             self.initialized = False
 
-    async def rerank_results(self, results: List[SearchResult], query: str) -> List[SearchResult]:
-        """Rerank results using BGE reranker model."""
+    async def rerank_results(self, results: List[SearchResult], query: str, 
+                           selective: bool = True, max_rerank_candidates: int = 20) -> List[SearchResult]:
+        """Rerank results using BGE reranker model with selective reranking for speed.
+        
+        Args:
+            results: List of search results to rerank
+            query: Original query text
+            selective: Whether to use selective reranking (faster)
+            max_rerank_candidates: Maximum number of results to rerank for speed
+        """
         if not results:
             return results
+
+        # Selective reranking: only rerank when beneficial
+        if selective and self._should_skip_reranking(results, query):
+            logger.info("Skipping reranking - not beneficial for this query/results")
+            return results
+
+        # Limit candidates for speed
+        if selective and len(results) > max_rerank_candidates:
+            logger.info(f"Limiting reranking to top {max_rerank_candidates} candidates for speed")
+            top_results = results[:max_rerank_candidates]
+            remaining_results = results[max_rerank_candidates:]
+        else:
+            top_results = results
+            remaining_results = []
             
         # Initialize model if needed
         self._initialize_model()
@@ -64,11 +86,11 @@ class ScientificReranker:
             return self._fallback_rerank(results)
         
         try:
-            logger.info(f"Reranking {len(results)} results using BGE reranker")
+            logger.info(f"Reranking {len(top_results)} results using BGE reranker")
             
             # Prepare query-document pairs for reranking
             pairs = []
-            for result in results:
+            for result in top_results:
                 # Create document text from available fields
                 doc_text = self._create_document_text(result)
                 pairs.append([query, doc_text])
@@ -77,7 +99,7 @@ class ScientificReranker:
             scores = self._score_pairs(pairs)
             
             # Update results with rerank scores
-            for i, result in enumerate(results):
+            for i, result in enumerate(top_results):
                 rerank_score = scores[i] if i < len(scores) else 0.0
                 result.rerank_score = rerank_score
                 result.confidence_scores.update({
@@ -85,15 +107,48 @@ class ScientificReranker:
                     'original_relevance': result.relevance_score
                 })
             
-            # Sort by rerank score
-            results.sort(key=lambda x: x.rerank_score or 0, reverse=True)
+            # Sort reranked results by rerank score
+            top_results.sort(key=lambda x: x.rerank_score or 0, reverse=True)
             
-            logger.info(f"Reranking completed. Score range: {min(scores):.3f} - {max(scores):.3f}")
-            return results
+            # Combine with remaining results (keep original order)
+            final_results = top_results + remaining_results
+            
+            logger.info(f"Reranking completed. Processed {len(top_results)} candidates")
+            return final_results
             
         except Exception as e:
             logger.error(f"Error during reranking: {e}")
             return self._fallback_rerank(results)
+
+    def _should_skip_reranking(self, results: List[SearchResult], query: str) -> bool:
+        """Determine if reranking should be skipped for performance reasons."""
+        # Skip if very few results (reranking won't help much)
+        if len(results) <= 3:
+            return True
+        
+        # Skip if results already have very high confidence
+        if results:
+            avg_confidence = sum(r.relevance_score for r in results[:5]) / min(5, len(results))
+            if avg_confidence > 0.9:
+                logger.debug("Skipping reranking - high confidence results")
+                return True
+        
+        # Skip for obvious structural queries (graph results are usually well-ordered)
+        query_lower = query.lower()
+        structural_indicators = [
+            'paper id', 'author', 'cited by', 'published in', 
+            'journal', 'conference', 'doi:', 'pmid:'
+        ]
+        if any(indicator in query_lower for indicator in structural_indicators):
+            logger.debug("Skipping reranking - structural query")
+            return True
+        
+        # Skip for very short queries (reranking needs context)
+        if len(query.split()) <= 2:
+            logger.debug("Skipping reranking - query too short")
+            return True
+            
+        return False
 
     def _create_document_text(self, result: SearchResult) -> str:
         """Create document text from SearchResult for reranking."""

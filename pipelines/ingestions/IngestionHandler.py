@@ -12,12 +12,13 @@ from clients.vector.MilvusClient import MilvusClient
 
 
 class IngestionHandler():
-    def __init__(self, scibert_client: Optional[SciBERTClient] = None, clip_client: Optional[CLIPClient] = None):
+    def __init__(self, scibert_client: Optional[SciBERTClient] = None, clip_client: Optional[CLIPClient] = None,
+                 milvus_client: Optional[MilvusClient] = None):
         self.semantic_scholar_client = SemanticScholarClient()
         self.openalex_client = OpenAlexClient()
         self.clip_client = clip_client
         self.scibert_client = scibert_client or SciBERTClient()
-        self.milvus_client = MilvusClient()
+        self.milvus_client = milvus_client or MilvusClient()
         self.pdf_handler = PDFProcessingHandler(
             self.clip_client,
             self.scibert_client,

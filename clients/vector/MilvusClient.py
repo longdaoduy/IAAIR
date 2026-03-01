@@ -893,6 +893,110 @@ class MilvusClient:
             print(f"⚠️ Hybrid search failed, falling back to dense search: {e}")
             return self._dense_search(dense_embedding, top_k)
 
+    def _dense_search_optimized(self, query_embedding: List[float], top_k: int) -> List[Dict]:
+        """Optimized dense vector search with tuned parameters for speed.
+        
+        Args:
+            query_embedding: Dense query embedding
+            top_k: Number of results to return
+            
+        Returns:
+            List of search results
+        """
+        # Optimized search parameters for speed
+        search_params = {
+            "metric_type": self.config.metric_type,
+            "params": {"nprobe": min(16, max(1, top_k // 2))}  # Reduced nprobe for speed
+        }
+
+        results = self.collection.search(
+            data=[query_embedding],
+            anns_field="dense_embedding",
+            param=search_params,
+            limit=min(top_k, 50),  # Cap at 50 to reduce latency
+            output_fields=["id", "title", "abstract"]
+        )
+
+        # Format results
+        formatted_results = []
+        if results and len(results[0]) > 0:
+            for hit in results[0]:
+                formatted_results.append({
+                    "paper_id": hit.entity.get("id"),
+                    "title": hit.entity.get("title"),
+                    "abstract": hit.entity.get("abstract"),
+                    "similarity_score": float(hit.score),
+                    "distance": float(hit.distance),
+                    "search_type": "dense_optimized"
+                })
+
+        print(f"🔍 Optimized dense search found {len(formatted_results)} similar papers")
+        return formatted_results
+
+    def _hybrid_search_optimized(self, query_text: str, dense_embedding: List[float], top_k: int) -> List[Dict]:
+        """Optimized hybrid search with tuned parameters for speed.
+        
+        Args:
+            query_text: Original query text
+            dense_embedding: Dense query embedding
+            top_k: Number of results to return
+            
+        Returns:
+            List of search results
+        """
+        try:
+            # Generate sparse embedding for the query
+            sparse_embedding = self.generate_sparse_embedding(query_text)
+
+            # Optimized search requests with reduced candidates
+            dense_search_request = AnnSearchRequest(
+                data=[dense_embedding],
+                anns_field="dense_embedding",
+                param={
+                    "metric_type": self.config.metric_type,
+                    "params": {"nprobe": min(16, max(1, top_k))}  # Reduced nprobe
+                },
+                limit=min(top_k * 1.5, 30)  # Fewer candidates for speed
+            )
+
+            sparse_search_request = AnnSearchRequest(
+                data=[sparse_embedding],
+                anns_field="sparse_embedding",
+                param={
+                    "metric_type": "IP",
+                    "params": {}
+                },
+                limit=min(top_k * 1.5, 30)  # Fewer candidates for speed
+            )
+
+            # Perform hybrid search with RRF (Reciprocal Rank Fusion) reranking
+            hybrid_results = self.collection.hybrid_search(
+                reqs=[dense_search_request, sparse_search_request],
+                rerank=RRFRanker(),
+                limit=min(top_k, 20),  # Cap results for speed
+                output_fields=["id", "title", "abstract"]
+            )
+
+            # Format results
+            formatted_results = []
+            if hybrid_results and len(hybrid_results[0]) > 0:
+                for hit in hybrid_results[0]:
+                    formatted_results.append({
+                        "paper_id": hit.entity.get("id"),
+                        "title": hit.entity.get("title"),
+                        "abstract": hit.entity.get("abstract"),
+                        "similarity_score": float(hit.score),
+                        "distance": float(hit.distance),
+                        "search_type": "hybrid_optimized"
+                    })
+
+            print(f"🔍 Optimized hybrid search found {len(formatted_results)} similar papers")
+            return formatted_results
+
+        except Exception as e:
+            print(f"⚠️ Optimized hybrid search failed, falling back to dense search: {e}")
+            return self._dense_search_optimized(dense_embedding, top_k)
+
     def disconnect(self):
         """Disconnect from Zilliz."""
         try:
