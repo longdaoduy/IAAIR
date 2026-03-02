@@ -84,7 +84,7 @@ class MockDataEvaluator:
             logger.error(f"Failed to load mock data from {mock_data_path}: {e}")
             return []
 
-    def evaluate_graph_question(self, question_data: Dict) -> MockEvaluationResult:
+    async def evaluate_graph_question(self, question_data: Dict) -> MockEvaluationResult:
         """Evaluate a graph-based question using Cypher queries."""
         start_time = time.time()
         question_id = question_data['id']
@@ -99,7 +99,7 @@ class MockDataEvaluator:
                 cypher_query = expected_evidence['cypher_query']
 
                 # Use graph query handler to execute the query
-                result = self.service_factory.retrieval_handler.execute_graph_search(question, 10)
+                result = await self.service_factory.retrieval_handler.execute_graph_search(question, 10)
 
                 # Extract paper IDs from result if available
                 retrieved_papers = []
@@ -174,7 +174,7 @@ class MockDataEvaluator:
                 )
             else:
                 # Fallback: try to answer using hybrid search
-                return self._evaluate_as_semantic_fallback(question_data, start_time)
+                return await self._evaluate_as_semantic_fallback(question_data, start_time)
 
         except Exception as e:
             response_time = time.time() - start_time
@@ -195,7 +195,7 @@ class MockDataEvaluator:
                 error_message=str(e)
             )
 
-    def evaluate_semantic_question(self, question_data: Dict) -> MockEvaluationResult:
+    async def evaluate_semantic_question(self, question_data: Dict) -> MockEvaluationResult:
         """Evaluate a semantic question using vector similarity search."""
         start_time = time.time()
         question_id = question_data['id']
@@ -206,8 +206,8 @@ class MockDataEvaluator:
             expected_papers = expected_evidence.get('paper_ids', [])
 
             # Use semantic search to find similar papers
-            search_results = self.service_factory.retrieval_handler.execute_vector_search(
-                query_text=question,
+            search_results = await self.service_factory.retrieval_handler.execute_vector_search(
+                query=question,
                 top_k=10,
             )
 
@@ -305,7 +305,7 @@ class MockDataEvaluator:
                 error_message=str(e)
             )
 
-    def _evaluate_as_semantic_fallback(self, question_data: Dict, start_time: float) -> MockEvaluationResult:
+    async def _evaluate_as_semantic_fallback(self, question_data: Dict, start_time: float) -> MockEvaluationResult:
         """Fallback evaluation using semantic search for graph questions."""
         question_id = question_data['id']
         question = question_data['question']
@@ -402,7 +402,7 @@ class MockDataEvaluator:
 
         return len(intersection) / len(union) if union else 0.0
 
-    def run_evaluation(self, limit: Optional[int] = None) -> List[MockEvaluationResult]:
+    async def run_evaluation(self, limit: Optional[int] = None) -> List[MockEvaluationResult]:
         """Run evaluation on all mock questions."""
         questions = self.load_mock_data()
 
@@ -421,9 +421,9 @@ class MockDataEvaluator:
             logger.info(f"Evaluating question {i + 1}/{len(questions)}: {question_data['id']}")
 
             if question_data['type'] == 'graph':
-                result = self.evaluate_graph_question(question_data)
+                result = await self.evaluate_graph_question(question_data)
             else:  # semantic
-                result = self.evaluate_semantic_question(question_data)
+                result = await self.evaluate_semantic_question(question_data)
 
             results.append(result)
 
