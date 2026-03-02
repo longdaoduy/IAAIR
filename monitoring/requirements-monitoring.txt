@@ -1,0 +1,5 @@
+# Monitoring and Metrics Dependencies
+prometheus-client==0.19.0
+
+# Add to existing requirements.txt:
+# prometheus-client>=0.19.0

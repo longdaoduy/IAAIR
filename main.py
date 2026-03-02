@@ -20,7 +20,6 @@ from datetime import datetime
 import logging
 import os
 import asyncio
-from fastapi.responses import FileResponse
 
 # Import handlers
 from models.entities.ingestion.PaperRequest import PaperRequest
@@ -51,12 +50,94 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import FileResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 from models.engines.ServiceFactory import ServiceFactory
 from pipelines.evaluation.MockDataEvaluator import MockDataEvaluator
+import time
+from typing import Callable
 
 # Global factory container
 services = ServiceFactory()
+
+class RequestCounterMiddleware(BaseHTTPMiddleware):
+    """Middleware to count and track all API requests."""
+    
+    async def dispatch(self, request: Request, call_next: Callable):
+        # Extract endpoint details
+        endpoint = request.url.path
+        method = request.method
+        
+        # Start timing
+        start_time = time.time()
+        
+        # Track request start
+        if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
+            services.prometheus_monitor.metrics.request_count.labels(
+                endpoint=endpoint,
+                method=method,
+                routing_strategy="unknown",
+                query_type="unknown"
+            ).inc()
+            
+            # Track active requests
+            services.prometheus_monitor.metrics.active_requests.inc()
+        
+        try:
+            # Process request
+            response = await call_next(request)
+            
+            # Calculate duration
+            duration = time.time() - start_time
+            
+            # Track success metrics
+            if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
+                logger.info(f"Prometheus monitor request duration: {duration:.2f} seconds")
+                services.prometheus_monitor.metrics.request_duration.labels(
+                    endpoint=endpoint,
+                    method=method,
+                    status_code=str(response.status_code)
+                ).observe(duration)
+                
+                # Track endpoint success
+                services.prometheus_monitor.metrics.endpoint_requests.labels(
+                    endpoint=endpoint,
+                    method=method,
+                    status="success"
+                ).inc()
+            
+            return response
+            
+        except Exception as e:
+            # Track error metrics
+            duration = time.time() - start_time
+            
+            if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
+                services.prometheus_monitor.metrics.request_duration.labels(
+                    endpoint=endpoint,
+                    method=method,
+                    status_code="500"
+                ).observe(duration)
+                
+                # Track endpoint errors
+                services.prometheus_monitor.metrics.endpoint_requests.labels(
+                    endpoint=endpoint,
+                    method=method,
+                    status="error"
+                ).inc()
+                
+                services.prometheus_monitor.metrics.error_count.labels(
+                    component="api",
+                    error_type=type(e).__name__
+                ).inc()
+            
+            raise
+            
+        finally:
+            # Decrement active requests
+            if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
+                services.prometheus_monitor.metrics.active_requests.dec()
 
 
 @asynccontextmanager
@@ -70,6 +151,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="IAAIR Unified API", lifespan=lifespan)
 
+# Add request counting middleware
+app.add_middleware(RequestCounterMiddleware)
 
 # Dependency to inject services into routes
 def get_services() -> ServiceFactory:
@@ -112,12 +195,14 @@ async def root():
                 "/performance/stats": "GET - Get performance statistics and bottleneck analysis",
                 "/performance/report": "GET - Export detailed performance report",
                 "/performance/tune": "POST - Tune performance parameters at runtime",
-                "/cache/stats": "GET - Get cache performance statistics", 
+                "/cache/stats": "GET - Get cache performance statistics",
                 "/cache/clear": "POST - Clear system caches"
             },
             "system": {
                 "/health": "GET - Health check endpoint",
-                "/docs": "GET - API documentation"
+                "/docs": "GET - API documentation",
+                "/api/stats": "GET - Detailed API endpoint request statistics",
+                "/metrics": "GET - Prometheus metrics for Grafana"
             }
         },
         "performance_optimizations": {
@@ -128,6 +213,68 @@ async def root():
             "latency_monitoring": "Real-time performance tracking and bottleneck analysis"
         }
     }
+
+
+@app.get("/api/stats")
+async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services)):
+    """Get detailed statistics for all API endpoints."""
+    try:
+        if not (factory.performance_monitor and factory.performance_monitor.prometheus_integration):
+            return {
+                "error": "Prometheus monitoring not available",
+                "message": "Enable monitoring with ServiceFactory.setup_monitoring()"
+            }
+
+        # Get endpoint statistics
+        prometheus_metrics = factory.performance_monitor.prometheus_integration.metrics
+        endpoint_stats = prometheus_metrics.get_endpoint_statistics()
+
+        # Sort by total request count
+        sorted_stats = sorted(
+            endpoint_stats.values(),
+            key=lambda x: x['total_count'],
+            reverse=True
+        )
+
+        # Calculate summary statistics
+        total_requests = sum(s['total_count'] for s in sorted_stats)
+        total_successes = sum(s['success_count'] for s in sorted_stats)
+        total_errors = sum(s['error_count'] for s in sorted_stats)
+
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "monitoring": {
+                "status": "enabled",
+                "total_endpoints_tracked": len(sorted_stats),
+                "metrics_endpoint": "/metrics",
+                "grafana_dashboard": "http://localhost:3000"
+            },
+            "summary": {
+                "total_requests": total_requests,
+                "total_successes": total_successes,
+                "total_errors": total_errors,
+                "overall_success_rate": round(total_successes / max(1, total_requests), 4),
+                "overall_error_rate": round(total_errors / max(1, total_requests), 4)
+            },
+            "top_endpoints": {
+                "most_used": sorted_stats[0] if sorted_stats else None,
+                "top_5": sorted_stats[:5]
+            },
+            "endpoint_details": sorted_stats,
+            "insights": {
+                "busiest_endpoint": sorted_stats[0]['endpoint'] if sorted_stats else None,
+                "endpoints_with_errors": len([s for s in sorted_stats if s['error_count'] > 0]),
+                "perfect_endpoints": len([s for s in sorted_stats if s['error_count'] == 0 and s['total_count'] > 0])
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting API statistics: {e}")
+        return {
+            "error": "Failed to retrieve API statistics",
+            "details": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 
 @app.get("/health")
@@ -407,13 +554,16 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
     start_time = datetime.now()
 
     # Start performance tracking
-    breakdown = factory.performance_monitor.start_query_tracking(request.query)
+    breakdown = factory.performance_monitor.start_query_tracking(request.query, "hybrid-search")
 
     try:
         logger.info(f"Starting hybrid search for query: '{request.query}'")
 
         # Step 1: Query classification and intelligent routing decision
         query_type, confidence = factory.routing_engine.query_classifier.classify_query(request.query)
+        
+        # Record query type
+        factory.performance_monitor.record_query_type(query_type.value if hasattr(query_type, 'value') else str(query_type))
 
         # Check if user specified a routing strategy explicitly
         if request.routing_strategy != RoutingStrategy.ADAPTIVE:
@@ -1249,6 +1399,143 @@ async def tune_performance_parameters(
     except Exception as e:
         logger.error(f"Error tuning performance: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to tune performance: {str(e)}")
+
+
+@app.get("/metrics")
+async def get_prometheus_metrics(factory: ServiceFactory = Depends(get_services)):
+    """Prometheus metrics endpoint for Grafana integration."""
+    try:
+        # Update cache metrics
+        cache_stats = factory.cache_manager.get_cache_stats()
+        factory.performance_monitor.update_cache_metrics(cache_stats)
+        
+        # Get metrics from Prometheus integration
+        if factory.performance_monitor.prometheus_integration:
+            metrics_output = factory.performance_monitor.prometheus_integration.metrics.get_metrics()
+            return Response(
+                content=metrics_output,
+                media_type="text/plain; version=0.0.4; charset=utf-8"
+            )
+        else:
+            raise HTTPException(status_code=503, detail="Prometheus monitoring not enabled")
+
+    except Exception as e:
+        logger.error(f"Error serving metrics: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to serve metrics: {str(e)}")
+
+
+@app.get("/api/stats")
+async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services)):
+    """Get detailed statistics for all API endpoints."""
+    try:
+        if not (factory.performance_monitor and factory.performance_monitor.prometheus_integration):
+            return {
+                "error": "Prometheus monitoring not available",
+                "message": "Enable monitoring with ServiceFactory.setup_monitoring()"
+            }
+        
+        # Get endpoint statistics
+        prometheus_metrics = factory.performance_monitor.prometheus_integration.metrics
+        endpoint_stats = prometheus_metrics.get_endpoint_statistics()
+        
+        # Sort by total request count
+        sorted_stats = sorted(
+            endpoint_stats.values(),
+            key=lambda x: x['total_count'],
+            reverse=True
+        )
+        
+        # Calculate summary statistics
+        total_requests = sum(s['total_count'] for s in sorted_stats)
+        total_successes = sum(s['success_count'] for s in sorted_stats)
+        total_errors = sum(s['error_count'] for s in sorted_stats)
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "monitoring": {
+                "status": "enabled",
+                "total_endpoints_tracked": len(sorted_stats),
+                "metrics_endpoint": "/metrics",
+                "grafana_dashboard": "http://localhost:3000"
+            },
+            "summary": {
+                "total_requests": total_requests,
+                "total_successes": total_successes,
+                "total_errors": total_errors,
+                "overall_success_rate": round(total_successes / max(1, total_requests), 4),
+                "overall_error_rate": round(total_errors / max(1, total_requests), 4)
+            },
+            "top_endpoints": {
+                "most_used": sorted_stats[0] if sorted_stats else None,
+                "top_5": sorted_stats[:5]
+            },
+            "endpoint_details": sorted_stats,
+            "insights": {
+                "busiest_endpoint": sorted_stats[0]['endpoint'] if sorted_stats else None,
+                "endpoints_with_errors": len([s for s in sorted_stats if s['error_count'] > 0]),
+                "perfect_endpoints": len([s for s in sorted_stats if s['error_count'] == 0 and s['total_count'] > 0])
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting API statistics: {e}")
+        return {
+            "error": "Failed to retrieve API statistics",
+            "details": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+
+@app.get("/api/stats")
+async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services)):
+    """Get detailed statistics for all API endpoints."""
+    try:
+        if not (factory.performance_monitor and factory.performance_monitor.prometheus_integration):
+            return {"error": "Prometheus monitoring not available"}
+        
+        # Get endpoint statistics
+        prometheus_monitor = factory.performance_monitor.prometheus_integration.metrics
+        endpoint_stats = prometheus_monitor.get_endpoint_statistics()
+        
+        # Sort by total request count
+        sorted_stats = sorted(
+            endpoint_stats.values(),
+            key=lambda x: x['total_count'],
+            reverse=True
+        )
+        
+        # Calculate summary statistics
+        total_requests = sum(s['total_count'] for s in sorted_stats)
+        total_successes = sum(s['success_count'] for s in sorted_stats)
+        total_errors = sum(s['error_count'] for s in sorted_stats)
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "total_endpoints": len(sorted_stats),
+            "endpoint_statistics": sorted_stats,
+            "summary": {
+                "total_requests": total_requests,
+                "total_successes": total_successes,
+                "total_errors": total_errors,
+                "overall_success_rate": total_successes / max(1, total_requests),
+                "overall_error_rate": total_errors / max(1, total_requests),
+                "most_used_endpoint": sorted_stats[0] if sorted_stats else None,
+                "top_5_endpoints": sorted_stats[:5]
+            },
+            "monitoring_info": {
+                "prometheus_enabled": True,
+                "metrics_endpoint": "/metrics",
+                "grafana_dashboard": "http://localhost:3000"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting API statistics: {e}")
+        return {
+            "error": "Failed to retrieve API statistics",
+            "details": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 
 # ===============================================================================

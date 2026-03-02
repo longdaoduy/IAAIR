@@ -1,0 +1,65 @@
+groups:
+  - name: iaair-alerts
+    rules:
+      - alert: HighLatency
+        expr: histogram_quantile(0.95, rate(iaair_request_duration_seconds_bucket[5m])) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IAAIR API high latency detected"
+          description: "95th percentile latency is {{ $value }}s for the last 5 minutes"
+
+      - alert: HighErrorRate
+        expr: rate(iaair_errors_total[5m]) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "IAAIR API high error rate"
+          description: "Error rate is {{ $value }} errors per second"
+
+      - alert: LowCacheHitRate
+        expr: rate(iaair_cache_hits_total[10m]) / (rate(iaair_cache_hits_total[10m]) + rate(iaair_cache_misses_total[10m])) < 0.3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IAAIR low cache hit rate"
+          description: "Cache hit rate is {{ $value | humanizePercentage }} for {{ $labels.cache_type }}"
+
+      - alert: SlowEmbeddingGeneration
+        expr: histogram_quantile(0.95, rate(iaair_embedding_duration_seconds_bucket[5m])) > 2
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IAAIR slow embedding generation"
+          description: "95th percentile embedding time is {{ $value }}s"
+
+      - alert: SlowVectorSearch
+        expr: histogram_quantile(0.95, rate(iaair_vector_search_duration_seconds_bucket[5m])) > 5
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IAAIR slow vector search"
+          description: "95th percentile vector search time is {{ $value }}s"
+
+      - alert: HighActiveRequests
+        expr: iaair_active_requests > 20
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IAAIR high concurrent requests"
+          description: "Currently {{ $value }} active requests"
+
+      - alert: ServiceDown
+        expr: up{job="iaair-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "IAAIR API service is down"
+          description: "IAAIR API has been down for more than 1 minute"
