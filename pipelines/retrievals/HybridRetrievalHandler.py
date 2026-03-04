@@ -712,6 +712,81 @@ Answer:"""
             logger.error(f"Error generating AI response: {e}")
             return None
 
+    async def verify_claims_scifact(self, ai_answer: str, context_papers: List) -> List[Dict]:
+        """
+        Implements SciFact-style verification by breaking the AI response into
+        atomic claims and checking them against the retrieved substrate.
+        """
+        # Step 1: Claim Extraction
+        # Use a prompt to break the response into individual facts
+        claims = self.extract_atomic_claims(ai_answer)
+
+        verification_results = []
+
+        for claim in claims:
+            # Step 2: Evidence Alignment
+            # Compare the claim against the 'top k' abstracts and graph metadata
+            logic_prompt = f"""
+            Claim: {claim}
+            Evidence: {self._format_papers_for_prompt(context_papers)}
+
+            Label this claim as:
+            - SUPPORTED: If the evidence explicitly confirms the claim.
+            - CONTRADICTED: If the evidence explicitly refutes the claim.
+            - NO_EVIDENCE: If the evidence is relevant but doesn't prove/disprove it.
+            """
+
+            label = self.ai_agent.generate_content(logic_prompt)
+            verification_results.append({"claim": claim, "label": label})
+
+        return verification_results
+
+    def extract_atomic_claims(self, ai_answer: str) -> List[str]:
+        """
+        Decomposes a complex AI response into atomic, verifiable scientific claims.
+        This supports the 'Verification' research goal of reducing hallucinations[cite: 25].
+        """
+        try:
+            if not ai_answer or len(ai_answer.strip()) == 0:
+                return []
+
+            # This prompt instructs the LLM to act as a claim extractor,
+            # focusing on 'scientific discovery' and 'factual groundedness'[cite: 7, 47].
+            extraction_prompt = f"""
+            You are a scientific fact-checker. Break the following AI-generated response into a list of atomic, independent claims.
+
+            Rules:
+            1. Each claim must be a single sentence.
+            2. Each claim must be self-contained (replace pronouns like 'it' or 'they' with the specific entity names).
+            3. Remove introductory phrases (e.g., "The paper says", "According to the results").
+            4. Focus on scientific facts, authors, dates, and relationships between entities.
+
+            Response to decompose:
+            "{ai_answer}"
+
+            Return the claims as a simple bulleted list.
+            """
+
+            # Using your existing AI agent infrastructure
+            raw_claims = self.ai_agent.generate_content(prompt=extraction_prompt)
+
+            if not raw_claims:
+                return []
+
+            # Clean the output into a Python list
+            processed_claims = [
+                claim.strip().lstrip('- ').lstrip('* ').strip()
+                for claim in raw_claims.split('\n')
+                if len(claim.strip()) > 10  # Filter out noise or empty lines
+            ]
+
+            logger.info(f"Extracted {len(processed_claims)} atomic claims for verification [cite: 25]")
+            return processed_claims
+
+        except Exception as e:
+            logger.error(f"Error in claim extraction: {e}")
+            return []
+
     def _format_papers_for_prompt(self, papers: List[Dict]) -> str:
         """Format papers for inclusion in response generation."""
         formatted_papers = []

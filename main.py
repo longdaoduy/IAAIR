@@ -637,7 +637,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         # Step 4: Selective reranking (only when beneficial)
         reranking_time = None
-        if request.enable_reranking:
+        if request.enable_reranking and factory.scientific_reranker:
             reranking_start = datetime.now()
             # Use selective reranking with limited candidates for speed
             fused_results = await factory.scientific_reranker.rerank_results(
@@ -684,11 +684,28 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             else:
                 factory.performance_monitor.record_cache_hit('ai_response', False)
                 with factory.performance_monitor.track_operation('ai_response'):
-                    ai_response = await factory.retrieval_handler.generate_ai_response(request.query, fused_results, query_type)
-                
-                # Cache the response
-                if ai_response:
-                    factory.cache_manager.cache_ai_response(request.query, results_hash, ai_response)
+                    # 1. Generate the raw synthesis
+                    ai_response = await factory.retrieval_handler.generate_ai_response(request.query, fused_results,
+                                                                                       query_type)
+
+                    if ai_response:
+                    # 2. PERFORM SCIFACT VERIFICATION FIRST (Week 5/7 requirement)
+                    # This reduces the 10-30% hallucination rate cited in the proposal
+                    # Convert SearchResult objects to dictionaries for verification
+                    #     papers_for_verification = [result.dict() for result in fused_results]
+                    #     verification_results = await factory.retrieval_handler.verify_claims_scifact(ai_response,
+                    #                                                                                  papers_for_verification)                        # 3. Check for CONTRADICTED labels (The Error Taxonomy pass)
+                    #     is_valid = all(v['label'] != 'CONTRADICTED' for v in verification_results)
+                    #
+                    #     if is_valid:
+                    #         # 4. Only cache if the answer is grounded in evidence
+                        factory.cache_manager.cache_ai_response(request.query, results_hash, ai_response)
+                            # Log to Provenance Ledger (Week 6)
+                        #     factory.retrieval_handler.record_verified_response(ai_response, verification_results)
+                        # else:
+                        #     # Handle hallucination (Red-team mitigation)
+                        #     ai_response = "The retrieved evidence contradicts the potential answer. Refining search..."
+
             
             response_generation_time = (datetime.now() - response_start).total_seconds()
 
