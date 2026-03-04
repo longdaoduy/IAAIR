@@ -416,7 +416,7 @@ Author names:
                        p.doi as doi, p.publication_date as publication_date,
                        collect(DISTINCT a1.name + ', ' + a2.name) as collaboration_authors,
                        v.name as venue,
-                       collect(DISTINCT a.name) as authors,
+                       collect(DISTINCT a.name) as authors
                 LIMIT $limit
                 """
                 return cypher_query, {"author_names": author_names, "limit": top_k}
