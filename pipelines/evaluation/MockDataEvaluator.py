@@ -495,8 +495,10 @@ class MockDataEvaluator:
 
             if question_data['type'] == 'graph':
                 result = await self.evaluate_graph_question(question_data)
-            else:  # semantic
+            elif question_data['type'] == 'semantic':  # semantic
                 result = await self.evaluate_semantic_question(question_data)
+            else:
+                continue
 
             results.append(result)
 
