@@ -14,17 +14,14 @@ class ScientificReranker:
         self.tokenizer = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model_name = 'BAAI/bge-reranker-base'
-        self.max_length = 512
-        self.initialized = False
-        
+        self.max_length = 768
+        self._initialize_model()
+
         # Initialize model on first use to avoid startup delays
         logger.info(f"ScientificReranker initialized - will load {self.model_name} on first use")
 
     def _initialize_model(self):
         """Initialize the BGE reranker model."""
-        if self.initialized:
-            return
-            
         try:
             logger.info(f"Loading BGE reranker model: {self.model_name}")
             
@@ -39,17 +36,14 @@ class ScientificReranker:
                 self.model = self.model.to(self.device)
             
             self.model.eval()
-            self.initialized = True
-            
+
             logger.info(f"BGE reranker model loaded successfully on {self.device}")
             
         except ImportError as e:
             logger.error(f"Failed to import transformers: {e}")
             logger.info("Install transformers with: pip install transformers torch")
-            self.initialized = False
         except Exception as e:
             logger.error(f"Failed to initialize BGE reranker: {e}")
-            self.initialized = False
 
     async def rerank_results(self, results: List[SearchResult], query: str, 
                            selective: bool = True, max_rerank_candidates: int = 20) -> List[SearchResult]:
@@ -77,14 +71,7 @@ class ScientificReranker:
         else:
             top_results = results
             remaining_results = []
-            
-        # Initialize model if needed
-        self._initialize_model()
-        
-        if not self.initialized:
-            logger.warning("BGE reranker not available, falling back to basic reranking")
-            return self._fallback_rerank(results)
-        
+
         try:
             logger.info(f"Reranking {len(top_results)} results using BGE reranker")
             
@@ -251,7 +238,6 @@ class ScientificReranker:
         return {
             'model_name': self.model_name,
             'device': str(self.device),
-            'initialized': self.initialized,
             'max_length': self.max_length,
             'cuda_available': torch.cuda.is_available()
         }
