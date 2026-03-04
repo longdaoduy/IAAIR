@@ -14,7 +14,7 @@ class ScientificReranker:
         self.tokenizer = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model_name = 'BAAI/bge-reranker-base'
-        self.max_length = 768
+        self.max_length = 512
         self._initialize_model()
 
         # Initialize model on first use to avoid startup delays

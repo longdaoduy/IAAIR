@@ -108,14 +108,9 @@ class MockDataEvaluator:
 
             # Extract paper IDs from result if available
             retrieved_papers = []
-            if result and 'data' in result:
-                for record in result['data']:
-                    # Try to find paper IDs in the record
-                    for key, value in record.items():
-                        if key in ['paper_id', 'id'] and isinstance(value, str) and value.startswith('W'):
-                            retrieved_papers.append(value)
-                        elif isinstance(value, str) and value.startswith('W'):
-                            retrieved_papers.append(value)
+
+            if result:
+                retrieved_papers.extend([r.get('paper_id') for r in result[:]])
 
             # Remove duplicates while preserving order
             seen = set()
