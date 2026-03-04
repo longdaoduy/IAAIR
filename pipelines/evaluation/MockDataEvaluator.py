@@ -8,6 +8,7 @@ enriched OpenAlex papers data.
 
 import json
 import logging
+import math
 import time
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -37,6 +38,10 @@ class MockEvaluationResult:
     ai_generation_time: Optional[float] = None
     error_message: Optional[str] = None
     similarity_scores: Optional[List[float]] = None
+    dcg_at_5: Optional[float] = None
+    dcg_at_10: Optional[float] = None
+    ndcg_at_5: Optional[float] = None
+    ndcg_at_10: Optional[float] = None
 
 
 @dataclass
@@ -52,6 +57,10 @@ class MockEvaluationSummary:
     avg_ai_response_similarity: float
     avg_ai_generation_time: float
     ai_response_success_rate: float
+    avg_dcg_at_5: float
+    avg_dcg_at_10: float
+    avg_ndcg_at_5: float
+    avg_ndcg_at_10: float
     graph_performance: Dict[str, float]
     semantic_performance: Dict[str, float]
     category_breakdown: Dict[str, Dict[str, float]]
@@ -123,6 +132,12 @@ class MockDataEvaluator:
 
                 # Calculate metrics
                 precision, recall, f1 = self._calculate_metrics(retrieved_papers, expected_papers)
+                
+                # Calculate DCG metrics
+                dcg_at_5 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 5)
+                dcg_at_10 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 10)
+                ndcg_at_5 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 5)
+                ndcg_at_10 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 10)
 
                 # Generate AI response if deepseek client is available
                 ai_response = None
@@ -170,7 +185,11 @@ class MockDataEvaluator:
                     ai_response=ai_response,
                     expected_ai_response=expected_ai_response,
                     ai_response_similarity=ai_response_similarity,
-                    ai_generation_time=ai_generation_time
+                    ai_generation_time=ai_generation_time,
+                    dcg_at_5=dcg_at_5,
+                    dcg_at_10=dcg_at_10,
+                    ndcg_at_5=ndcg_at_5,
+                    ndcg_at_10=ndcg_at_10
                 )
             else:
                 # Fallback: try to answer using hybrid search
@@ -229,6 +248,12 @@ class MockDataEvaluator:
 
             # Calculate metrics
             precision, recall, f1 = self._calculate_metrics(retrieved_papers, expected_papers)
+            
+            # Calculate DCG metrics
+            dcg_at_5 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 5)
+            dcg_at_10 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 10)
+            ndcg_at_5 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 5)
+            ndcg_at_10 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 10)
 
             # Generate AI response if deepseek client is available
             ai_response = None
@@ -283,7 +308,11 @@ class MockDataEvaluator:
                 expected_ai_response=expected_ai_response,
                 ai_response_similarity=ai_response_similarity,
                 ai_generation_time=ai_generation_time,
-                similarity_scores=similarity_scores
+                similarity_scores=similarity_scores,
+                dcg_at_5=dcg_at_5,
+                dcg_at_10=dcg_at_10,
+                ndcg_at_5=ndcg_at_5,
+                ndcg_at_10=ndcg_at_10
             )
 
         except Exception as e:
@@ -402,6 +431,70 @@ class MockDataEvaluator:
 
         return len(intersection) / len(union) if union else 0.0
 
+    def _calculate_dcg_at_k(self, retrieved: List[str], expected: List[str], k: int) -> float:
+        """Calculate Discounted Cumulative Gain at k.
+        
+        Args:
+            retrieved: List of retrieved paper IDs in ranked order
+            expected: List of expected/relevant paper IDs
+            k: Cut-off rank
+            
+        Returns:
+            DCG@k score
+        """
+        if not retrieved or not expected:
+            return 0.0
+            
+        expected_set = set(expected)
+        dcg = 0.0
+        
+        for i, paper_id in enumerate(retrieved[:k]):
+            if paper_id in expected_set:
+                # Binary relevance: 1 if relevant, 0 otherwise
+                relevance = 1.0
+                # DCG formula: rel_i / log2(i + 2) where i is 0-indexed
+                dcg += relevance / math.log2(i + 2)
+                
+        return dcg
+    
+    def _calculate_ideal_dcg_at_k(self, expected: List[str], k: int) -> float:
+        """Calculate Ideal DCG at k (maximum possible DCG).
+        
+        Args:
+            expected: List of expected/relevant paper IDs
+            k: Cut-off rank
+            
+        Returns:
+            IDCG@k score
+        """
+        if not expected:
+            return 0.0
+            
+        # For binary relevance, ideal ranking has all relevant items first
+        num_relevant = min(len(expected), k)
+        idcg = 0.0
+        
+        for i in range(num_relevant):
+            idcg += 1.0 / math.log2(i + 2)
+            
+        return idcg
+    
+    def _calculate_ndcg_at_k(self, retrieved: List[str], expected: List[str], k: int) -> float:
+        """Calculate Normalized DCG at k.
+        
+        Args:
+            retrieved: List of retrieved paper IDs in ranked order
+            expected: List of expected/relevant paper IDs
+            k: Cut-off rank
+            
+        Returns:
+            NDCG@k score (0-1, where 1 is perfect)
+        """
+        dcg = self._calculate_dcg_at_k(retrieved, expected, k)
+        idcg = self._calculate_ideal_dcg_at_k(expected, k)
+        
+        return dcg / idcg if idcg > 0 else 0.0
+
     async def run_evaluation(self, limit: Optional[int] = None) -> List[MockEvaluationResult]:
         """Run evaluation on all mock questions."""
         questions = self.load_mock_data()
@@ -440,7 +533,7 @@ class MockDataEvaluator:
     def generate_summary(self, results: List[MockEvaluationResult]) -> MockEvaluationSummary:
         """Generate evaluation summary from results."""
         if not results:
-            return MockEvaluationSummary(0, 0, 0, 0.0, 0.0, 0.0, 0.0, {}, {}, {})
+            return MockEvaluationSummary(0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, {}, {}, {})
 
         successful_results = [r for r in results if r.success]
         failed_results = [r for r in results if not r.success]
@@ -469,9 +562,17 @@ class MockDataEvaluator:
             ai_successful_responses = [r for r in successful_results if r.ai_response is not None]
             ai_response_success_rate = len(ai_successful_responses) / len(
                 successful_results) if successful_results else 0.0
+                
+            # Calculate average DCG metrics
+            dcg_results = [r for r in successful_results if r.dcg_at_5 is not None]
+            avg_dcg_at_5 = sum(r.dcg_at_5 for r in dcg_results) / len(dcg_results) if dcg_results else 0.0
+            avg_dcg_at_10 = sum(r.dcg_at_10 for r in dcg_results) / len(dcg_results) if dcg_results else 0.0
+            avg_ndcg_at_5 = sum(r.ndcg_at_5 for r in dcg_results) / len(dcg_results) if dcg_results else 0.0
+            avg_ndcg_at_10 = sum(r.ndcg_at_10 for r in dcg_results) / len(dcg_results) if dcg_results else 0.0
         else:
             overall_precision = overall_recall = overall_f1 = 0.0
             avg_ai_response_similarity = avg_ai_generation_time = ai_response_success_rate = 0.0
+            avg_dcg_at_5 = avg_dcg_at_10 = avg_ndcg_at_5 = avg_ndcg_at_10 = 0.0
 
         # Performance by type
         graph_results = [r for r in successful_results if r.question_type == 'graph']
@@ -479,22 +580,32 @@ class MockDataEvaluator:
 
         graph_performance = {}
         if graph_results:
+            graph_dcg_results = [r for r in graph_results if r.dcg_at_5 is not None]
             graph_performance = {
                 'precision': sum(r.precision for r in graph_results) / len(graph_results),
                 'recall': sum(r.recall for r in graph_results) / len(graph_results),
                 'f1': sum(r.f1_score for r in graph_results) / len(graph_results),
                 'avg_response_time': sum(r.response_time for r in graph_results) / len(graph_results),
-                'success_rate': len(graph_results) / len([r for r in results if r.question_type == 'graph'])
+                'success_rate': len(graph_results) / len([r for r in results if r.question_type == 'graph']),
+                'dcg_at_5': sum(r.dcg_at_5 for r in graph_dcg_results) / len(graph_dcg_results) if graph_dcg_results else 0.0,
+                'dcg_at_10': sum(r.dcg_at_10 for r in graph_dcg_results) / len(graph_dcg_results) if graph_dcg_results else 0.0,
+                'ndcg_at_5': sum(r.ndcg_at_5 for r in graph_dcg_results) / len(graph_dcg_results) if graph_dcg_results else 0.0,
+                'ndcg_at_10': sum(r.ndcg_at_10 for r in graph_dcg_results) / len(graph_dcg_results) if graph_dcg_results else 0.0
             }
 
         semantic_performance = {}
         if semantic_results:
+            semantic_dcg_results = [r for r in semantic_results if r.dcg_at_5 is not None]
             semantic_performance = {
                 'precision': sum(r.precision for r in semantic_results) / len(semantic_results),
                 'recall': sum(r.recall for r in semantic_results) / len(semantic_results),
                 'f1': sum(r.f1_score for r in semantic_results) / len(semantic_results),
                 'avg_response_time': sum(r.response_time for r in semantic_results) / len(semantic_results),
-                'success_rate': len(semantic_results) / len([r for r in results if r.question_type == 'semantic'])
+                'success_rate': len(semantic_results) / len([r for r in results if r.question_type == 'semantic']),
+                'dcg_at_5': sum(r.dcg_at_5 for r in semantic_dcg_results) / len(semantic_dcg_results) if semantic_dcg_results else 0.0,
+                'dcg_at_10': sum(r.dcg_at_10 for r in semantic_dcg_results) / len(semantic_dcg_results) if semantic_dcg_results else 0.0,
+                'ndcg_at_5': sum(r.ndcg_at_5 for r in semantic_dcg_results) / len(semantic_dcg_results) if semantic_dcg_results else 0.0,
+                'ndcg_at_10': sum(r.ndcg_at_10 for r in semantic_dcg_results) / len(semantic_dcg_results) if semantic_dcg_results else 0.0
             }
 
         # Performance by category
@@ -503,12 +614,15 @@ class MockDataEvaluator:
         for category in categories:
             category_results = [r for r in successful_results if r.category == category]
             if category_results:
+                category_dcg_results = [r for r in category_results if r.dcg_at_5 is not None]
                 category_breakdown[category] = {
                     'precision': sum(r.precision for r in category_results) / len(category_results),
                     'recall': sum(r.recall for r in category_results) / len(category_results),
                     'f1': sum(r.f1_score for r in category_results) / len(category_results),
                     'count': len(category_results),
-                    'success_rate': len(category_results) / len([r for r in results if r.category == category])
+                    'success_rate': len(category_results) / len([r for r in results if r.category == category]),
+                    'dcg_at_5': sum(r.dcg_at_5 for r in category_dcg_results) / len(category_dcg_results) if category_dcg_results else 0.0,
+                    'ndcg_at_5': sum(r.ndcg_at_5 for r in category_dcg_results) / len(category_dcg_results) if category_dcg_results else 0.0
                 }
 
         return MockEvaluationSummary(
@@ -522,6 +636,10 @@ class MockDataEvaluator:
             avg_ai_response_similarity=avg_ai_response_similarity,
             avg_ai_generation_time=avg_ai_generation_time,
             ai_response_success_rate=ai_response_success_rate,
+            avg_dcg_at_5=avg_dcg_at_5,
+            avg_dcg_at_10=avg_dcg_at_10,
+            avg_ndcg_at_5=avg_ndcg_at_5,
+            avg_ndcg_at_10=avg_ndcg_at_10,
             graph_performance=graph_performance,
             semantic_performance=semantic_performance,
             category_breakdown=category_breakdown
@@ -544,6 +662,10 @@ class MockDataEvaluator:
         report.append(f"- **Overall Precision:** {summary.overall_precision:.3f}")
         report.append(f"- **Overall Recall:** {summary.overall_recall:.3f}")
         report.append(f"- **Overall F1 Score:** {summary.overall_f1:.3f}")
+        report.append(f"- **Average DCG@5:** {summary.avg_dcg_at_5:.3f}")
+        report.append(f"- **Average DCG@10:** {summary.avg_dcg_at_10:.3f}")
+        report.append(f"- **Average NDCG@5:** {summary.avg_ndcg_at_5:.3f}")
+        report.append(f"- **Average NDCG@10:** {summary.avg_ndcg_at_10:.3f}")
         report.append("")
 
         # AI Response Performance
@@ -563,6 +685,8 @@ class MockDataEvaluator:
             report.append(f"- **Precision:** {gp.get('precision', 0):.3f}")
             report.append(f"- **Recall:** {gp.get('recall', 0):.3f}")
             report.append(f"- **F1 Score:** {gp.get('f1', 0):.3f}")
+            report.append(f"- **DCG@5:** {gp.get('dcg_at_5', 0):.3f}")
+            report.append(f"- **NDCG@5:** {gp.get('ndcg_at_5', 0):.3f}")
             report.append(f"- **Avg Response Time:** {gp.get('avg_response_time', 0):.3f}s")
             report.append("")
 
@@ -573,6 +697,8 @@ class MockDataEvaluator:
             report.append(f"- **Precision:** {sp.get('precision', 0):.3f}")
             report.append(f"- **Recall:** {sp.get('recall', 0):.3f}")
             report.append(f"- **F1 Score:** {sp.get('f1', 0):.3f}")
+            report.append(f"- **DCG@5:** {sp.get('dcg_at_5', 0):.3f}")
+            report.append(f"- **NDCG@5:** {sp.get('ndcg_at_5', 0):.3f}")
             report.append(f"- **Avg Response Time:** {sp.get('avg_response_time', 0):.3f}s")
             report.append("")
 
@@ -642,6 +768,10 @@ class MockDataEvaluator:
                     'precision': r.precision,
                     'recall': r.recall,
                     'f1_score': r.f1_score,
+                    'dcg_at_5': r.dcg_at_5,
+                    'dcg_at_10': r.dcg_at_10,
+                    'ndcg_at_5': r.ndcg_at_5,
+                    'ndcg_at_10': r.ndcg_at_10,
                     'error_message': r.error_message,
                     'similarity_scores': r.similarity_scores
                 }
