@@ -20,6 +20,7 @@ from datetime import datetime
 import logging
 import os
 import asyncio
+from fastapi.responses import FileResponse
 
 # Import handlers
 from models.entities.ingestion.PaperRequest import PaperRequest
@@ -93,7 +94,6 @@ class RequestCounterMiddleware(BaseHTTPMiddleware):
             
             # Track success metrics
             if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
-                logger.info(f"Prometheus monitor request duration: {duration:.2f} seconds")
                 services.prometheus_monitor.metrics.request_duration.labels(
                     endpoint=endpoint,
                     method=method,
@@ -195,7 +195,7 @@ async def root():
                 "/performance/stats": "GET - Get performance statistics and bottleneck analysis",
                 "/performance/report": "GET - Export detailed performance report",
                 "/performance/tune": "POST - Tune performance parameters at runtime",
-                "/cache/stats": "GET - Get cache performance statistics",
+                "/cache/stats": "GET - Get cache performance statistics", 
                 "/cache/clear": "POST - Clear system caches"
             },
             "system": {
@@ -224,23 +224,23 @@ async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services
                 "error": "Prometheus monitoring not available",
                 "message": "Enable monitoring with ServiceFactory.setup_monitoring()"
             }
-
+        
         # Get endpoint statistics
         prometheus_metrics = factory.performance_monitor.prometheus_integration.metrics
         endpoint_stats = prometheus_metrics.get_endpoint_statistics()
-
+        
         # Sort by total request count
         sorted_stats = sorted(
             endpoint_stats.values(),
             key=lambda x: x['total_count'],
             reverse=True
         )
-
+        
         # Calculate summary statistics
         total_requests = sum(s['total_count'] for s in sorted_stats)
         total_successes = sum(s['success_count'] for s in sorted_stats)
         total_errors = sum(s['error_count'] for s in sorted_stats)
-
+        
         return {
             "timestamp": datetime.now().isoformat(),
             "monitoring": {
@@ -267,7 +267,7 @@ async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services
                 "perfect_endpoints": len([s for s in sorted_stats if s['error_count'] == 0 and s['total_count'] > 0])
             }
         }
-
+        
     except Exception as e:
         logger.error(f"Error getting API statistics: {e}")
         return {
@@ -594,17 +594,17 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         if routing_strategy == RoutingStrategy.VECTOR_FIRST:
             # Vector search first, then optional graph refinement
-            vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
-            # if vector_results and request.top_k > 10:  # Only do graph refinement for larger result sets
-            #     # Use top vector results to inform graph search
-            #     paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
-            #     graph_results = await factory.retrieval_handler._execute_graph_refinement(paper_ids,request.top_k)
-            # else:
-            #     graph_results = []
+            vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k * 2)
+            if vector_results and request.top_k > 10:  # Only do graph refinement for larger result sets
+                # Use top vector results to inform graph search
+                paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
+                graph_results = await factory.retrieval_handler._execute_graph_refinement(paper_ids,request.top_k)
+            else:
+                graph_results = []
 
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
             # Graph search first - skip vector entirely for pure structural queries
-            graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k)
+            graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k * 2)
             logger.info("Using graph-only search - vector search skipped for performance")
             vector_results = []
 
@@ -852,7 +852,7 @@ async def evaluate_mock_data(
         evaluator = MockDataEvaluator(factory)
 
         # Run evaluation
-        results = evaluator.run_evaluation(limit=limit_questions)
+        results = await evaluator.run_evaluation(limit=limit_questions)
 
         if not results:
             raise HTTPException(status_code=500, detail="No evaluation results generated")
