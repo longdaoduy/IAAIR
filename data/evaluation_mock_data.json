@@ -71,13 +71,14 @@
     },
     {
       "id": "graph_007",
-      "question": "Who are the co-authors of Georg Kresse?",
+      "question": "Which papers were co-authored by Georg Kresse and J. Furthmüller?",
       "type": "graph",
       "category": "authors",
       "expected_evidence": {
-        "paper_ids": [],
-        "cypher_query": "MATCH (a1:Author {name: 'Georg Kresse'})<-[:AUTHORED]-(p:Paper)-[:AUTHORED]->(a2:Author) WHERE a1 <> a2 RETURN DISTINCT a2.name",
-        "expected_result": ["J. Furthmüller", "Others"]
+        "paper_ids": ["W1981368803", "W2037989040"],
+        "cypher_query": "MATCH (a1:Author {name: 'Georg Kresse'})<-[:AUTHORED]-(p:Paper)-[:AUTHORED]->(a2:Author {name: 'J. Furthmüller'}) RETURN p.id, p.title",
+        "expected_result": [{"id": "W1981368803", "title": "Efficient iterative schemes for ab initio total-energy calculations using a plane-wave basis set"}, {"id": "W2037989040", "title": "Efficiency of ab-initio total energy calculations for metals and semiconductors using a plane-wave basis set"}],
+        "expected_ai_response": "Georg Kresse and J. Furthmüller have co-authored several influential papers in computational physics and materials science, particularly focusing on ab initio total-energy calculations using plane-wave basis sets. Their collaborative work includes the development of efficient iterative schemes for electronic structure calculations that have become fundamental methods in the field of computational materials science."
       }
     },
     {
@@ -93,24 +94,26 @@
     },
     {
       "id": "graph_009",
-      "question": "How many papers are published in Analytical Biochemistry?",
+      "question": "What papers are published in Analytical Biochemistry?",
       "type": "graph",
       "category": "venues",
       "expected_evidence": {
-        "paper_ids": [],
-        "cypher_query": "MATCH (v:Venue {name: 'Analytical Biochemistry'})<-[:PUBLISHED_IN]-(p:Paper) RETURN count(p)",
-        "expected_result": 5
+        "paper_ids": ["W1775749144", "W2128635872", "W4293247451"],
+        "cypher_query": "MATCH (v:Venue {name: 'Analytical Biochemistry'})<-[:PUBLISHED_IN]-(p:Paper) RETURN p.id, p.title",
+        "expected_result": [{"id": "W1775749144", "title": "PROTEIN MEASUREMENT WITH THE FOLIN PHENOL REAGENT"}, {"id": "W2128635872", "title": "A rapid and sensitive method for the quantitation of microgram quantities of protein utilizing the principle of protein-dye binding"}, {"id": "W4293247451", "title": "A Bradford protein assay modified for increased sensitivity"}],
+        "expected_ai_response": "Analytical Biochemistry has published several landmark papers in protein analysis and quantification methods. Key publications include the famous Lowry protein assay (W1775749144), the Bradford protein assay method (W2128635872), and modifications to improve sensitivity (W4293247451). These papers represent foundational techniques in biochemical analysis that are widely used in laboratories worldwide."
       }
     },
     {
       "id": "graph_010",
-      "question": "Which authors have published more than 2 papers in the dataset?",
+      "question": "What papers has Stephen F. Altschul authored?",
       "type": "graph",
       "category": "authors",
       "expected_evidence": {
-        "paper_ids": [],
-        "cypher_query": "MATCH (a:Author)<-[:AUTHORED]-(p:Paper) WITH a, count(p) as paper_count WHERE paper_count > 2 RETURN a.name, paper_count",
-        "expected_result": ["Georg Kresse", "Jacques Ferlay", "Ahmedin Jemal", "Freddie Bray"]
+        "paper_ids": ["W2129158568", "W1964151023"],
+        "cypher_query": "MATCH (a:Author {name: 'Stephen F. Altschul'})<-[:AUTHORED]-(p:Paper) RETURN p.id, p.title",
+        "expected_result": [{"id": "W2129158568", "title": "Basic local alignment search tool"}, {"id": "W1964151023", "title": "Gapped BLAST and PSI-BLAST: a new generation of protein database search programs"}],
+        "expected_ai_response": "Stephen F. Altschul is best known for his foundational work on sequence alignment algorithms, particularly the Basic Local Alignment Search Tool (BLAST) and its variants. His papers have revolutionized bioinformatics by providing efficient methods for comparing biological sequences, which are essential tools for genomic and proteomic research."
       }
     },
     {
@@ -137,24 +140,26 @@
     },
     {
       "id": "graph_013",
-      "question": "What venues has David Moher published in?",
+      "question": "What papers has David Moher published?",
       "type": "graph",
-      "category": "venues",
+      "category": "authors",
       "expected_evidence": {
-        "paper_ids": [],
-        "cypher_query": "MATCH (a:Author {name: 'David Moher'})<-[:AUTHORED]-(p:Paper)-[:PUBLISHED_IN]->(v:Venue) RETURN DISTINCT v.name",
-        "expected_result": ["BMJ", "Other venues"]
+        "paper_ids": ["W2048516400", "W2123045076"],
+        "cypher_query": "MATCH (a:Author {name: 'David Moher'})<-[:AUTHORED]-(p:Paper) RETURN p.id, p.title",
+        "expected_result": [{"id": "W2048516400", "title": "Preferred reporting items for systematic reviews and meta-analyses: the PRISMA statement"}, {"id": "W2123045076", "title": "The CONSORT statement: revised recommendations for improving the quality of reports of parallel-group randomised trials"}],
+        "expected_ai_response": "David Moher is a leading expert in research methodology and evidence-based medicine. His work includes developing the PRISMA guidelines for systematic reviews and meta-analyses, and contributing to the CONSORT statement for reporting randomized controlled trials. These contributions have significantly improved the quality and transparency of medical research reporting."
       }
     },
     {
       "id": "graph_014",
-      "question": "How many papers were published in Physical Review B?",
+      "question": "What papers were published in Physical Review B?",
       "type": "graph",
       "category": "venues",
       "expected_evidence": {
-        "paper_ids": [],
-        "cypher_query": "MATCH (v:Venue {name: 'Physical review. B, Condensed matter'})<-[:PUBLISHED_IN]-(p:Paper) RETURN count(p)",
-        "expected_result": 4
+        "paper_ids": ["W1981368803", "W2037989040", "W2963049693", "W1971715736"],
+        "cypher_query": "MATCH (v:Venue {name: 'Physical review. B, Condensed matter'})<-[:PUBLISHED_IN]-(p:Paper) RETURN p.id, p.title",
+        "expected_result": [{"id": "W1981368803", "title": "Efficient iterative schemes for ab initio total-energy calculations using a plane-wave basis set"}, {"id": "W2037989040", "title": "Efficiency of ab-initio total energy calculations for metals and semiconductors using a plane-wave basis set"}],
+        "expected_ai_response": "Physical Review B has published several important papers in condensed matter physics and materials science, particularly in the area of computational physics and electronic structure calculations. Notable publications include foundational work by Georg Kresse and collaborators on ab initio calculation methods that have become standard in the field."
       }
     },
     {
@@ -181,46 +186,50 @@
     },
     {
       "id": "graph_017",
-      "question": "Which authors are affiliated with multiple institutions?",
+      "question": "What papers reference or cite the BLAST algorithm?",
       "type": "graph",
-      "category": "authors",
+      "category": "citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "cypher_query": "MATCH (a:Author)-[:AFFILIATED_WITH]->(i:Institution) WITH a, count(i) as inst_count WHERE inst_count > 1 RETURN a.name, inst_count",
-        "expected_result": "Authors with multiple affiliations"
+        "paper_ids": ["W2129158568", "W1964151023"],
+        "cypher_query": "MATCH (blast:Paper) WHERE blast.title CONTAINS 'BLAST' OR blast.abstract CONTAINS 'BLAST' MATCH (citing:Paper)-[:CITES]->(blast) RETURN citing.id, citing.title LIMIT 10",
+        "expected_result": "Papers citing BLAST sequence alignment tools",
+        "expected_ai_response": "The BLAST (Basic Local Alignment Search Tool) algorithm is one of the most cited tools in bioinformatics. The original BLAST paper and its improved versions (Gapped BLAST and PSI-BLAST) have been cited extensively by researchers using sequence alignment for genomic and proteomic analysis. These citations span diverse fields including molecular biology, genetics, evolutionary biology, and computational biology."
       }
     },
     {
       "id": "graph_018",
-      "question": "What papers have been published in CA A Cancer Journal for Clinicians?",
+      "question": "What papers were published in CA: A Cancer Journal for Clinicians?",
       "type": "graph",
       "category": "venues",
       "expected_evidence": {
-        "paper_ids": [],
+        "paper_ids": ["W2072446062", "W2153904558"],
         "cypher_query": "MATCH (v:Venue {name: 'CA A Cancer Journal for Clinicians'})<-[:PUBLISHED_IN]-(p:Paper) RETURN p.id, p.title",
-        "expected_result": "Cancer research papers in high-impact journal"
+        "expected_result": "High-impact cancer research and epidemiology papers",
+        "expected_ai_response": "CA: A Cancer Journal for Clinicians is one of the highest impact journals in oncology, publishing comprehensive reviews and epidemiological studies on cancer. Papers published in this venue typically include global cancer statistics, treatment guidelines, and major reviews that significantly influence cancer research and clinical practice worldwide."
       }
     },
     {
       "id": "graph_019",
-      "question": "Which paper has authors from the most institutions?",
+      "question": "What papers discuss bioinformatics algorithms and computational methods?",
       "type": "graph",
-      "category": "authors",
+      "category": "topic",
       "expected_evidence": {
-        "paper_ids": [],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WITH p, count(DISTINCT i) as inst_count RETURN p.id, p.title, inst_count ORDER BY inst_count DESC LIMIT 1",
-        "expected_result": "Paper with highest institutional diversity"
+        "paper_ids": ["W2129158568", "W1964151023", "W2107277218"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.title CONTAINS 'algorithm' OR p.abstract CONTAINS 'bioinformatics' OR p.abstract CONTAINS 'computational' RETURN p.id, p.title",
+        "expected_result": "Papers on BLAST, qPCR analysis, and other computational biology methods",
+        "expected_ai_response": "The search results include several foundational papers in bioinformatics and computational biology. Key contributions include the BLAST algorithm for sequence alignment, quantitative PCR analysis methods, and other computational approaches that have revolutionized biological data analysis. These tools enable researchers to process and analyze large-scale genomic and proteomic datasets efficiently."
       }
     },
     {
       "id": "graph_020",
-      "question": "What is the average citation count for papers in Bioinformatics?",
+      "question": "What papers were published in Bioinformatics journal?",
       "type": "graph",
-      "category": "citations",
+      "category": "venues",
       "expected_evidence": {
-        "paper_ids": [],
-        "cypher_query": "MATCH (v:Venue {name: 'Bioinformatics'})<-[:PUBLISHED_IN]-(p:Paper) RETURN avg(p.citation_count)",
-        "expected_result": "Average citations for bioinformatics papers"
+        "paper_ids": ["W2129158568", "W2107277218"],
+        "cypher_query": "MATCH (v:Venue {name: 'Bioinformatics'})<-[:PUBLISHED_IN]-(p:Paper) RETURN p.id, p.title",
+        "expected_result": "Computational biology and bioinformatics methodology papers",
+        "expected_ai_response": "Bioinformatics journal publishes cutting-edge research in computational biology, including algorithms, software tools, and databases for biological data analysis. Notable publications include sequence alignment tools like BLAST and quantitative analysis methods for genomic data. The journal is a key venue for disseminating computational methods that advance biological research."
       }
     },
     {
@@ -229,9 +238,10 @@
       "type": "graph",
       "category": "authors",
       "expected_evidence": {
-        "paper_ids": [],
+        "paper_ids": ["W1981368803", "W2037989040"],
         "cypher_query": "MATCH (a1:Author {name: 'Georg Kresse'})<-[:AUTHORED]-(p:Paper)-[:AUTHORED]->(a2:Author {name: 'J. Furthmüller'}) RETURN p.id, p.title",
-        "expected_result": "Collaborative papers in computational physics"
+        "expected_result": "Collaborative computational physics papers on ab initio calculations",
+        "expected_ai_response": "Georg Kresse and J. Furthmüller have collaborated on several landmark papers in computational materials science, particularly focusing on ab initio total-energy calculations using plane-wave basis sets. Their work has provided efficient computational methods that are widely used in the materials science community for electronic structure calculations and have significantly advanced the field of computational physics."
       }
     },
     {
@@ -247,13 +257,14 @@
     },
     {
       "id": "graph_023",
-      "question": "How many papers cite works published in Nature?",
+      "question": "What papers cite Nature publications?",
       "type": "graph",
       "category": "citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "cypher_query": "MATCH (nature:Venue {name: 'Nature'})<-[:PUBLISHED_IN]-(nature_paper:Paper)<-[:CITES]-(citing:Paper) RETURN count(DISTINCT citing)",
-        "expected_result": "Total citations to Nature papers"
+        "paper_ids": ["W2100837269", "W1775749144"],
+        "cypher_query": "MATCH (nature:Venue {name: 'Nature'})<-[:PUBLISHED_IN]-(nature_paper:Paper)<-[:CITES]-(citing:Paper) RETURN citing.id, citing.title LIMIT 10",
+        "expected_result": "Papers that reference landmark Nature publications",
+        "expected_ai_response": "Many high-impact papers cite foundational research published in Nature. The most cited Nature papers include landmark studies in biochemistry, molecular biology, and other fields. These citations demonstrate the significant influence of Nature publications on subsequent research across multiple disciplines."
       }
     },
     {
@@ -269,13 +280,14 @@
     },
     {
       "id": "graph_025",
-      "question": "What is the collaboration network size of Stephen F. Altschul?",
+      "question": "What papers has Stephen F. Altschul co-authored with other bioinformatics researchers?",
       "type": "graph",
       "category": "authors",
       "expected_evidence": {
-        "paper_ids": [],
-        "cypher_query": "MATCH (a1:Author {name: 'Stephen F. Altschul'})<-[:AUTHORED]-(p:Paper)-[:AUTHORED]->(a2:Author) WHERE a1 <> a2 RETURN count(DISTINCT a2)",
-        "expected_result": "Number of unique collaborators"
+        "paper_ids": ["W2129158568", "W1964151023"],
+        "cypher_query": "MATCH (a1:Author {name: 'Stephen F. Altschul'})<-[:AUTHORED]-(p:Paper)-[:AUTHORED]->(a2:Author) WHERE a1 <> a2 RETURN p.id, p.title, collect(a2.name) as co_authors",
+        "expected_result": "BLAST papers with collaborators in sequence analysis research",
+        "expected_ai_response": "Stephen F. Altschul has collaborated with several prominent researchers in developing the BLAST algorithm and its variants. His co-authors include experts in computational biology and sequence analysis who contributed to making BLAST one of the most widely used tools in bioinformatics. These collaborations have resulted in foundational papers that transformed biological sequence analysis."
       }
     },
     {
@@ -338,24 +350,26 @@
     },
     {
       "id": "semantic_006",
-      "question": "Cancer epidemiology and statistical analysis research",
+      "question": "Research on cancer epidemiology and global cancer statistics",
       "type": "semantic",
       "category": "topic",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["cancer epidemiology", "oncology", "statistical analysis", "population studies", "disease incidence"],
-        "expected_result": "Papers by cancer research authors like Jacques Ferlay, Ahmedin Jemal"
+        "paper_ids": ["W2072446062", "W2153904558", "W2794121807"],
+        "semantic_keywords": ["cancer epidemiology", "oncology", "statistical analysis", "global cancer burden", "disease incidence"],
+        "expected_result": "Papers by cancer epidemiologists like Jacques Ferlay, Ahmedin Jemal on global cancer statistics",
+        "expected_ai_response": "The search results include important research on cancer epidemiology and global cancer statistics. These studies provide comprehensive analyses of cancer incidence, mortality, and trends worldwide. Key authors in this field include Jacques Ferlay, Ahmedin Jemal, and Freddie Bray, who have contributed extensively to our understanding of the global cancer burden through systematic data collection and statistical analysis of cancer patterns across different populations and regions."
       }
     },
     {
       "id": "semantic_007",
-      "question": "Systematic review methodologies and meta-analysis",
+      "question": "Research on systematic review methodologies and evidence-based medicine",
       "type": "semantic",
       "category": "method",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["systematic review", "meta-analysis", "research methodology", "evidence synthesis", "clinical research"],
-        "expected_result": "Papers on research methodology and systematic review techniques"
+        "paper_ids": ["W2048516400", "W2123045076", "W1966020746"],
+        "semantic_keywords": ["systematic review", "meta-analysis", "research methodology", "evidence synthesis", "clinical research", "PRISMA", "CONSORT"],
+        "expected_result": "Papers on research methodology guidelines and systematic review techniques",
+        "expected_ai_response": "The search results include foundational work on systematic review methodologies and evidence-based medicine. Key contributions include the PRISMA statement for systematic reviews and meta-analyses, and the CONSORT guidelines for randomized controlled trials. These methodological frameworks have standardized the reporting and conduct of clinical research, improving the quality and transparency of medical evidence synthesis."
       }
     },
     {
@@ -393,11 +407,16 @@
     },
     {
       "id": "semantic_011",
-      "question": "Structural biology and protein crystallography findings",
+      "question": "Structural biology and protein analysis methods",
       "type": "semantic",
       "category": "finding",
       "expected_evidence": {
-        "paper_ids": ["W2100837269"],
+        "paper_ids": ["W2100837269", "W1775749144", "W2128635872"],
+        "semantic_keywords": ["structural biology", "protein analysis", "SDS-PAGE", "protein separation", "electrophoresis", "protein structure"],
+        "expected_result": "Papers on protein separation and structural analysis techniques",
+        "expected_ai_response": "The search results include fundamental contributions to structural biology and protein analysis methods. Notable papers include Laemmli's work on SDS-PAGE protein separation (W2100837269), and various protein quantification methods including the Lowry assay (W1775749144) and Bradford assay (W2128635872). These techniques are essential tools in biochemistry and molecular biology for protein characterization and analysis."
+      }
+    },
         "semantic_keywords": ["structural biology", "protein structure", "crystallography", "SDS-PAGE", "protein folding"],
         "expected_result": "Papers on protein structure analysis and biochemical techniques"
       }
@@ -427,46 +446,50 @@
     },
     {
       "id": "semantic_014",
-      "question": "Statistical methods for biological data analysis",
+      "question": "Research on statistical methods for quantitative PCR and gene expression analysis",
       "type": "semantic",
       "category": "method",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["statistical analysis", "biostatistics", "data analysis", "statistical modeling", "biological statistics"],
-        "expected_result": "Papers on statistical methods applied to biological and medical research"
+        "paper_ids": ["W2107277218", "W1979290264"],
+        "semantic_keywords": ["statistical analysis", "qPCR", "gene expression", "quantitative methods", "2^(-ΔΔCt) method", "thematic analysis"],
+        "expected_result": "Papers on quantitative PCR analysis methods and statistical approaches in biological research",
+        "expected_ai_response": "The search results include important statistical methods for biological data analysis, particularly the widely-used 2^(-ΔΔCt) method for relative gene expression analysis in qPCR experiments, and statistical approaches like thematic analysis for qualitative research in psychology and social sciences."
       }
     },
     {
       "id": "semantic_015",
-      "question": "Medical research reporting standards and guidelines",
+      "question": "Research reporting standards and systematic review methodology",
       "type": "semantic",
       "category": "method",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["research reporting", "clinical guidelines", "medical methodology", "research standards", "evidence-based medicine"],
-        "expected_result": "Papers on medical research methodology and reporting standards"
+        "paper_ids": ["W2048516400", "W2123045076", "W1966020746"],
+        "semantic_keywords": ["research reporting", "PRISMA", "CONSORT", "systematic review", "meta-analysis", "clinical guidelines", "evidence-based medicine"],
+        "expected_result": "Papers on PRISMA guidelines, CONSORT statement, and research methodology standards",
+        "expected_ai_response": "The search results include foundational work on research reporting standards, including the PRISMA statement for systematic reviews and meta-analyses, and the CONSORT guidelines for randomized controlled trials. These methodological frameworks have significantly improved the quality and transparency of medical research reporting worldwide."
       }
     },
     {
       "id": "semantic_016",
-      "question": "Sequence analysis algorithms and bioinformatics methods",
+      "question": "Sequence alignment algorithms and computational genomics tools",
       "type": "semantic",
       "category": "method",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["sequence analysis", "BLAST", "alignment algorithms", "computational genomics", "bioinformatics algorithms"],
-        "expected_result": "Papers by Stephen F. Altschul and others on sequence analysis algorithms"
+        "paper_ids": ["W2129158568", "W1964151023", "W2134526812"],
+        "semantic_keywords": ["sequence analysis", "BLAST", "alignment algorithms", "computational genomics", "bioinformatics algorithms", "HTSeq", "high-throughput sequencing"],
+        "expected_result": "Papers on BLAST algorithm and other sequence analysis tools including HTSeq",
+        "expected_ai_response": "The search results include fundamental bioinformatics tools for sequence analysis, particularly the BLAST algorithm for local sequence alignment and HTSeq for analyzing high-throughput sequencing data. These tools have become essential for genomic and transcriptomic research, enabling researchers to compare sequences and analyze large-scale sequencing datasets efficiently."
       }
     },
     {
       "id": "semantic_017",
-      "question": "Materials science and condensed matter physics research",
+      "question": "Ab initio calculations and density functional theory in materials science",
       "type": "semantic",
       "category": "topic",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["materials science", "condensed matter physics", "solid state physics", "electronic properties", "computational materials"],
-        "expected_result": "Papers published in Physical Review B and related materials science journals"
+        "paper_ids": ["W1981368803", "W2037989040", "W2963049693"],
+        "semantic_keywords": ["materials science", "density functional theory", "ab initio", "electronic structure", "computational materials", "plane-wave basis set", "DFT"],
+        "expected_result": "Papers on computational methods in materials science, particularly DFT calculations",
+        "expected_ai_response": "The search results include seminal work in computational materials science, particularly ab initio total-energy calculations using plane-wave basis sets. These papers by Georg Kresse and colleagues have provided efficient computational methods that are widely used in the materials science community for electronic structure calculations and have significantly advanced computational physics."
       }
     },
     {
@@ -498,19 +521,21 @@
       "category": "method",
       "expected_evidence": {
         "paper_ids": ["W2100837269"],
-        "semantic_keywords": ["protein separation", "electrophoresis", "SDS-PAGE", "gel electrophoresis", "protein analysis"],
-        "expected_result": "Papers on protein separation techniques and gel electrophoresis methods"
+        "semantic_keywords": ["structural biology", "protein analysis", "SDS-PAGE", "protein separation", "electrophoresis", "protein structure"],
+        "expected_result": "Papers on protein separation and structural analysis techniques",
+        "expected_ai_response": "The search results include fundamental contributions to structural biology and protein analysis methods. Notable papers include Laemmli's work on SDS-PAGE protein separation (W2100837269), and various protein quantification methods including the Lowry assay (W1775749144) and Bradford assay (W2128635872). These techniques are essential tools in biochemistry and molecular biology for protein characterization and analysis."
       }
     },
     {
       "id": "semantic_021",
-      "question": "Epidemiological studies on disease patterns and public health",
+      "question": "Research on global cancer burden and epidemiological patterns",
       "type": "semantic",
       "category": "finding",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["epidemiology", "public health", "disease surveillance", "population health", "health statistics"],
-        "expected_result": "Papers on cancer epidemiology and global disease patterns"
+        "paper_ids": ["W2072446062", "W2153904558", "W2794121807"],
+        "semantic_keywords": ["cancer epidemiology", "global cancer burden", "disease incidence", "cancer statistics", "population health"],
+        "expected_result": "Papers on global cancer epidemiology and disease pattern analysis",
+        "expected_ai_response": "The search results include comprehensive studies on global cancer burden and epidemiological patterns. These papers provide systematic analyses of cancer incidence, mortality rates, and geographic variations in cancer patterns, contributing to our understanding of cancer as a global public health challenge."
       }
     },
     {
@@ -584,14 +609,15 @@
     },
     {
       "id": "parallel_003",
-      "question": "Find computational biology papers co-authored by researchers from MIT and Stanford",
+      "question": "Find highly cited bioinformatics algorithms published in top computational biology journals",
       "type": "parallel",
-      "category": "hybrid_topic_collaboration",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["computational biology", "bioinformatics", "genomics", "systems biology"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a1:Author)-[:AFFILIATED_WITH]->(i1:Institution {name: 'MIT'}), (p)-[:AUTHORED]->(a2:Author)-[:AFFILIATED_WITH]->(i2:Institution {name: 'Stanford University'}) RETURN p.id, p.title",
-        "expected_result": "Collaborative computational biology research between top institutions"
+        "paper_ids": ["W2129158568", "W1964151023", "W2134526812"],
+        "semantic_keywords": ["computational biology", "bioinformatics", "sequence alignment", "BLAST", "HTSeq"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 1000 AND (p.title CONTAINS 'BLAST' OR p.title CONTAINS 'HTSeq' OR p.abstract CONTAINS 'bioinformatics') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Foundational bioinformatics tools like BLAST and HTSeq with high citation counts",
+        "expected_ai_response": "The search results include some of the most influential bioinformatics algorithms that have shaped computational biology. These include the BLAST algorithm for sequence alignment and HTSeq for high-throughput sequencing analysis, both of which have been cited extensively and are essential tools in genomics research."
       }
     },
     {
@@ -608,26 +634,28 @@
     },
     {
       "id": "parallel_005",
-      "question": "Find CRISPR gene editing papers authored by Jennifer Doudna or Emmanuelle Charpentier",
+      "question": "Find protein analysis and biochemistry papers with high citation counts",
       "type": "parallel",
-      "category": "hybrid_topic_author",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["CRISPR", "gene editing", "Cas9", "genome engineering", "DNA editing"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author) WHERE a.name IN ['Jennifer Doudna', 'Emmanuelle Charpentier'] RETURN p.id, p.title",
-        "expected_result": "CRISPR papers by Nobel Prize winners"
+        "paper_ids": ["W1775749144", "W2100837269", "W2128635872"],
+        "semantic_keywords": ["protein analysis", "biochemistry", "protein quantification", "SDS-PAGE", "Bradford assay", "Lowry method"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 50000 AND (p.title CONTAINS 'protein' OR p.abstract CONTAINS 'biochemistry') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Highly cited foundational papers in protein biochemistry",
+        "expected_ai_response": "The search results include some of the most cited papers in biochemistry, including foundational methods for protein analysis such as the Lowry protein assay, Laemmli's SDS-PAGE method, and the Bradford protein assay. These techniques are fundamental tools in biochemistry and molecular biology laboratories worldwide."
       }
     },
     {
       "id": "parallel_006",
-      "question": "What are the most recent cancer immunotherapy papers published in Cell or Nature Medicine?",
+      "question": "What are the most cited cancer research papers published in high-impact journals?",
       "type": "parallel",
       "category": "hybrid_topic_venue",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["cancer immunotherapy", "CAR-T", "checkpoint inhibitors", "immune therapy"],
-        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name IN ['Cell', 'Nature Medicine'] AND p.publication_year >= 2020 RETURN p.id, p.title ORDER BY p.publication_year DESC",
-        "expected_result": "Recent immunotherapy research in top medical journals"
+        "paper_ids": ["W2072446062", "W2153904558", "W2794121807"],
+        "semantic_keywords": ["cancer epidemiology", "oncology", "cancer statistics", "global cancer burden", "cancer incidence"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name IN ['CA: A Cancer Journal for Clinicians', 'Nature', 'Cell'] AND p.citation_count > 1000 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "High-impact cancer epidemiology and oncology research",
+        "expected_ai_response": "The search results include highly influential cancer research papers published in top-tier medical journals. These papers typically focus on cancer epidemiology, global cancer statistics, and major reviews that significantly influence cancer research and clinical practice worldwide."
       }
     },
     {
@@ -644,218 +672,236 @@
     },
     {
       "id": "parallel_008",
-      "question": "What quantum computing papers have been published by IBM Research authors?",
+      "question": "Find deep learning papers in computer vision with high citation impact",
       "type": "parallel",
-      "category": "hybrid_topic_affiliation",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["quantum computing", "quantum algorithms", "quantum circuits", "qubit"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.name CONTAINS 'IBM' RETURN p.id, p.title",
-        "expected_result": "Quantum computing research from IBM"
+        "paper_ids": ["W2194775991"],
+        "semantic_keywords": ["deep learning", "computer vision", "neural networks", "image recognition", "ResNet"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 10000 AND (p.title CONTAINS 'deep' OR p.title CONTAINS 'ResNet') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Highly cited deep learning papers in computer vision",
+        "expected_ai_response": "The search results include breakthrough papers in deep learning for computer vision, particularly the ResNet architecture which solved the vanishing gradient problem and enabled training of very deep networks, fundamentally advancing the field of computer vision."
       }
     },
     {
       "id": "parallel_009",
-      "question": "Find climate change papers co-authored by researchers from more than 5 countries",
+      "question": "Find cancer epidemiology papers published in high-impact medical journals",
       "type": "parallel",
-      "category": "hybrid_topic_collaboration",
+      "category": "hybrid_topic_venue",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["climate change", "global warming", "environmental science", "carbon dioxide"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WITH p, count(DISTINCT i.country) as country_count WHERE country_count > 5 RETURN p.id, p.title, country_count",
-        "expected_result": "International collaborative climate research"
+        "paper_ids": ["W2072446062", "W2153904558"],
+        "semantic_keywords": ["cancer epidemiology", "oncology", "global cancer statistics", "disease incidence", "public health"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name IN ['CA: A Cancer Journal for Clinicians', 'The Lancet Oncology'] AND p.citation_count > 1000 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "High-impact cancer epidemiology research in premier medical journals",
+        "expected_ai_response": "The search results include influential cancer epidemiology papers published in top-tier medical journals, providing comprehensive analyses of global cancer burden and epidemiological patterns that guide cancer research and public health policy."
       }
     },
     {
       "id": "parallel_010",
-      "question": "What are the most cited COVID-19 papers published in The Lancet during 2020-2021?",
-      "type": "parallel", 
-      "category": "hybrid_topic_venue",
+      "question": "Find research methodology papers that have shaped evidence-based medicine",
+      "type": "parallel",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["COVID-19", "SARS-CoV-2", "coronavirus", "pandemic", "epidemiology"],
-        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue {name: 'The Lancet'}) WHERE p.publication_year IN [2020, 2021] RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
-        "expected_result": "High-impact COVID research in premier medical journal"
+        "paper_ids": ["W2048516400", "W2123045076"],
+        "semantic_keywords": ["research methodology", "PRISMA", "CONSORT", "systematic review", "clinical guidelines", "evidence-based medicine"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 5000 AND (p.title CONTAINS 'PRISMA' OR p.title CONTAINS 'CONSORT') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Foundational methodology papers that shaped evidence-based medicine",
+        "expected_ai_response": "The search results include the most influential methodology papers in evidence-based medicine, including PRISMA guidelines for systematic reviews and CONSORT statement for clinical trials, which have fundamentally improved medical research quality and transparency."
       }
     },
     {
       "id": "parallel_011",
-      "question": "Find materials science papers about graphene authored by Andre Geim or Konstantin Novoselov",
+      "question": "Find computational physics papers with high citation impact in materials science journals",
       "type": "parallel",
-      "category": "hybrid_topic_author",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["graphene", "2D materials", "carbon", "electronic properties"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author) WHERE a.name IN ['Andre Geim', 'Konstantin Novoselov'] RETURN p.id, p.title",
-        "expected_result": "Graphene papers by Nobel Prize winners"
+        "paper_ids": ["W1981368803", "W2037989040", "W2963049693"],
+        "semantic_keywords": ["computational physics", "ab initio calculations", "density functional theory", "electronic structure", "materials modeling"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name CONTAINS 'Physical Review' AND p.citation_count > 1000 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Highly cited computational physics papers in Physical Review journals",
+        "expected_ai_response": "The search results include foundational computational physics papers that have significantly impacted materials science. These include ab initio calculation methods and density functional theory approaches that are widely used in the computational materials science community."
       }
     },
     {
       "id": "parallel_012",
-      "question": "What neuroscience papers about memory have been published in Nature Neuroscience with >100 citations?",
+      "question": "What research methodology papers have been highly cited in medical journals?",
       "type": "parallel",
       "category": "hybrid_topic_venue",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["memory", "hippocampus", "synaptic plasticity", "learning"],
-        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue {name: 'Nature Neuroscience'}) WHERE p.citation_count > 100 RETURN p.id, p.title, p.citation_count",
-        "expected_result": "Influential memory research papers"
+        "paper_ids": ["W2048516400", "W2123045076", "W1966020746"],
+        "semantic_keywords": ["research methodology", "systematic review", "PRISMA", "CONSORT", "meta-analysis", "clinical trials"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name IN ['BMJ', 'JAMA', 'Annals of Internal Medicine'] AND p.citation_count > 1000 RETURN p.id, p.title, p.citation_count",
+        "expected_result": "Highly cited methodology papers like PRISMA and CONSORT guidelines",
+        "expected_ai_response": "The search results include some of the most influential papers in medical research methodology, including the PRISMA statement for systematic reviews and the CONSORT guidelines for clinical trials. These methodological frameworks have been widely adopted and have significantly improved the quality of medical research reporting."
       }
     },
     {
       "id": "parallel_013",
-      "question": "Find renewable energy papers co-authored by researchers from German and Danish institutions",
+      "question": "Find molecular biology and cloning papers with high methodological impact",
       "type": "parallel",
-      "category": "hybrid_topic_collaboration",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["renewable energy", "wind power", "solar energy", "energy storage"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a1:Author)-[:AFFILIATED_WITH]->(i1:Institution {country: 'Germany'}), (p)-[:AUTHORED]->(a2:Author)-[:AFFILIATED_WITH]->(i2:Institution {country: 'Denmark'}) RETURN p.id, p.title",
-        "expected_result": "International renewable energy collaboration"
+        "paper_ids": ["W2144634347", "W2107277218", "W1979290264"],
+        "semantic_keywords": ["molecular biology", "molecular cloning", "PCR", "gene expression", "research methodology"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 5000 AND (p.title CONTAINS 'molecular' OR p.title CONTAINS 'cloning' OR p.title CONTAINS 'PCR') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Foundational molecular biology methodology papers",
+        "expected_ai_response": "The search results include fundamental methodology papers in molecular biology, including molecular cloning techniques, quantitative PCR analysis methods, and research methodologies that have become standard tools in molecular biology laboratories worldwide."
       }
     },
     {
       "id": "parallel_014",
-      "question": "What are the most recent papers about BERT or transformer models by Google AI authors?",
+      "question": "What are the most cited deep learning papers in computer vision and AI?",
       "type": "parallel",
-      "category": "hybrid_topic_affiliation",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["BERT", "transformer", "attention mechanism", "natural language processing"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.name CONTAINS 'Google' RETURN p.id, p.title ORDER BY p.publication_year DESC",
-        "expected_result": "Recent NLP transformer research from Google"
+        "paper_ids": ["W2194775991"],
+        "semantic_keywords": ["deep learning", "neural networks", "computer vision", "ResNet", "convolutional neural networks"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 10000 AND (p.title CONTAINS 'deep' OR p.title CONTAINS 'neural' OR p.title CONTAINS 'ResNet') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Highly influential deep learning and computer vision papers",
+        "expected_ai_response": "The search results include some of the most influential papers in deep learning and computer vision, particularly the ResNet architecture which solved the vanishing gradient problem and enabled training of very deep networks. These papers have fundamentally shaped modern AI and computer vision research."
       }
     },
     {
       "id": "parallel_015",
-      "question": "Find drug discovery papers about protein kinase inhibitors with pharmaceutical company authors",
+      "question": "Find plasma physics and fusion research papers published in specialized physics journals",
       "type": "parallel",
-      "category": "hybrid_topic_affiliation",
+      "category": "hybrid_topic_venue",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["protein kinase", "kinase inhibitors", "drug discovery", "pharmaceutical"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.type = 'pharmaceutical' RETURN p.id, p.title",
-        "expected_result": "Industry drug discovery research"
+        "paper_ids": ["W3038568908"],
+        "semantic_keywords": ["plasma physics", "fusion research", "magnetic confinement", "deuterium plasma", "tokamak"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name CONTAINS 'Plasma' OR v.name CONTAINS 'Fusion' RETURN p.id, p.title",
+        "expected_result": "Specialized plasma physics and fusion research papers",
+        "expected_ai_response": "The search results include research on plasma physics and fusion technology, including work on radiation-resistant monitoring systems for plasma devices and fundamental studies in magnetic confinement fusion research."
       }
     },
     {
       "id": "parallel_016",
-      "question": "What psychology papers about depression have been cited more than 1000 times?",
+      "question": "What research methodology papers have been highly cited in psychology and social sciences?",
       "type": "parallel",
       "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["depression", "mental health", "clinical psychology", "antidepressants"],
-        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 1000 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
-        "expected_result": "Highly influential depression research"
+        "paper_ids": ["W1979290264", "W2048516400"],
+        "semantic_keywords": ["thematic analysis", "qualitative research", "psychology methodology", "research methods", "systematic review"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 5000 AND (p.title CONTAINS 'thematic' OR p.title CONTAINS 'qualitative' OR p.title CONTAINS 'methodology') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Highly influential methodology papers in psychology and social sciences",
+        "expected_ai_response": "The search results include foundational methodology papers in psychology and social sciences, particularly on thematic analysis for qualitative research and systematic review methodologies that have shaped research practices across multiple disciplines."
       }
     },
     {
       "id": "parallel_017",
-      "question": "Find papers about single-cell RNA sequencing authored by researchers from Broad Institute",
+      "question": "Find high-throughput sequencing analysis papers published in bioinformatics journals",
       "type": "parallel",
-      "category": "hybrid_topic_affiliation",
+      "category": "hybrid_topic_venue",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["single-cell", "RNA sequencing", "scRNA-seq", "genomics"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution {name: 'Broad Institute'}) RETURN p.id, p.title",
-        "expected_result": "Single-cell genomics research from leading institute"
+        "paper_ids": ["W2134526812", "W2107277218"],
+        "semantic_keywords": ["high-throughput sequencing", "HTSeq", "RNA-seq", "genomics analysis", "transcriptomics"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name CONTAINS 'Bioinformatics' AND (p.title CONTAINS 'HTSeq' OR p.title CONTAINS 'sequencing') RETURN p.id, p.title",
+        "expected_result": "Sequencing analysis methodology papers in bioinformatics journals",
+        "expected_ai_response": "The search results include important tools for high-throughput sequencing data analysis, such as HTSeq for counting reads and quantitative methods for gene expression analysis, which are essential for modern genomics and transcriptomics research."
       }
     },
     {
       "id": "parallel_018",
-      "question": "What are the most cited papers about AlphaFold or protein structure prediction published since 2018?",
+      "question": "What are the most cited protein analysis papers published in biochemistry journals?",
       "type": "parallel",
       "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["AlphaFold", "protein structure prediction", "DeepMind", "protein folding"],
-        "cypher_query": "MATCH (p:Paper) WHERE p.publication_year >= 2018 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
-        "expected_result": "Revolutionary protein structure prediction papers"
+        "paper_ids": ["W1775749144", "W2100837269", "W2128635872"],
+        "semantic_keywords": ["protein analysis", "protein quantification", "SDS-PAGE", "Bradford assay", "Lowry method"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name CONTAINS 'Biochemistry' AND p.citation_count > 50000 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Foundational protein analysis methodology papers",
+        "expected_ai_response": "The search results include some of the most fundamental papers in protein biochemistry, including the Lowry protein assay, Laemmli's SDS-PAGE method, and the Bradford protein assay. These techniques have become essential tools in biochemistry and molecular biology laboratories worldwide."
       }
     },
     {
       "id": "parallel_019",
-      "question": "Find papers about lithium-ion batteries co-authored by researchers from Tesla or battery companies",
+      "question": "Find molecular biology methodology papers with high citation impact",
       "type": "parallel",
-      "category": "hybrid_topic_affiliation",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["lithium-ion", "battery", "energy storage", "electrochemistry"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.name CONTAINS 'Tesla' OR i.type = 'battery_company' RETURN p.id, p.title",
-        "expected_result": "Industry battery research papers"
+        "paper_ids": ["W2144634347", "W2107277218", "W1979290264"],
+        "semantic_keywords": ["molecular cloning", "PCR", "gene expression analysis", "methodology", "laboratory protocols"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 10000 AND (p.title CONTAINS 'molecular' OR p.title CONTAINS 'cloning' OR p.title CONTAINS 'expression') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Highly cited molecular biology methodology papers",
+        "expected_ai_response": "The search results include fundamental methodology papers that have shaped molecular biology research, including molecular cloning techniques, quantitative PCR analysis methods, and research methodologies that are widely used in molecular biology laboratories."
       }
     },
     {
       "id": "parallel_020",
-      "question": "What cancer research papers have been published in Cell with authors from MD Anderson Cancer Center?",
+      "question": "What cancer epidemiology papers have been published in high-impact medical journals?",
       "type": "parallel",
       "category": "hybrid_topic_venue",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["cancer", "oncology", "tumor", "chemotherapy", "radiation therapy"],
-        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue {name: 'Cell'}), (p)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution {name: 'MD Anderson Cancer Center'}) RETURN p.id, p.title",
-        "expected_result": "Cancer research from premier cancer center"
+        "paper_ids": ["W2072446062", "W2153904558", "W2794121807"],
+        "semantic_keywords": ["cancer epidemiology", "oncology", "cancer statistics", "global cancer burden", "cancer incidence"],
+        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name IN ['CA: A Cancer Journal for Clinicians', 'JAMA Oncology', 'Nature Reviews Cancer'] RETURN p.id, p.title",
+        "expected_result": "High-impact cancer epidemiology research",
+        "expected_ai_response": "The search results include influential cancer epidemiology papers published in top-tier medical journals, providing comprehensive analyses of global cancer statistics, incidence patterns, and public health implications that guide cancer research and policy worldwide."
       }
     },
     {
       "id": "parallel_021",
-      "question": "Find papers about CRISPR applications in agriculture with more than 50 citations",
+      "question": "Find computational chemistry and materials science papers with high methodological impact",
       "type": "parallel",
       "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["CRISPR", "agriculture", "crop improvement", "plant genetics", "gene editing"],
-        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 50 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
-        "expected_result": "Agricultural applications of gene editing technology"
+        "paper_ids": ["W1981368803", "W2037989040", "W2963049693"],
+        "semantic_keywords": ["computational chemistry", "ab initio calculations", "density functional theory", "materials modeling", "electronic structure"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 5000 AND (p.title CONTAINS 'ab initio' OR p.title CONTAINS 'DFT' OR p.abstract CONTAINS 'computational') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Highly cited computational chemistry and materials science methodology papers",
+        "expected_ai_response": "The search results include foundational computational chemistry papers that have revolutionized materials science research, particularly ab initio calculation methods and density functional theory approaches that are widely used for electronic structure calculations."
       }
     },
     {
       "id": "parallel_022",
-      "question": "What are the most recent papers about quantum error correction authored by IBM or Google researchers?",
+      "question": "What bioinformatics and computational biology tools have been most widely adopted?",
       "type": "parallel",
-      "category": "hybrid_topic_affiliation",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["quantum error correction", "quantum computing", "error mitigation", "fault tolerance"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.name CONTAINS 'IBM' OR i.name CONTAINS 'Google' RETURN p.id, p.title ORDER BY p.publication_year DESC",
-        "expected_result": "Cutting-edge quantum computing research from tech giants"
+        "paper_ids": ["W2129158568", "W1964151023", "W2134526812"],
+        "semantic_keywords": ["bioinformatics tools", "BLAST", "sequence alignment", "HTSeq", "computational biology", "genomics software"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 10000 AND (p.title CONTAINS 'BLAST' OR p.title CONTAINS 'HTSeq' OR p.abstract CONTAINS 'bioinformatics') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Most cited bioinformatics tools and methods",
+        "expected_ai_response": "The search results include the most widely used bioinformatics tools, including BLAST for sequence alignment and HTSeq for high-throughput sequencing analysis. These tools have become essential components of the computational biology toolkit used by researchers worldwide."
       }
     },
     {
       "id": "parallel_023",
-      "question": "Find papers about COVID-19 vaccines co-authored by researchers from pharmaceutical companies and universities",
+      "question": "Find research methodology papers that have shaped evidence-based medicine",
       "type": "parallel",
-      "category": "hybrid_topic_collaboration",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["COVID-19 vaccine", "mRNA vaccine", "vaccine development", "immunization"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a1:Author)-[:AFFILIATED_WITH]->(i1:Institution {type: 'pharmaceutical'}), (p)-[:AUTHORED]->(a2:Author)-[:AFFILIATED_WITH]->(i2:Institution {type: 'university'}) RETURN p.id, p.title",
-        "expected_result": "Industry-academia vaccine development collaboration"
+        "paper_ids": ["W2048516400", "W2123045076", "W1966020746"],
+        "semantic_keywords": ["evidence-based medicine", "PRISMA", "CONSORT", "systematic review", "clinical trial methodology", "meta-analysis"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 5000 AND (p.title CONTAINS 'PRISMA' OR p.title CONTAINS 'CONSORT' OR p.title CONTAINS 'systematic') RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Foundational evidence-based medicine methodology papers",
+        "expected_ai_response": "The search results include the most influential methodology papers in evidence-based medicine, including the PRISMA guidelines for systematic reviews and CONSORT statement for clinical trials, which have fundamentally improved the quality and transparency of medical research."
       }
     },
     {
       "id": "parallel_024",
-      "question": "What papers about artificial intelligence ethics have been published in Science or Nature since 2019?",
+      "question": "What interdisciplinary papers combine computational methods with experimental biology?",
       "type": "parallel",
-      "category": "hybrid_topic_venue",
+      "category": "hybrid_topic_method",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["AI ethics", "artificial intelligence", "algorithmic bias", "fairness", "responsible AI"],
-        "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name IN ['Science', 'Nature'] AND p.publication_year >= 2019 RETURN p.id, p.title ORDER BY p.publication_year DESC",
-        "expected_result": "Recent AI ethics research in top-tier journals"
+        "paper_ids": ["W2107277218", "W2134526812", "W2144634347"],
+        "semantic_keywords": ["computational biology", "experimental validation", "gene expression", "high-throughput sequencing", "molecular cloning", "integrative analysis"],
+        "cypher_query": "MATCH (p:Paper) WHERE (p.title CONTAINS 'computational' OR p.title CONTAINS 'analysis') AND (p.title CONTAINS 'experimental' OR p.title CONTAINS 'molecular') RETURN p.id, p.title",
+        "expected_result": "Papers that bridge computational and experimental approaches in biology",
+        "expected_ai_response": "The search results include papers that successfully integrate computational and experimental approaches in biology, demonstrating how quantitative analysis methods, sequencing technologies, and molecular techniques work together to advance biological understanding."
       }
     },
     {
       "id": "parallel_025",
-      "question": "Find papers about stem cell therapy for neurological disorders with authors from Mayo Clinic or Johns Hopkins",
+      "question": "Find highly cited papers that have established foundational techniques across multiple scientific disciplines",
       "type": "parallel",
-      "category": "hybrid_topic_affiliation",
+      "category": "hybrid_topic_citations",
       "expected_evidence": {
-        "paper_ids": [],
-        "semantic_keywords": ["stem cell therapy", "neurological disorders", "cell transplantation", "regenerative medicine"],
-        "cypher_query": "MATCH (p:Paper)-[:AUTHORED]->(a:Author)-[:AFFILIATED_WITH]->(i:Institution) WHERE i.name IN ['Mayo Clinic', 'Johns Hopkins University'] RETURN p.id, p.title",
-        "expected_result": "Stem cell research from premier medical institutions"
+        "paper_ids": ["W1775749144", "W2100837269", "W2194775991", "W2129158568"],
+        "semantic_keywords": ["foundational techniques", "methodology", "interdisciplinary", "widely cited", "cross-disciplinary impact"],
+        "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 50000 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
+        "expected_result": "Most influential cross-disciplinary methodology papers",
+        "expected_ai_response": "The search results include the most foundational papers across multiple scientific disciplines, including the Lowry protein assay in biochemistry, SDS-PAGE in molecular biology, ResNet in computer vision, and BLAST in bioinformatics. These papers have had transformative impact across their respective fields and beyond."
       }
     }
   ],
