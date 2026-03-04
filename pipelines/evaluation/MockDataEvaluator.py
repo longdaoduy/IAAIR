@@ -528,7 +528,73 @@ class MockDataEvaluator:
                 logger.warning(f"❌ {result.question_id}: Failed - {result.error_message}")
 
         self.results = results
+        
+        # Save AI responses table
+        self._save_ai_responses_table(results)
+        
         return results
+
+    def _save_ai_responses_table(self, results: List[MockEvaluationResult]) -> str:
+        """Save a table with query, AI response, and expected AI response."""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Prepare data for CSV table
+        table_data = []
+        headers = ['Question_ID', 'Query', 'AI_Response', 'Expected_AI_Response', 'Response_Similarity', 'Question_Type', 'Success']
+        
+        for result in results:
+            ai_response = result.ai_response if result.ai_response else "No AI response generated"
+            expected_response = result.expected_ai_response if result.expected_ai_response else "No expected response available"
+            similarity = f"{result.ai_response_similarity:.3f}" if result.ai_response_similarity is not None else "N/A"
+            
+            table_data.append([
+                result.question_id,
+                result.question,
+                ai_response,
+                expected_response,
+                similarity,
+                result.question_type,
+                "Yes" if result.success else "No"
+            ])
+        
+        # Create output directory if it doesn't exist
+        output_dir = "./data"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Save as CSV
+        csv_file = os.path.join(output_dir, f"ai_responses_comparison_{timestamp}.csv")
+        import csv
+        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerows(table_data)
+        
+        # Save as formatted markdown table
+        md_file = os.path.join(output_dir, f"ai_responses_comparison_{timestamp}.md")
+        with open(md_file, 'w', encoding='utf-8') as f:
+            f.write("# AI Responses Comparison Table\n\n")
+            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            
+            # Markdown table headers
+            f.write("| Question ID | Query | AI Response | Expected AI Response | Similarity | Type | Success |\n")
+            f.write("|-------------|-------|-------------|---------------------|------------|------|--------|\n")
+            
+            # Markdown table rows
+            for row in table_data:
+                # Truncate long text for readability
+                query = (row[1][:100] + "...") if len(row[1]) > 100 else row[1]
+                ai_resp = (row[2][:150] + "...") if len(row[2]) > 150 else row[2]
+                expected_resp = (row[3][:150] + "...") if len(row[3]) > 150 else row[3]
+                
+                # Escape pipe characters in text
+                query = query.replace("|", "\\|")
+                ai_resp = ai_resp.replace("|", "\\|")
+                expected_resp = expected_resp.replace("|", "\\|")
+                
+                f.write(f"| {row[0]} | {query} | {ai_resp} | {expected_resp} | {row[4]} | {row[5]} | {row[6]} |\n")
+        
+        logger.info(f"AI responses comparison saved to: {csv_file} and {md_file}")
+        return csv_file
 
     def generate_summary(self, results: List[MockEvaluationResult]) -> MockEvaluationSummary:
         """Generate evaluation summary from results."""
