@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 from models.entities.retrieval.QueryType import QueryType
 import logging
 import re
+import json
 from clients.vector.MilvusClient import MilvusClient
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
 from clients.huggingface.SciBERTClient import SciBERTClient
@@ -337,207 +338,217 @@ Author names:
         return list(set(keywords))  # Remove duplicates
 
     def _build_intelligent_cypher_query(self, query: str, top_k: int) -> tuple:
-        """Build Cypher query based on intelligent query analysis with support for multiple entities."""
+        """Build Cypher query using AI agent based on Neo4j schema and user query."""
+        try:
+            if not self.ai_agent:
+                logger.warning("AI agent not available, falling back to basic query generation")
+                return self._build_fallback_cypher_query(query, top_k)
+            
+            # Generate Cypher query using AI agent
+            schema_prompt = self._create_schema_prompt(query, top_k)
+            ai_response = self.ai_agent.generate_content(prompt=schema_prompt)
+            
+            if not ai_response:
+                logger.error("Empty response from AI agent for Cypher generation")
+                return self._build_fallback_cypher_query(query, top_k)
+            
+            # Parse AI response to extract Cypher query and parameters
+            cypher_query, parameters = self._parse_ai_cypher_response(ai_response, query, top_k)
+            
+            logger.info(f"AI-generated Cypher: {cypher_query}")
+            logger.info(f"AI-generated Parameters: {parameters}")
+            
+            return cypher_query, parameters
+            
+        except Exception as e:
+            logger.error(f"Error in AI Cypher generation: {e}")
+            return self._build_fallback_cypher_query(query, top_k)
+    
+    def _create_schema_prompt(self, query: str, top_k: int) -> str:
+        """Create a comprehensive prompt for AI-based Cypher query generation."""
+        return f"""
+You are a Neo4j Cypher query expert. Generate a precise Cypher query based on the user's natural language question.
+
+Neo4j Schema:
+
+Nodes:
+- Paper: {{id, title, abstract, publication_date, doi, pmid, arxiv_id, pdf_url, source, metadata}}
+- Author: {{id, name, orcid, email, h_index, metadata}}  
+- Venue: {{id, name, type, issn, impact_factor, publisher, metadata}}
+- Institution: {{id, name, country, city, type, website, metadata}}
+- Figure: {{id, paper_id, caption, image_path, metadata}}
+- Table: {{id, paper_id, caption, content, metadata}}
+
+Relations:
+- (Author)-[:AUTHORED]->(Paper) - Authorship relationships
+- (Paper)-[:PUBLISHED_IN]->(Venue) - Publication venue associations
+- (Paper)-[:CITES]->(Paper) - Citation networks between papers
+- (Paper)-[:ASSOCIATED_WITH]->(Institution) - Institutional affiliations
+- (Paper)-[:CONTAINS_FIGURE]->(Figure) - Figure ownership
+- (Paper)-[:CONTAINS_TABLE]->(Table) - Table ownership
+
+User Query: "{query}"
+Limit: {top_k}
+
+Instructions:
+1. Analyze the user's query to understand what information they're seeking
+2. Generate a Cypher query that returns the most relevant information
+3. Always include basic paper information (id, title, abstract, doi, publication_date)
+4. Use OPTIONAL MATCH for relationships that might not exist
+5. Use collect(DISTINCT ...) for aggregating related data
+6. Include proper WHERE clauses for filtering
+7. Add ORDER BY and LIMIT clauses when appropriate
+8. Use parameters for dynamic values (e.g., paper IDs, author names)
+
+Response Format:
+CYPHER_QUERY:
+[Your Cypher query here]
+
+PARAMETERS:
+[JSON object with parameter values, or {{}} if no parameters needed]
+
+EXPLANATION:
+[Brief explanation of what the query does]
+
+Generate the query now:"""
+
+    def _parse_ai_cypher_response(self, ai_response: str, original_query: str, top_k: int) -> tuple:
+        """Parse AI response to extract Cypher query and parameters."""
+        try:
+            # Extract Cypher query section
+            cypher_start = ai_response.find("CYPHER_QUERY:")
+            params_start = ai_response.find("PARAMETERS:")
+            
+            if cypher_start == -1:
+                logger.warning("Could not find CYPHER_QUERY section in AI response")
+                return self._build_fallback_cypher_query(original_query, top_k)
+            
+            # Extract query text
+            if params_start != -1:
+                cypher_text = ai_response[cypher_start + 13:params_start].strip()
+                params_text = ai_response[params_start + 11:].strip()
+                
+                # Extract parameters if explanation follows
+                explanation_start = params_text.find("EXPLANATION:")
+                if explanation_start != -1:
+                    params_text = params_text[:explanation_start].strip()
+            else:
+                cypher_text = ai_response[cypher_start + 13:].strip()
+                params_text = "{}"
+            
+            # Clean up the query text
+            cypher_query = self._clean_cypher_query(cypher_text)
+            
+            # Parse parameters
+            try:
+                import json
+                parameters = json.loads(params_text) if params_text and params_text != "{}" else {}
+            except json.JSONDecodeError:
+                logger.warning(f"Could not parse parameters: {params_text}")
+                parameters = {}
+            
+            # Add top_k limit if not present
+            if "limit" not in parameters and "LIMIT" not in cypher_query.upper():
+                parameters["limit"] = top_k
+            
+            # Validate the query has required components
+            if not self._validate_cypher_query(cypher_query):
+                logger.warning("Generated Cypher query failed validation")
+                return self._build_fallback_cypher_query(original_query, top_k)
+            
+            return cypher_query, parameters
+            
+        except Exception as e:
+            logger.error(f"Error parsing AI Cypher response: {e}")
+            return self._build_fallback_cypher_query(original_query, top_k)
+    
+    def _clean_cypher_query(self, query_text: str) -> str:
+        """Clean and format the Cypher query from AI response."""
+        # Remove code block markers if present
+        query_text = query_text.strip()
+        if query_text.startswith("```"):
+            lines = query_text.split("\n")[1:-1]  # Remove first and last lines
+            query_text = "\n".join(lines)
+        
+        # Remove any remaining markdown or formatting
+        query_text = query_text.replace("```cypher", "").replace("```", "")
+        
+        return query_text.strip()
+    
+    def _validate_cypher_query(self, cypher_query: str) -> bool:
+        """Basic validation of generated Cypher query."""
+        query_upper = cypher_query.upper()
+        
+        # Must contain MATCH
+        if "MATCH" not in query_upper:
+            return False
+        
+        # Must contain RETURN
+        if "RETURN" not in query_upper:
+            return False
+        
+        # Should reference Paper node (main entity)
+        if ":Paper" not in cypher_query:
+            return False
+        
+        return True
+    
+    def _build_fallback_cypher_query(self, query: str, top_k: int) -> tuple:
+        """Fallback method for basic Cypher query generation when AI fails."""
         query_lower = query.lower()
-
-        # Extract multiple paper IDs from query
+        
+        # Extract basic entities
         paper_ids = re.findall(r'\b(W\d+)\b', query)
-
-        # Extract multiple author names from query
         author_names = self._extract_author_names(query)
-
-        # Extract DOIs
-        dois = re.findall(r'(doi:[^\s]+|DOI:[^\s]+)', query, re.IGNORECASE)
-
-        # Pattern 1: Multiple paper IDs query
+        
+        # Simple fallbacks based on detected entities
         if paper_ids:
-            if any(word in query_lower for word in ['author', 'wrote', 'written']):
-                # Authors of specific papers
-                cypher_query = """
-                MATCH (p:Paper)
-                WHERE p.id IN $paper_ids
-                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                       p.doi as doi, p.publication_date as publication_date,
-                       collect(DISTINCT a.name) as authors,
-                       v.name as venue
-                ORDER BY p.id
-                """
-                return cypher_query, {"paper_ids": paper_ids}
-
-            elif any(word in query_lower for word in ['citation', 'cite', 'cited']):
-                # Citation information for papers
-                cypher_query = """
-                MATCH (p:Paper)
-                WHERE p.id IN $paper_ids
-                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-                OPTIONAL MATCH (p)-[:CITES]->(cited:Paper)
-                OPTIONAL MATCH (citing:Paper)-[:CITES]->(p)
-                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                       p.doi as doi, p.publication_date as publication_date,
-                       collect(DISTINCT a.name) as authors,
-                       v.name as venue,
-                       count(DISTINCT cited) as citations_made,
-                       count(DISTINCT citing) as citations_received
-                ORDER BY p.id
-                """
-                return cypher_query, {"paper_ids": paper_ids}
-
-            else:
-                # General paper information
-                cypher_query = """
-                MATCH (p:Paper)
-                WHERE p.id IN $paper_ids
-                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                       p.doi as doi, p.publication_date as publication_date,
-                       collect(DISTINCT a.name) as authors,
-                       v.name as venue
-                ORDER BY p.id
-                """
-                return cypher_query, {"paper_ids": paper_ids}
-
-        # Pattern 2: Multiple author names query
-        if author_names:
-            if any(word in query_lower for word in ['collaboration', 'coauthor', 'co-author', 'together']):
-                # Collaboration between authors
-                logger.info("author_names: {}".format(author_names))
-                cypher_query = """
-                MATCH (a1:Author)-[:AUTHORED]->(p:Paper)<-[:AUTHORED]-(a2:Author)
-                WHERE any(name IN $author_names WHERE toLower(a1.name) CONTAINS toLower(name))
-                  AND any(name IN $author_names WHERE toLower(a2.name) CONTAINS toLower(name))
-                  AND a1 <> a2
-                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                       p.doi as doi, p.publication_date as publication_date,
-                       collect(DISTINCT a1.name + ', ' + a2.name) as collaboration_authors,
-                       v.name as venue,
-                       collect(DISTINCT a.name) as authors
-                LIMIT $limit
-                """
-                return cypher_query, {"author_names": author_names, "limit": top_k}
-
-            else:
-                # Papers by multiple authors (OR condition)
-                cypher_query = """
-                MATCH (a:Author)-[:AUTHORED]->(p:Paper)
-                WHERE any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))
-                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-                OPTIONAL MATCH (all_authors:Author)-[:AUTHORED]->(p)
-                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                       p.doi as doi, p.publication_date as publication_date,
-                       collect(DISTINCT all_authors.name) as authors,
-                       v.name as venue
-                LIMIT $limit
-                """
-                return cypher_query, {"author_names": author_names, "limit": top_k}
-
-        # Pattern 3: DOI-based queries
-        if dois:
             cypher_query = """
             MATCH (p:Paper)
-            WHERE any(doi IN $dois WHERE p.doi CONTAINS doi)
+            WHERE p.id IN $paper_ids
             OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
             OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
             RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
                    p.doi as doi, p.publication_date as publication_date,
                    collect(DISTINCT a.name) as authors,
                    v.name as venue
-            ORDER BY p.doi
+            ORDER BY p.id
             """
-            return cypher_query, {"dois": dois}
-
-        # Pattern 4: Venue-based queries
-        venue_patterns = [
-            r'published\s+in\s+(["\']?)([^"\']+?)\1',
-            r'from\s+journal\s+(["\']?)([^"\']+?)\1',
-            r'in\s+(["\']?)([A-Z][^"\']*(?:journal|review|proceedings|conference)[^"\']*?)\1'
-        ]
-
-        venues = []
-        for pattern in venue_patterns:
-            matches = re.findall(pattern, query, re.IGNORECASE)
-            venues.extend([match[1].strip() for match in matches])
-
-        if venues:
+            return cypher_query, {"paper_ids": paper_ids}
+        
+        elif author_names:
             cypher_query = """
-            MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue)
-            WHERE any(venue IN $venues WHERE toLower(v.name) CONTAINS toLower(venue))
+            MATCH (a:Author)-[:AUTHORED]->(p:Paper)
+            WHERE any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))
+            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+            OPTIONAL MATCH (all_authors:Author)-[:AUTHORED]->(p)
+            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+                   p.doi as doi, p.publication_date as publication_date,
+                   collect(DISTINCT all_authors.name) as authors,
+                   v.name as venue
+            LIMIT $limit
+            """
+            return cypher_query, {"author_names": author_names, "limit": top_k}
+        
+        else:
+            # Default text search
+            keywords = self._extract_keywords(query)
+            cypher_query = """
+            MATCH (p:Paper)
+            WHERE any(keyword IN $keywords WHERE 
+                      p.title CONTAINS keyword OR 
+                      p.abstract CONTAINS keyword OR
+                      toLower(p.title) CONTAINS toLower(keyword) OR
+                      toLower(p.abstract) CONTAINS toLower(keyword))
             OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
             RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
                    p.doi as doi, p.publication_date as publication_date,
                    collect(DISTINCT a.name) as authors,
                    v.name as venue
             LIMIT $limit
             """
-            return cypher_query, {"venues": venues, "limit": top_k}
-
-        # Pattern 5: Citation count queries
-        if any(word in query_lower for word in ['most cited', 'highest citation', 'citation count']):
-            cypher_query = """
-            MATCH (p:Paper)
-            WHERE p.title CONTAINS $query OR p.abstract CONTAINS $query
-            OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-            OPTIONAL MATCH (citing:Paper)-[:CITES]->(p)
-            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                   p.doi as doi, p.publication_date as publication_date,
-                   collect(DISTINCT a.name) as authors,
-                   v.name as venue,
-                   count(DISTINCT citing) as citation_count
-            ORDER BY citation_count DESC
-            LIMIT $limit
-            """
-            return cypher_query, {"query": query, "limit": top_k}
-
-        # Pattern 6: Institution/affiliation queries
-        institution_patterns = [
-            r'from\s+(["\']?)([^"\']*(?:university|institute|laboratory|lab|college|school)[^"\']*?)\1',
-            r'at\s+(["\']?)([^"\']*(?:university|institute|laboratory|lab|college|school)[^"\']*?)\1'
-        ]
-
-        institutions = []
-        for pattern in institution_patterns:
-            matches = re.findall(pattern, query, re.IGNORECASE)
-            institutions.extend([match[1].strip() for match in matches])
-
-        if institutions:
-            cypher_query = """
-            MATCH (a:Author)-[:AFFILIATED_WITH]->(i:Institution)
-            WHERE any(inst IN $institutions WHERE toLower(i.name) CONTAINS toLower(inst))
-            MATCH (a)-[:AUTHORED]->(p:Paper)
-            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                   p.doi as doi, p.publication_date as publication_date,
-                   collect(DISTINCT a.name) as authors,
-                   v.name as venue,
-                   collect(DISTINCT i.name) as institutions
-            LIMIT $limit
-            """
-            return cypher_query, {"institutions": institutions, "limit": top_k}
-
-        # Default: Enhanced text search with multiple keyword support
-        keywords = self._extract_keywords(query)
-        cypher_query = """
-        MATCH (p:Paper)
-        WHERE any(keyword IN $keywords WHERE 
-                  p.title CONTAINS keyword OR 
-                  p.abstract CONTAINS keyword OR
-                  toLower(p.title) CONTAINS toLower(keyword) OR
-                  toLower(p.abstract) CONTAINS toLower(keyword))
-        OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-        OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-        RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-               p.doi as doi, p.publication_date as publication_date,
-               collect(DISTINCT a.name) as authors,
-               v.name as venue
-        LIMIT $limit
-        """
-        return cypher_query, {"keywords": keywords, "limit": top_k}
+            return cypher_query, {"keywords": keywords, "limit": top_k}
 
     async def _execute_graph_refinement(self, paper_ids: List[str], top_k: int) -> List[Dict]:
         """Refine vector results using graph relationships."""

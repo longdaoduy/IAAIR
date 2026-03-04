@@ -417,10 +417,6 @@
         "expected_ai_response": "The search results include fundamental contributions to structural biology and protein analysis methods. Notable papers include Laemmli's work on SDS-PAGE protein separation (W2100837269), and various protein quantification methods including the Lowry assay (W1775749144) and Bradford assay (W2128635872). These techniques are essential tools in biochemistry and molecular biology for protein characterization and analysis."
       }
     },
-        "semantic_keywords": ["structural biology", "protein structure", "crystallography", "SDS-PAGE", "protein folding"],
-        "expected_result": "Papers on protein structure analysis and biochemical techniques"
-      }
-    },
     {
       "id": "semantic_012",
       "question": "Bioinformatics tools and computational biology software",
