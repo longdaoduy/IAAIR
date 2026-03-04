@@ -103,97 +103,90 @@ class MockDataEvaluator:
             expected_evidence = question_data['expected_evidence']
             expected_papers = expected_evidence.get('paper_ids', [])
 
-            # Execute the Cypher query if available
-            if 'cypher_query' in expected_evidence:
-                cypher_query = expected_evidence['cypher_query']
+            # Use graph query handler to execute the query
+            result = await self.service_factory.retrieval_handler.execute_graph_search(question, 10)
 
-                # Use graph query handler to execute the query
-                result = await self.service_factory.retrieval_handler.execute_graph_search(question, 10)
+            # Extract paper IDs from result if available
+            retrieved_papers = []
+            if result and 'data' in result:
+                for record in result['data']:
+                    # Try to find paper IDs in the record
+                    for key, value in record.items():
+                        if key in ['paper_id', 'id'] and isinstance(value, str) and value.startswith('W'):
+                            retrieved_papers.append(value)
+                        elif isinstance(value, str) and value.startswith('W'):
+                            retrieved_papers.append(value)
 
-                # Extract paper IDs from result if available
-                retrieved_papers = []
-                if result and 'data' in result:
-                    for record in result['data']:
-                        # Try to find paper IDs in the record
-                        for key, value in record.items():
-                            if key in ['paper_id', 'id'] and isinstance(value, str) and value.startswith('W'):
-                                retrieved_papers.append(value)
-                            elif isinstance(value, str) and value.startswith('W'):
-                                retrieved_papers.append(value)
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_papers = []
+            for paper_id in retrieved_papers:
+                if paper_id not in seen:
+                    seen.add(paper_id)
+                    unique_papers.append(paper_id)
+            retrieved_papers = unique_papers
 
-                # Remove duplicates while preserving order
-                seen = set()
-                unique_papers = []
-                for paper_id in retrieved_papers:
-                    if paper_id not in seen:
-                        seen.add(paper_id)
-                        unique_papers.append(paper_id)
-                retrieved_papers = unique_papers
+            # Calculate metrics
+            precision, recall, f1 = self._calculate_metrics(retrieved_papers, expected_papers)
 
-                # Calculate metrics
-                precision, recall, f1 = self._calculate_metrics(retrieved_papers, expected_papers)
-                
-                # Calculate DCG metrics
-                dcg_at_5 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 5)
-                dcg_at_10 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 10)
-                ndcg_at_5 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 5)
-                ndcg_at_10 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 10)
+            # Calculate DCG metrics
+            dcg_at_5 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 5)
+            dcg_at_10 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 10)
+            ndcg_at_5 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 5)
+            ndcg_at_10 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 10)
 
-                # Generate AI response if deepseek client is available
-                ai_response = None
-                ai_generation_time = 0.0
-                ai_response_similarity = 0.0
-                expected_ai_response = expected_evidence.get('expected_ai_response', '')
+            # Generate AI response if deepseek client is available
+            ai_response = None
+            ai_generation_time = 0.0
+            ai_response_similarity = 0.0
+            expected_ai_response = expected_evidence.get('expected_ai_response', '')
 
-                if self.service_factory and hasattr(self.service_factory,
-                                                    'deepseek_client') and self.service_factory.deepseek_client:
-                    ai_start_time = time.time()
-                    try:
-                        # Create context from retrieved results
-                        context = f"Query: {question}\nResults: {len(retrieved_papers)} papers found"
-                        if result and 'data' in result:
-                            context += f"\nQuery result: {result['data'][:3]}"  # Sample of results
+            if self.service_factory and hasattr(self.service_factory,
+                                                'deepseek_client') and self.service_factory.deepseek_client:
+                ai_start_time = time.time()
+                try:
+                    # Create context from retrieved results
+                    context = f"Query: {question}\nResults: {len(retrieved_papers)} papers found"
+                    if result and 'data' in result:
+                        context += f"\nQuery result: {result['data'][:3]}"  # Sample of results
 
-                        ai_response = self.service_factory.deepseek_client.generate_content(
-                            prompt=f"Based on the graph database query results, provide a comprehensive answer to: {question}",
-                            system_prompt=f"You are an AI assistant analyzing academic papers. Use the provided query results to answer the question accurately. Context: {context}"
-                        )
-                        ai_generation_time = time.time() - ai_start_time
+                    ai_response = self.service_factory.deepseek_client.generate_content(
+                        prompt=f"Based on the graph database query results, provide a comprehensive answer to: {question}",
+                        system_prompt=f"You are an AI assistant analyzing academic papers. Use the provided query results to answer the question accurately. Context: {context}"
+                    )
+                    ai_generation_time = time.time() - ai_start_time
 
-                        # Calculate AI response similarity if expected response exists
-                        if expected_ai_response and ai_response:
-                            ai_response_similarity = self._calculate_text_similarity(ai_response, expected_ai_response)
+                    # Calculate AI response similarity if expected response exists
+                    if expected_ai_response and ai_response:
+                        ai_response_similarity = self._calculate_text_similarity(ai_response, expected_ai_response)
 
-                    except Exception as e:
-                        logger.warning(f"AI response generation failed for {question_id}: {e}")
-                        ai_generation_time = time.time() - ai_start_time
+                except Exception as e:
+                    logger.warning(f"AI response generation failed for {question_id}: {e}")
+                    ai_generation_time = time.time() - ai_start_time
 
-                response_time = time.time() - start_time
+            response_time = time.time() - start_time
 
-                return MockEvaluationResult(
-                    question_id=question_id,
-                    question=question,
-                    question_type='graph',
-                    category=question_data['category'],
-                    success=True,
-                    response_time=response_time,
-                    retrieved_papers=retrieved_papers,
-                    expected_papers=expected_papers,
-                    precision=precision,
-                    recall=recall,
-                    f1_score=f1,
-                    ai_response=ai_response,
-                    expected_ai_response=expected_ai_response,
-                    ai_response_similarity=ai_response_similarity,
-                    ai_generation_time=ai_generation_time,
-                    dcg_at_5=dcg_at_5,
-                    dcg_at_10=dcg_at_10,
-                    ndcg_at_5=ndcg_at_5,
-                    ndcg_at_10=ndcg_at_10
-                )
-            else:
-                # Fallback: try to answer using hybrid search
-                return await self._evaluate_as_semantic_fallback(question_data, start_time)
+            return MockEvaluationResult(
+                question_id=question_id,
+                question=question,
+                question_type='graph',
+                category=question_data['category'],
+                success=True,
+                response_time=response_time,
+                retrieved_papers=retrieved_papers,
+                expected_papers=expected_papers,
+                precision=precision,
+                recall=recall,
+                f1_score=f1,
+                ai_response=ai_response,
+                expected_ai_response=expected_ai_response,
+                ai_response_similarity=ai_response_similarity,
+                ai_generation_time=ai_generation_time,
+                dcg_at_5=dcg_at_5,
+                dcg_at_10=dcg_at_10,
+                ndcg_at_5=ndcg_at_5,
+                ndcg_at_10=ndcg_at_10
+            )
 
         except Exception as e:
             response_time = time.time() - start_time
@@ -235,20 +228,12 @@ class MockDataEvaluator:
             similarity_scores = []
 
             if search_results:
-                for result in search_results:
-                    if hasattr(result, 'paper_id'):
-                        retrieved_papers.append(result.paper_id)
-                        if hasattr(result, 'similarity_score'):
-                            similarity_scores.append(result.similarity_score)
-                    elif isinstance(result, dict):
-                        if 'id' in result:
-                            retrieved_papers.append(result['id'])
-                        if 'similarity_score' in result:
-                            similarity_scores.append(result['similarity_score'])
+                retrieved_papers.extend([r.get('paper_id') for r in search_results[:]])
+                similarity_scores.extend([r.get('similarity_score') for r in search_results[:]])
 
             # Calculate metrics
             precision, recall, f1 = self._calculate_metrics(retrieved_papers, expected_papers)
-            
+
             # Calculate DCG metrics
             dcg_at_5 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 5)
             dcg_at_10 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 10)
@@ -261,8 +246,7 @@ class MockDataEvaluator:
             ai_response_similarity = 0.0
             expected_ai_response = expected_evidence.get('expected_ai_response', '')
 
-            if self.service_factory and hasattr(self.service_factory,
-                                                'deepseek_client') and self.service_factory.deepseek_client:
+            if self.service_factory and self.service_factory.deepseek_client:
                 ai_start_time = time.time()
                 try:
                     # Create context from search results
@@ -392,7 +376,8 @@ class MockDataEvaluator:
                 error_message=str(e)
             )
 
-    def _calculate_metrics(self, retrieved: List[str], expected: List[str]) -> Tuple[float, float, float]:
+    @staticmethod
+    def _calculate_metrics(retrieved: List[str], expected: List[str]) -> Tuple[float, float, float]:
         """Calculate precision, recall, and F1 score."""
         if not expected:
             return 1.0 if not retrieved else 0.0, 1.0, 1.0 if not retrieved else 0.0
@@ -444,19 +429,19 @@ class MockDataEvaluator:
         """
         if not retrieved or not expected:
             return 0.0
-            
+
         expected_set = set(expected)
         dcg = 0.0
-        
+
         for i, paper_id in enumerate(retrieved[:k]):
             if paper_id in expected_set:
                 # Binary relevance: 1 if relevant, 0 otherwise
                 relevance = 1.0
                 # DCG formula: rel_i / log2(i + 2) where i is 0-indexed
                 dcg += relevance / math.log2(i + 2)
-                
+
         return dcg
-    
+
     def _calculate_ideal_dcg_at_k(self, expected: List[str], k: int) -> float:
         """Calculate Ideal DCG at k (maximum possible DCG).
         
@@ -469,16 +454,16 @@ class MockDataEvaluator:
         """
         if not expected:
             return 0.0
-            
+
         # For binary relevance, ideal ranking has all relevant items first
         num_relevant = min(len(expected), k)
         idcg = 0.0
-        
+
         for i in range(num_relevant):
             idcg += 1.0 / math.log2(i + 2)
-            
+
         return idcg
-    
+
     def _calculate_ndcg_at_k(self, retrieved: List[str], expected: List[str], k: int) -> float:
         """Calculate Normalized DCG at k.
         
@@ -492,7 +477,7 @@ class MockDataEvaluator:
         """
         dcg = self._calculate_dcg_at_k(retrieved, expected, k)
         idcg = self._calculate_ideal_dcg_at_k(expected, k)
-        
+
         return dcg / idcg if idcg > 0 else 0.0
 
     async def run_evaluation(self, limit: Optional[int] = None) -> List[MockEvaluationResult]:
@@ -528,25 +513,26 @@ class MockDataEvaluator:
                 logger.warning(f"❌ {result.question_id}: Failed - {result.error_message}")
 
         self.results = results
-        
+
         # Save AI responses table
         self._save_ai_responses_table(results)
-        
+
         return results
 
     def _save_ai_responses_table(self, results: List[MockEvaluationResult]) -> str:
         """Save a table with query, AI response, and expected AI response."""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
+
         # Prepare data for CSV table
         table_data = []
-        headers = ['Question_ID', 'Query', 'AI_Response', 'Expected_AI_Response', 'Response_Similarity', 'Question_Type', 'Success']
-        
+        headers = ['Question_ID', 'Query', 'AI_Response', 'Expected_AI_Response', 'Response_Similarity',
+                   'Question_Type', 'Success']
+
         for result in results:
             ai_response = result.ai_response if result.ai_response else "No AI response generated"
             expected_response = result.expected_ai_response if result.expected_ai_response else "No expected response available"
             similarity = f"{result.ai_response_similarity:.3f}" if result.ai_response_similarity is not None else "N/A"
-            
+
             table_data.append([
                 result.question_id,
                 result.question,
@@ -556,11 +542,11 @@ class MockDataEvaluator:
                 result.question_type,
                 "Yes" if result.success else "No"
             ])
-        
+
         # Create output directory if it doesn't exist
         output_dir = "./data"
         os.makedirs(output_dir, exist_ok=True)
-        
+
         # Save as CSV
         csv_file = os.path.join(output_dir, f"ai_responses_comparison_{timestamp}.csv")
         import csv
@@ -568,31 +554,31 @@ class MockDataEvaluator:
             writer = csv.writer(f)
             writer.writerow(headers)
             writer.writerows(table_data)
-        
+
         # Save as formatted markdown table
         md_file = os.path.join(output_dir, f"ai_responses_comparison_{timestamp}.md")
         with open(md_file, 'w', encoding='utf-8') as f:
             f.write("# AI Responses Comparison Table\n\n")
             f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            
+
             # Markdown table headers
             f.write("| Question ID | Query | AI Response | Expected AI Response | Similarity | Type | Success |\n")
             f.write("|-------------|-------|-------------|---------------------|------------|------|--------|\n")
-            
+
             # Markdown table rows
             for row in table_data:
                 # Truncate long text for readability
                 query = (row[1][:100] + "...") if len(row[1]) > 100 else row[1]
                 ai_resp = (row[2][:150] + "...") if len(row[2]) > 150 else row[2]
                 expected_resp = (row[3][:150] + "...") if len(row[3]) > 150 else row[3]
-                
+
                 # Escape pipe characters in text
                 query = query.replace("|", "\\|")
                 ai_resp = ai_resp.replace("|", "\\|")
                 expected_resp = expected_resp.replace("|", "\\|")
-                
+
                 f.write(f"| {row[0]} | {query} | {ai_resp} | {expected_resp} | {row[4]} | {row[5]} | {row[6]} |\n")
-        
+
         logger.info(f"AI responses comparison saved to: {csv_file} and {md_file}")
         return csv_file
 
@@ -628,7 +614,7 @@ class MockDataEvaluator:
             ai_successful_responses = [r for r in successful_results if r.ai_response is not None]
             ai_response_success_rate = len(ai_successful_responses) / len(
                 successful_results) if successful_results else 0.0
-                
+
             # Calculate average DCG metrics
             dcg_results = [r for r in successful_results if r.dcg_at_5 is not None]
             avg_dcg_at_5 = sum(r.dcg_at_5 for r in dcg_results) / len(dcg_results) if dcg_results else 0.0
@@ -653,10 +639,14 @@ class MockDataEvaluator:
                 'f1': sum(r.f1_score for r in graph_results) / len(graph_results),
                 'avg_response_time': sum(r.response_time for r in graph_results) / len(graph_results),
                 'success_rate': len(graph_results) / len([r for r in results if r.question_type == 'graph']),
-                'dcg_at_5': sum(r.dcg_at_5 for r in graph_dcg_results) / len(graph_dcg_results) if graph_dcg_results else 0.0,
-                'dcg_at_10': sum(r.dcg_at_10 for r in graph_dcg_results) / len(graph_dcg_results) if graph_dcg_results else 0.0,
-                'ndcg_at_5': sum(r.ndcg_at_5 for r in graph_dcg_results) / len(graph_dcg_results) if graph_dcg_results else 0.0,
-                'ndcg_at_10': sum(r.ndcg_at_10 for r in graph_dcg_results) / len(graph_dcg_results) if graph_dcg_results else 0.0
+                'dcg_at_5': sum(r.dcg_at_5 for r in graph_dcg_results) / len(
+                    graph_dcg_results) if graph_dcg_results else 0.0,
+                'dcg_at_10': sum(r.dcg_at_10 for r in graph_dcg_results) / len(
+                    graph_dcg_results) if graph_dcg_results else 0.0,
+                'ndcg_at_5': sum(r.ndcg_at_5 for r in graph_dcg_results) / len(
+                    graph_dcg_results) if graph_dcg_results else 0.0,
+                'ndcg_at_10': sum(r.ndcg_at_10 for r in graph_dcg_results) / len(
+                    graph_dcg_results) if graph_dcg_results else 0.0
             }
 
         semantic_performance = {}
@@ -668,10 +658,14 @@ class MockDataEvaluator:
                 'f1': sum(r.f1_score for r in semantic_results) / len(semantic_results),
                 'avg_response_time': sum(r.response_time for r in semantic_results) / len(semantic_results),
                 'success_rate': len(semantic_results) / len([r for r in results if r.question_type == 'semantic']),
-                'dcg_at_5': sum(r.dcg_at_5 for r in semantic_dcg_results) / len(semantic_dcg_results) if semantic_dcg_results else 0.0,
-                'dcg_at_10': sum(r.dcg_at_10 for r in semantic_dcg_results) / len(semantic_dcg_results) if semantic_dcg_results else 0.0,
-                'ndcg_at_5': sum(r.ndcg_at_5 for r in semantic_dcg_results) / len(semantic_dcg_results) if semantic_dcg_results else 0.0,
-                'ndcg_at_10': sum(r.ndcg_at_10 for r in semantic_dcg_results) / len(semantic_dcg_results) if semantic_dcg_results else 0.0
+                'dcg_at_5': sum(r.dcg_at_5 for r in semantic_dcg_results) / len(
+                    semantic_dcg_results) if semantic_dcg_results else 0.0,
+                'dcg_at_10': sum(r.dcg_at_10 for r in semantic_dcg_results) / len(
+                    semantic_dcg_results) if semantic_dcg_results else 0.0,
+                'ndcg_at_5': sum(r.ndcg_at_5 for r in semantic_dcg_results) / len(
+                    semantic_dcg_results) if semantic_dcg_results else 0.0,
+                'ndcg_at_10': sum(r.ndcg_at_10 for r in semantic_dcg_results) / len(
+                    semantic_dcg_results) if semantic_dcg_results else 0.0
             }
 
         # Performance by category
@@ -687,8 +681,10 @@ class MockDataEvaluator:
                     'f1': sum(r.f1_score for r in category_results) / len(category_results),
                     'count': len(category_results),
                     'success_rate': len(category_results) / len([r for r in results if r.category == category]),
-                    'dcg_at_5': sum(r.dcg_at_5 for r in category_dcg_results) / len(category_dcg_results) if category_dcg_results else 0.0,
-                    'ndcg_at_5': sum(r.ndcg_at_5 for r in category_dcg_results) / len(category_dcg_results) if category_dcg_results else 0.0
+                    'dcg_at_5': sum(r.dcg_at_5 for r in category_dcg_results) / len(
+                        category_dcg_results) if category_dcg_results else 0.0,
+                    'ndcg_at_5': sum(r.ndcg_at_5 for r in category_dcg_results) / len(
+                        category_dcg_results) if category_dcg_results else 0.0
                 }
 
         return MockEvaluationSummary(

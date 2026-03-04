@@ -595,12 +595,12 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         if routing_strategy == RoutingStrategy.VECTOR_FIRST:
             # Vector search first, then optional graph refinement
             vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k * 2)
-            if vector_results and request.top_k > 10:  # Only do graph refinement for larger result sets
-                # Use top vector results to inform graph search
-                paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
-                graph_results = await factory.retrieval_handler._execute_graph_refinement(paper_ids,request.top_k)
-            else:
-                graph_results = []
+            # if vector_results and request.top_k > 10:  # Only do graph refinement for larger result sets
+            #     # Use top vector results to inform graph search
+            #     paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
+            #     graph_results = await factory.retrieval_handler._execute_graph_refinement(paper_ids,request.top_k)
+            # else:
+            #     graph_results = []
 
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
             # Graph search first - skip vector entirely for pure structural queries
