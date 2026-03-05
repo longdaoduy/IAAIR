@@ -33,7 +33,7 @@ class ServiceFactory:
         self.milvus_client = MilvusClient()
         self.scibert_client = SciBERTClient()
         self.clip_client = None
-        self.deepseek_client = None
+        self.deepseek_client = DeepseekClient()
 
         # Performance & Caching
         self.cache_manager = CacheManager(
@@ -47,7 +47,7 @@ class ServiceFactory:
         self.query_handler = GraphQueryHandler()
         self.routing_engine = RoutingDecisionEngine(self.deepseek_client)
         self.result_fusion = ResultFusion()
-        self.scientific_reranker = ScientificReranker()
+        self.scientific_reranker = None
         self.attribution_tracker = AttributionTracker()
 
         # Complex Handlers

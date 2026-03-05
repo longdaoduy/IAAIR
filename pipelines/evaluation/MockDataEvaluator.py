@@ -94,131 +94,131 @@ class MockDataEvaluator:
             logger.error(f"Failed to load mock data from {mock_data_path}: {e}")
             return []
 
-    async def evaluate_graph_question(self, question_data: Dict) -> MockEvaluationResult:
-        """Evaluate a graph-based question using Cypher queries."""
-        start_time = time.time()
-        question_id = question_data['id']
-        question = question_data['question']
-
-        try:
-            expected_evidence = question_data['expected_evidence']
-            expected_papers = expected_evidence.get('paper_ids', [])
-
-            # Use graph query handler to execute the query
-            result = await self.service_factory.retrieval_handler.execute_graph_search(question, 10)
-
-            # Extract paper IDs from result if available
-            retrieved_papers = []
-            if result:
-                retrieved_papers.extend([r.get('paper_id') for r in result[:]])
-
-            # Calculate metrics
-            precision, recall, f1 = self._calculate_metrics(retrieved_papers, expected_papers)
-
-            # Calculate DCG metrics
-            dcg_at_5 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 5)
-            dcg_at_10 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 10)
-            ndcg_at_5 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 5)
-            ndcg_at_10 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 10)
-
-            # Generate AI response using the retrieval handler's generate_ai_response function
-            ai_response = None
-            ai_generation_time = 0.0
-            ai_response_similarity = 0.0
-            verification_labels = None
-            expected_ai_response = expected_evidence.get('expected_ai_response', '')
-
-            if self.service_factory and self.service_factory.retrieval_handler:
-                ai_start_time = time.time()
-                try:
-                    # Convert graph results to search results format
-                    search_results = []
-                    if result and 'data' in result:
-                        for record in result['data']:
-                            # Convert graph record to search result format
-                            paper_info = {
-                                'paper_id': record.get('paper_id', ''),
-                                'title': record.get('title', ''),
-                                'abstract': record.get('abstract', ''),
-                                'authors': record.get('authors', []),
-                                'venue': record.get('venue', ''),
-                                'publication_date': record.get('publication_date', ''),
-                                'relevance_score': 0.8  # High relevance for graph results
-                            }
-                            search_results.append(paper_info)
-
-                    # Use generate_ai_response function with STRUCTURAL query type for graph questions
-                    from models.entities.retrieval.QueryType import QueryType
-                    ai_response = await self.service_factory.retrieval_handler.generate_ai_response(
-                        query=question,
-                        search_results=search_results,
-                        query_type=QueryType.STRUCTURAL
-                    )
-                    
-                    # Perform SciFact verification and store results
-                    if ai_response and search_results:
-                        try:
-                            verification_results = await self.service_factory.retrieval_handler.verify_claims_scifact(
-                                ai_response, search_results
-                            )
-                            if verification_results:
-                                verification_labels = [v.get('label', 'UNKNOWN') for v in verification_results]
-                        except Exception as e:
-                            logger.warning(f"SciFact verification failed for {question_id}: {e}")
-                    
-                    ai_generation_time = time.time() - ai_start_time
-
-                    # Calculate AI response similarity if expected response exists
-                    if expected_ai_response and ai_response:
-                        ai_response_similarity = self._calculate_text_similarity(ai_response, expected_ai_response)
-
-                except Exception as e:
-                    logger.warning(f"AI response generation failed for {question_id}: {e}")
-                    ai_generation_time = time.time() - ai_start_time
-
-            response_time = time.time() - start_time
-
-            return MockEvaluationResult(
-                question_id=question_id,
-                question=question,
-                question_type='graph',
-                category=question_data['category'],
-                success=True,
-                response_time=response_time,
-                retrieved_papers=retrieved_papers,
-                expected_papers=expected_papers,
-                precision=precision,
-                recall=recall,
-                f1_score=f1,
-                ai_response=ai_response,
-                expected_ai_response=expected_ai_response,
-                ai_response_similarity=ai_response_similarity,
-                ai_generation_time=ai_generation_time,
-                dcg_at_5=dcg_at_5,
-                dcg_at_10=dcg_at_10,
-                ndcg_at_5=ndcg_at_5,
-                ndcg_at_10=ndcg_at_10,
-                verification_labels=verification_labels
-            )
-
-        except Exception as e:
-            response_time = time.time() - start_time
-            logger.error(f"Error evaluating graph question {question_id}: {e}")
-
-            return MockEvaluationResult(
-                question_id=question_id,
-                question=question,
-                question_type='graph',
-                category=question_data['category'],
-                success=False,
-                response_time=response_time,
-                retrieved_papers=[],
-                expected_papers=expected_evidence.get('paper_ids', []),
-                precision=0.0,
-                recall=0.0,
-                f1_score=0.0,
-                error_message=str(e)
-            )
+    # async def evaluate_graph_question(self, question_data: Dict) -> MockEvaluationResult:
+    #     """Evaluate a graph-based question using Cypher queries."""
+    #     start_time = time.time()
+    #     question_id = question_data['id']
+    #     question = question_data['question']
+    #
+    #     try:
+    #         expected_evidence = question_data['expected_evidence']
+    #         expected_papers = expected_evidence.get('paper_ids', [])
+    #
+    #         # Use graph query handler to execute the query
+    #         result = await self.service_factory.retrieval_handler.execute_graph_search(question, 10)
+    #
+    #         # Extract paper IDs from result if available
+    #         retrieved_papers = []
+    #         if result:
+    #             retrieved_papers.extend([r.get('paper_id') for r in result[:]])
+    #
+    #         # Calculate metrics
+    #         precision, recall, f1 = self._calculate_metrics(retrieved_papers, expected_papers)
+    #
+    #         # Calculate DCG metrics
+    #         dcg_at_5 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 5)
+    #         dcg_at_10 = self._calculate_dcg_at_k(retrieved_papers, expected_papers, 10)
+    #         ndcg_at_5 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 5)
+    #         ndcg_at_10 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 10)
+    #
+    #         # Generate AI response using the retrieval handler's generate_ai_response function
+    #         ai_response = None
+    #         ai_generation_time = 0.0
+    #         ai_response_similarity = 0.0
+    #         verification_labels = None
+    #         expected_ai_response = expected_evidence.get('expected_ai_response', '')
+    #
+    #         if self.service_factory and self.service_factory.retrieval_handler:
+    #             ai_start_time = time.time()
+    #             try:
+    #                 # Convert graph results to search results format
+    #                 search_results = []
+    #                 if result and 'data' in result:
+    #                     for record in result['data']:
+    #                         # Convert graph record to search result format
+    #                         paper_info = {
+    #                             'paper_id': record.get('paper_id', ''),
+    #                             'title': record.get('title', ''),
+    #                             'abstract': record.get('abstract', ''),
+    #                             'authors': record.get('authors', []),
+    #                             'venue': record.get('venue', ''),
+    #                             'publication_date': record.get('publication_date', ''),
+    #                             'relevance_score': 0.8  # High relevance for graph results
+    #                         }
+    #                         search_results.append(paper_info)
+    #
+    #                 # Use generate_ai_response function with STRUCTURAL query type for graph questions
+    #                 from models.entities.retrieval.QueryType import QueryType
+    #                 ai_response = await self.service_factory.retrieval_handler.generate_ai_response(
+    #                     query=question,
+    #                     search_results=search_results,
+    #                     query_type=QueryType.STRUCTURAL
+    #                 )
+    #
+    #                 # Perform SciFact verification and store results
+    #                 if ai_response and search_results:
+    #                     try:
+    #                         verification_results = await self.service_factory.retrieval_handler.verify_claims_scifact(
+    #                             ai_response, search_results
+    #                         )
+    #                         if verification_results:
+    #                             verification_labels = [v.get('label', 'UNKNOWN') for v in verification_results]
+    #                     except Exception as e:
+    #                         logger.warning(f"SciFact verification failed for {question_id}: {e}")
+    #
+    #                 ai_generation_time = time.time() - ai_start_time
+    #
+    #                 # Calculate AI response similarity if expected response exists
+    #                 if expected_ai_response and ai_response:
+    #                     ai_response_similarity = self._calculate_text_similarity(ai_response, expected_ai_response)
+    #
+    #             except Exception as e:
+    #                 logger.warning(f"AI response generation failed for {question_id}: {e}")
+    #                 ai_generation_time = time.time() - ai_start_time
+    #
+    #         response_time = time.time() - start_time
+    #
+    #         return MockEvaluationResult(
+    #             question_id=question_id,
+    #             question=question,
+    #             question_type='graph',
+    #             category=question_data['category'],
+    #             success=True,
+    #             response_time=response_time,
+    #             retrieved_papers=retrieved_papers,
+    #             expected_papers=expected_papers,
+    #             precision=precision,
+    #             recall=recall,
+    #             f1_score=f1,
+    #             ai_response=ai_response,
+    #             expected_ai_response=expected_ai_response,
+    #             ai_response_similarity=ai_response_similarity,
+    #             ai_generation_time=ai_generation_time,
+    #             dcg_at_5=dcg_at_5,
+    #             dcg_at_10=dcg_at_10,
+    #             ndcg_at_5=ndcg_at_5,
+    #             ndcg_at_10=ndcg_at_10,
+    #             verification_labels=verification_labels
+    #         )
+    #
+    #     except Exception as e:
+    #         response_time = time.time() - start_time
+    #         logger.error(f"Error evaluating graph question {question_id}: {e}")
+    #
+    #         return MockEvaluationResult(
+    #             question_id=question_id,
+    #             question=question,
+    #             question_type='graph',
+    #             category=question_data['category'],
+    #             success=False,
+    #             response_time=response_time,
+    #             retrieved_papers=[],
+    #             expected_papers=expected_evidence.get('paper_ids', []),
+    #             precision=0.0,
+    #             recall=0.0,
+    #             f1_score=0.0,
+    #             error_message=str(e)
+    #         )
 
     async def evaluate_semantic_question(self, question_data: Dict) -> MockEvaluationResult:
         """Evaluate a semantic question using vector similarity search."""
@@ -231,10 +231,16 @@ class MockDataEvaluator:
             expected_papers = expected_evidence.get('paper_ids', [])
 
             # Use semantic search to find similar papers
-            search_results = await self.service_factory.retrieval_handler.execute_vector_search(
-                query=question,
-                top_k=10,
-            )
+            if question_data['type'] == 'graph':
+                search_results = await self.service_factory.retrieval_handler.execute_graph_search(
+                    query=question,
+                    top_k=10,
+                )
+            else:
+                search_results = await self.service_factory.retrieval_handler.execute_vector_search(
+                    query=question,
+                    top_k=10,
+                )
 
             # Extract paper IDs from search results
             retrieved_papers = []
@@ -306,7 +312,7 @@ class MockDataEvaluator:
             return MockEvaluationResult(
                 question_id=question_id,
                 question=question,
-                question_type='semantic',
+                question_type=question_data['type'],
                 category=question_data['category'],
                 success=True,
                 response_time=response_time,
@@ -526,8 +532,9 @@ class MockDataEvaluator:
         for i, question_data in enumerate(questions):
             logger.info(f"Evaluating question {i + 1}/{len(questions)}: {question_data['id']}")
 
-            if question_data['type'] == 'graph':
-                result = await self.evaluate_graph_question(question_data)
+            if question_data['type'] == 'parallel':
+                continue
+                # result = await self.evaluate_graph_question(question_data)
             else:  # semantic
                 result = await self.evaluate_semantic_question(question_data)
 
