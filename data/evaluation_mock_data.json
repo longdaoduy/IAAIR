@@ -20,7 +20,8 @@
       "expected_evidence": {
         "paper_ids": ["W2194775991"],
         "cypher_query": "MATCH (a:Author {name: 'Kaiming He'})<-[:AUTHORED]-(p:Paper) RETURN p.id, p.title",
-        "expected_result": [{"id": "W2194775991", "title": "Deep Residual Learning for Image Recognition"}]
+        "expected_result": [{"id": "W2194775991", "title": "Deep Residual Learning for Image Recognition"}],
+        "expected_ai_response": "Kaiming He has authored several influential papers in computer vision and deep learning, with his most notable work being 'Deep Residual Learning for Image Recognition' (W2194775991). This paper introduced ResNet architecture, which solved the vanishing gradient problem in deep networks through skip connections and has become one of the most influential papers in deep learning."
       }
     },
     {
@@ -43,7 +44,8 @@
       "expected_evidence": {
         "paper_ids": ["W2128635872"],
         "cypher_query": "MATCH (cited:Paper {id: 'W2128635872'})<-[:CITES]-(citing:Paper) RETURN citing.id, citing.title LIMIT 10",
-        "expected_result": "Multiple citing papers"
+        "expected_result": "Multiple citing papers",
+        "expected_ai_response": "Paper W2128635872, which describes the Bradford protein assay method for protein quantification, has been cited by numerous papers in biochemistry, molecular biology, and related fields. This method using Coomassie dye binding has become a standard technique for protein concentration measurement in laboratories worldwide."
       }
     },
     {
@@ -66,7 +68,8 @@
       "expected_evidence": {
         "paper_ids": ["W2100837269"],
         "cypher_query": "MATCH (v:Venue {name: 'Nature'})<-[:PUBLISHED_IN]-(p:Paper) RETURN p.id, p.title LIMIT 10",
-        "expected_result": [{"id": "W2100837269", "title": "Cleavage of Structural Proteins during the Assembly of the Head of Bacteriophage T4"}]
+        "expected_result": [{"id": "W2100837269", "title": "Cleavage of Structural Proteins during the Assembly of the Head of Bacteriophage T4"}],
+        "expected_ai_response": "Nature has published many landmark papers across all scientific disciplines. One notable example is the paper 'Cleavage of Structural Proteins during the Assembly of the Head of Bacteriophage T4' (W2100837269) by Ulrich K. Laemmli, which introduced the SDS-PAGE method for protein separation. Nature papers typically represent groundbreaking research with broad scientific impact."
       }
     },
     {
@@ -89,7 +92,8 @@
       "expected_evidence": {
         "paper_ids": ["W1979290264"],
         "cypher_query": "MATCH (p:Paper {id: 'W1979290264'}) RETURN p.doi",
-        "expected_result": "DOI for thematic analysis paper"
+        "expected_result": "DOI for thematic analysis paper",
+        "expected_ai_response": "Paper W1979290264 is a methodology paper on thematic analysis in psychology and social sciences research. The DOI provides a persistent identifier for this important work in qualitative research methods that has significantly influenced how researchers conduct and report thematic analysis."
       }
     },
     {
@@ -124,7 +128,8 @@
       "expected_evidence": {
         "paper_ids": ["W2194775991"],
         "cypher_query": "MATCH (a1:Author {name: 'Kaiming He'})<-[:AUTHORED]-(p:Paper)-[:AUTHORED]->(a2:Author {name: 'Jian Sun'}) RETURN p.id, p.title",
-        "expected_result": [{"id": "W2194775991", "title": "Deep Residual Learning for Image Recognition"}]
+        "expected_result": [{"id": "W2194775991", "title": "Deep Residual Learning for Image Recognition"}],
+        "expected_ai_response": "Kaiming He and Jian Sun have collaborated on the influential paper 'Deep Residual Learning for Image Recognition' (W2194775991). This collaboration resulted in the development of ResNet architecture, which revolutionized deep learning by introducing skip connections that enabled training of very deep neural networks."
       }
     },
     {
@@ -135,7 +140,8 @@
       "expected_evidence": {
         "paper_ids": ["W1775749144"],
         "cypher_query": "MATCH (p:Paper) RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC LIMIT 1",
-        "expected_result": {"id": "W1775749144", "citations": 299198}
+        "expected_result": {"id": "W1775749144", "citations": 299198},
+        "expected_ai_response": "The paper with the highest citation count is W1775749144, the famous Lowry protein assay paper 'Protein Measurement with the Folin Phenol Reagent' with approximately 299,198 citations. This paper established a fundamental method for protein quantification that has been widely used in biochemistry and molecular biology laboratories for decades."
       }
     },
     {
@@ -170,7 +176,8 @@
       "expected_evidence": {
         "paper_ids": ["W1775749144", "W2100837269"],
         "cypher_query": "MATCH (p1:Paper {id: 'W1775749144'})<-[:CITES]-(citing:Paper)-[:CITES]->(p2:Paper {id: 'W2100837269'}) RETURN citing.id, citing.title",
-        "expected_result": "Papers citing both high-impact biochemistry papers"
+        "expected_result": "Papers citing both high-impact biochemistry papers",
+        "expected_ai_response": "Papers that cite both W1775749144 (Lowry protein assay) and W2100837269 (SDS-PAGE method) represent biochemistry and molecular biology research that utilizes both protein quantification and separation techniques. These are typically comprehensive studies in protein biochemistry that require multiple analytical methods."
       }
     },
     {
@@ -181,7 +188,8 @@
       "expected_evidence": {
         "paper_ids": ["W2107277218"],
         "cypher_query": "MATCH (p:Paper {id: 'W2107277218'}) RETURN p.publication_year",
-        "expected_result": "Publication year of gene expression analysis paper"
+        "expected_result": "Publication year of gene expression analysis paper",
+        "expected_ai_response": "Paper W2107277218, which describes the widely-used 2^(-ΔΔCt) method for analyzing relative gene expression data using quantitative PCR, represents an important methodology paper in molecular biology that has standardized qPCR data analysis across research laboratories."
       }
     },
     {
@@ -252,7 +260,8 @@
       "expected_evidence": {
         "paper_ids": ["W2100837269"],
         "cypher_query": "MATCH (a:Author {name: 'Ulrich K. Laemmli'}) RETURN a.orcid",
-        "expected_result": "ORCID identifier if available"
+        "expected_result": "ORCID identifier if available",
+        "expected_ai_response": "Ulrich K. Laemmli is the author of the seminal paper on SDS-PAGE protein separation method (W2100837269). His ORCID identifier, if available, would provide a unique researcher identifier linking all his publications and contributions to structural biology and biochemistry."
       }
     },
     {
@@ -275,7 +284,8 @@
       "expected_evidence": {
         "paper_ids": ["W1775749144", "W2100837269", "W2128635872"],
         "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE p.citation_count > 100000 RETURN DISTINCT v.name",
-        "expected_result": ["Nature", "Journal of Biological Chemistry", "Analytical Biochemistry"]
+        "expected_result": ["Nature", "Journal of Biological Chemistry", "Analytical Biochemistry"],
+        "expected_ai_response": "Venues that have published papers with more than 100,000 citations include prestigious journals like Nature, Journal of Biological Chemistry, and Analytical Biochemistry. These journals have published foundational methodology papers that have had enormous impact on their respective fields, such as the Lowry protein assay, SDS-PAGE method, and Bradford protein assay."
       }
     },
     {
@@ -334,7 +344,8 @@
       "expected_evidence": {
         "paper_ids": ["W3038568908"],
         "semantic_keywords": ["plasma physics", "fusion", "deuterium", "magnetic confinement", "tokamak"],
-        "expected_result": "Papers on plasma physics research and fusion device monitoring"
+        "expected_result": "Papers on plasma physics research and fusion device monitoring",
+        "expected_ai_response": "Research on plasma physics and fusion technology includes studies on magnetic confinement fusion, deuterium plasma behavior, and advanced diagnostic systems for fusion devices. These studies contribute to the development of sustainable fusion energy by understanding plasma dynamics and improving monitoring capabilities in tokamak and stellarator devices."
       }
     },
     {
@@ -345,7 +356,8 @@
       "expected_evidence": {
         "paper_ids": ["W1981368803"],
         "semantic_keywords": ["density functional theory", "DFT", "computational chemistry", "electronic structure", "quantum mechanics"],
-        "expected_result": "Papers on DFT methods and computational quantum chemistry"
+        "expected_result": "Papers on DFT methods and computational quantum chemistry",
+        "expected_ai_response": "Computational chemistry and density functional theory methods have revolutionized materials science by providing efficient approaches for calculating electronic structure and total energies. These ab initio methods, particularly those using plane-wave basis sets, have become essential tools for predicting material properties and understanding chemical bonding at the quantum mechanical level."
       }
     },
     {
@@ -380,7 +392,8 @@
       "expected_evidence": {
         "paper_ids": ["W1775749144", "W2128635872"],
         "semantic_keywords": ["biochemical assay", "analytical chemistry", "spectrophotometry", "quantitative analysis", "laboratory methods"],
-        "expected_result": "Papers on biochemical measurement and analytical chemistry methods"
+        "expected_result": "Papers on biochemical measurement and analytical chemistry methods",
+        "expected_ai_response": "Biochemical assays and analytical techniques form the foundation of quantitative biology and chemistry. Key methods include the Lowry protein assay using Folin phenol reagent and the Bradford assay using Coomassie dye binding. These spectrophotometric techniques enable precise measurement of biological molecules and are essential tools in research laboratories worldwide."
       }
     },
     {
@@ -391,7 +404,8 @@
       "expected_evidence": {
         "paper_ids": ["W2144634347"],
         "semantic_keywords": ["molecular cloning", "recombinant DNA", "PCR", "genetic engineering", "laboratory protocols"],
-        "expected_result": "Papers on molecular biology techniques and cloning protocols"
+        "expected_result": "Papers on molecular biology techniques and cloning protocols",
+        "expected_ai_response": "Molecular biology techniques and cloning methods have transformed biological research by enabling the manipulation and study of genes and proteins. These methods include molecular cloning protocols, PCR amplification, and recombinant DNA techniques that are fundamental to genetic engineering and biotechnology applications."
       }
     },
     {
@@ -402,7 +416,8 @@
       "expected_evidence": {
         "paper_ids": ["W1979290264"],
         "semantic_keywords": ["qualitative research", "thematic analysis", "psychology", "social science methodology", "interpretive research"],
-        "expected_result": "Papers on qualitative research methodologies and thematic analysis"
+        "expected_result": "Papers on qualitative research methodologies and thematic analysis",
+        "expected_ai_response": "Qualitative research methods in psychology and social sciences provide essential frameworks for understanding complex human phenomena through interpretive analysis. Thematic analysis, in particular, offers a systematic approach for identifying, analyzing, and reporting patterns within qualitative data, making it one of the most widely used methods in psychology research."
       }
     },
     {
@@ -437,7 +452,8 @@
       "expected_evidence": {
         "paper_ids": ["W3038568908"],
         "semantic_keywords": ["radiation effects", "detector technology", "nuclear physics", "instrumentation", "radiation hardening"],
-        "expected_result": "Papers on radiation-resistant instrumentation and detector physics"
+        "expected_result": "Papers on radiation-resistant instrumentation and detector physics",
+        "expected_ai_response": "Radiation effects and detector technology research focuses on developing instrumentation capable of operating in high-radiation environments, such as fusion devices and nuclear facilities. This includes radiation-hardened cameras and monitoring systems that can withstand intense radiation fields while maintaining reliable operation for plasma diagnostics and safety monitoring."
       }
     },
     {
@@ -496,7 +512,8 @@
       "expected_evidence": {
         "paper_ids": ["W2134526812"],
         "semantic_keywords": ["high-throughput sequencing", "RNA-seq", "genomics", "next-generation sequencing", "transcriptomics"],
-        "expected_result": "Papers on HTSeq framework and high-throughput sequencing analysis"
+        "expected_result": "Papers on HTSeq framework and high-throughput sequencing analysis",
+        "expected_ai_response": "High-throughput sequencing data analysis methods have revolutionized genomics and transcriptomics research. Tools like HTSeq provide essential frameworks for processing RNA-seq and other next-generation sequencing data, enabling researchers to quantify gene expression, identify novel transcripts, and understand complex biological processes at the genome-wide level."
       }
     },
     {
@@ -507,7 +524,8 @@
       "expected_evidence": {
         "paper_ids": ["W2194775991"],
         "semantic_keywords": ["image processing", "computer vision", "pattern recognition", "machine learning", "artificial intelligence"],
-        "expected_result": "Papers on deep learning approaches to image recognition and computer vision"
+        "expected_result": "Papers on deep learning approaches to image recognition and computer vision",
+        "expected_ai_response": "Image processing and computer vision techniques have been transformed by deep learning approaches, particularly convolutional neural networks. Revolutionary architectures like ResNet have enabled unprecedented performance in image recognition tasks by solving the vanishing gradient problem and allowing training of very deep networks, fundamentally advancing the field of computer vision."
       }
     },
     {
@@ -542,7 +560,8 @@
       "expected_evidence": {
         "paper_ids": ["W2144634347"],
         "semantic_keywords": ["laboratory protocols", "experimental methods", "research techniques", "laboratory manual", "scientific methodology"],
-        "expected_result": "Papers on molecular cloning protocols and laboratory methodologies"
+        "expected_result": "Papers on molecular cloning protocols and laboratory methodologies",
+        "expected_ai_response": "Laboratory protocols and experimental methodologies provide the standardized procedures that ensure reproducibility and reliability in scientific research. These comprehensive guides cover molecular cloning techniques, experimental design principles, and quality control measures that are essential for conducting rigorous scientific investigations."
       }
     },
     {
@@ -553,7 +572,8 @@
       "expected_evidence": {
         "paper_ids": ["W1981368803"],
         "semantic_keywords": ["quantum mechanics", "theoretical chemistry", "ab initio calculations", "electronic structure theory", "computational physics"],
-        "expected_result": "Papers on quantum mechanical methods and computational chemistry approaches"
+        "expected_result": "Papers on quantum mechanical methods and computational chemistry approaches",
+        "expected_ai_response": "Quantum mechanical calculations and theoretical chemistry have revolutionized our understanding of molecular and solid-state systems. Ab initio methods and electronic structure theory provide the foundation for predicting material properties, chemical reactivity, and molecular behavior from first principles, enabling rational design of new materials and molecules."
       }
     },
     {
@@ -564,7 +584,8 @@
       "expected_evidence": {
         "paper_ids": ["W1979290264"],
         "semantic_keywords": ["research methodology", "data analysis", "qualitative methods", "mixed methods", "research design"],
-        "expected_result": "Papers on research methodologies and data analysis approaches"
+        "expected_result": "Papers on research methodologies and data analysis approaches",
+        "expected_ai_response": "Research methodology and data analysis techniques provide the systematic frameworks that ensure scientific rigor and validity in research studies. These approaches include qualitative methods like thematic analysis, quantitative statistical techniques, and mixed-methods designs that combine multiple approaches to address complex research questions comprehensively."
       }
     },
     {
@@ -575,7 +596,8 @@
       "expected_evidence": {
         "paper_ids": ["W3038568908"],
         "semantic_keywords": ["plasma diagnostics", "fusion diagnostics", "magnetic confinement", "plasma monitoring", "tokamak physics"],
-        "expected_result": "Papers on plasma physics diagnostics and fusion research instrumentation"
+        "expected_result": "Papers on plasma physics diagnostics and fusion research instrumentation",
+        "expected_ai_response": "Plasma diagnostics and fusion device monitoring are critical for advancing fusion energy research. These systems enable real-time monitoring of plasma parameters, magnetic confinement effectiveness, and device performance in tokamaks and stellarators. Advanced diagnostic techniques are essential for understanding plasma behavior and optimizing fusion reactor designs for sustainable energy production."
       }
     },
     {
@@ -600,7 +622,8 @@
         "paper_ids": ["W2194775991"],
         "semantic_keywords": ["deep learning", "neural networks", "machine learning", "artificial intelligence"],
         "cypher_query": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue) WHERE v.name IN ['Nature', 'Science'] AND p.citation_count > 1000 RETURN p.id, p.title ORDER BY p.citation_count DESC",
-        "expected_result": "Highly cited AI/ML papers in top-tier journals"
+        "expected_result": "Highly cited AI/ML papers in top-tier journals",
+        "expected_ai_response": "The most cited deep learning papers published in prestigious journals like Nature and Science represent breakthrough achievements in artificial intelligence and machine learning. These papers typically introduce novel architectures, theoretical insights, or demonstrate transformative applications that significantly advance the field and influence subsequent research directions."
       }
     },
     {
@@ -625,7 +648,8 @@
         "paper_ids": ["W2194775991"],
         "semantic_keywords": ["machine learning", "deep learning", "neural networks", "AI algorithms"],
         "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 10000 AND p.publication_year >= 2010 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
-        "expected_result": "Highly influential recent ML papers"
+        "expected_result": "Highly influential recent ML papers",
+        "expected_ai_response": "Machine learning papers with more than 10,000 citations since 2010 represent the most influential recent advances in AI. These include breakthrough architectures like ResNet, transformer models, and other foundational works that have shaped modern machine learning and enabled significant progress in computer vision, natural language processing, and other AI applications."
       }
     },
     {
@@ -663,7 +687,8 @@
         "paper_ids": ["W2100837269"],
         "semantic_keywords": ["membrane proteins", "protein structure", "crystallography", "cryo-EM"],
         "cypher_query": "MATCH (p:Paper) WHERE p.citation_count > 500 RETURN p.id, p.title, p.citation_count ORDER BY p.citation_count DESC",
-        "expected_result": "Highly cited structural biology papers on membrane proteins"
+        "expected_result": "Highly cited structural biology papers on membrane proteins",
+        "expected_ai_response": "Structural biology papers about membrane proteins with high citation counts typically describe breakthrough methods for protein purification, crystallization, and structure determination. These studies are crucial for understanding membrane protein function and developing therapeutics, as membrane proteins represent a significant portion of drug targets."
       }
     },
     {
