@@ -647,10 +647,10 @@ Generate the query now:"""
                         "doi": result.get("doi", "") or ""
                     })
 
-            # Create specialized prompt based on query type
+            # Create specialized prompt and system prompt based on query type
             if query_type == QueryType.STRUCTURAL:
-                prompt = f"""
-You are a helpful research assistant. Answer this question directly based on the search results provided: "{query}"
+                system_prompt = "You are a helpful research assistant specialized in providing precise, factual answers about academic papers. Focus on being direct and accurate."
+                prompt = f"""Answer this question directly based on the search results provided: "{query}"
 
 Search Results:
 {self._format_papers_for_prompt(context_papers)}
@@ -664,8 +664,8 @@ Instructions:
 
 Answer:"""
             elif query_type == QueryType.SEMANTIC:
-                prompt = f"""
-You are a helpful research assistant. Answer this question comprehensively based on the search results: "{query}"
+                system_prompt = "You are a helpful research assistant specialized in synthesizing information from multiple academic sources. Focus on providing comprehensive, well-organized answers that connect different research findings."
+                prompt = f"""Answer this question comprehensively based on the search results: "{query}"
 
 Search Results:
 {self._format_papers_for_prompt(context_papers)}
@@ -680,8 +680,8 @@ Instructions:
 
 Answer:"""
             else:  # FACTUAL, HYBRID, or other types
-                prompt = f"""
-You are a helpful research assistant. Answer this question based on the search results provided: "{query}"
+                system_prompt = "You are a helpful research assistant. Provide accurate, well-structured answers based on academic search results."
+                prompt = f"""Answer this question based on the search results provided: "{query}"
 
 Search Results:
 {self._format_papers_for_prompt(context_papers)}
@@ -696,9 +696,10 @@ Instructions:
 
 Answer:"""
 
-            # Generate response using Llama
+            # Generate response using DeepseekClient with both prompt and system_prompt
             ai_answer = self.ai_agent.generate_content(
-                prompt=prompt
+                prompt=prompt,
+                system_prompt=system_prompt
             )
 
             if not ai_answer:

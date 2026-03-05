@@ -42,6 +42,7 @@ class MockEvaluationResult:
     dcg_at_10: Optional[float] = None
     ndcg_at_5: Optional[float] = None
     ndcg_at_10: Optional[float] = None
+    verification_labels: Optional[List[str]] = None
 
 
 @dataclass
@@ -108,9 +109,14 @@ class MockDataEvaluator:
 
             # Extract paper IDs from result if available
             retrieved_papers = []
-
-            if result:
-                retrieved_papers.extend([r.get('paper_id') for r in result[:]])
+            if result and 'data' in result:
+                for record in result['data']:
+                    # Try to find paper IDs in the record
+                    for key, value in record.items():
+                        if key in ['paper_id', 'id'] and isinstance(value, str) and value.startswith('W'):
+                            retrieved_papers.append(value)
+                        elif isinstance(value, str) and value.startswith('W'):
+                            retrieved_papers.append(value)
 
             # Remove duplicates while preserving order
             seen = set()
@@ -130,25 +136,51 @@ class MockDataEvaluator:
             ndcg_at_5 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 5)
             ndcg_at_10 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 10)
 
-            # Generate AI response if deepseek client is available
+            # Generate AI response using the retrieval handler's generate_ai_response function
             ai_response = None
             ai_generation_time = 0.0
             ai_response_similarity = 0.0
+            verification_labels = None
             expected_ai_response = expected_evidence.get('expected_ai_response', '')
 
-            if self.service_factory and hasattr(self.service_factory,
-                                                'deepseek_client') and self.service_factory.deepseek_client:
+            if self.service_factory and self.service_factory.retrieval_handler:
                 ai_start_time = time.time()
                 try:
-                    # Create context from retrieved results
-                    context = f"Query: {question}\nResults: {len(retrieved_papers)} papers found"
+                    # Convert graph results to search results format
+                    search_results = []
                     if result and 'data' in result:
-                        context += f"\nQuery result: {result['data'][:3]}"  # Sample of results
+                        for record in result['data']:
+                            # Convert graph record to search result format
+                            paper_info = {
+                                'paper_id': record.get('paper_id', ''),
+                                'title': record.get('title', ''),
+                                'abstract': record.get('abstract', ''),
+                                'authors': record.get('authors', []),
+                                'venue': record.get('venue', ''),
+                                'publication_date': record.get('publication_date', ''),
+                                'relevance_score': 0.8  # High relevance for graph results
+                            }
+                            search_results.append(paper_info)
 
-                    ai_response = self.service_factory.deepseek_client.generate_content(
-                        prompt=f"Based on the graph database query results, provide a comprehensive answer to: {question}",
-                        system_prompt=f"You are an AI assistant analyzing academic papers. Use the provided query results to answer the question accurately. Context: {context}"
+                    # Use generate_ai_response function with STRUCTURAL query type for graph questions
+                    from models.entities.retrieval.QueryType import QueryType
+                    ai_response = await self.service_factory.retrieval_handler.generate_ai_response(
+                        query=question,
+                        search_results=search_results,
+                        query_type=QueryType.STRUCTURAL
                     )
+                    
+                    # Perform SciFact verification and store results
+                    if ai_response and search_results:
+                        try:
+                            verification_results = await self.service_factory.retrieval_handler.verify_claims_scifact(
+                                ai_response, search_results
+                            )
+                            if verification_results:
+                                verification_labels = [v.get('label', 'UNKNOWN') for v in verification_results]
+                        except Exception as e:
+                            logger.warning(f"SciFact verification failed for {question_id}: {e}")
+                    
                     ai_generation_time = time.time() - ai_start_time
 
                     # Calculate AI response similarity if expected response exists
@@ -180,7 +212,8 @@ class MockDataEvaluator:
                 dcg_at_5=dcg_at_5,
                 dcg_at_10=dcg_at_10,
                 ndcg_at_5=ndcg_at_5,
-                ndcg_at_10=ndcg_at_10
+                ndcg_at_10=ndcg_at_10,
+                verification_labels=verification_labels
             )
 
         except Exception as e:
@@ -235,30 +268,44 @@ class MockDataEvaluator:
             ndcg_at_5 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 5)
             ndcg_at_10 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 10)
 
-            # Generate AI response if deepseek client is available
+            # Generate AI response using the retrieval handler's generate_ai_response function
             ai_response = None
             ai_generation_time = 0.0
             ai_response_similarity = 0.0
+            verification_labels = None
             expected_ai_response = expected_evidence.get('expected_ai_response', '')
 
-            if self.service_factory and self.service_factory.deepseek_client:
+            if self.service_factory and self.service_factory.retrieval_handler:
                 ai_start_time = time.time()
                 try:
-                    # Create context from search results
-                    context = f"Query: {question}\nRetrieved {len(retrieved_papers)} relevant papers"
-                    if search_results:
-                        # Add paper titles/abstracts if available
-                        context += "\nTop results:"
-                        for i, result in enumerate(search_results[:3]):
-                            if hasattr(result, 'title'):
-                                context += f"\n{i + 1}. {result.title}"
-                            elif isinstance(result, dict) and 'title' in result:
-                                context += f"\n{i + 1}. {result['title']}"
-
-                    ai_response = self.service_factory.deepseek_client.generate_content(
-                        prompt=f"Based on the semantic search results, provide a comprehensive answer to: {question}",
-                        system_prompt=f"You are an AI assistant analyzing academic papers. Use the provided search results to answer the question comprehensively. Context: {context}"
+                    # Use generate_ai_response function with SEMANTIC query type for semantic questions
+                    from models.entities.retrieval.QueryType import QueryType
+                    ai_response = await self.service_factory.retrieval_handler.generate_ai_response(
+                        query=question,
+                        search_results=search_results,
+                        query_type=QueryType.SEMANTIC
                     )
+                    
+                    # Perform SciFact verification and store results
+                    if ai_response and search_results:
+                        try:
+                            # Convert search results to proper format if needed
+                            papers_for_verification = []
+                            for result in search_results:
+                                if isinstance(result, dict):
+                                    papers_for_verification.append(result)
+                                elif hasattr(result, '__dict__'):
+                                    papers_for_verification.append(vars(result))
+                                    
+                            if papers_for_verification:
+                                verification_results = await self.service_factory.retrieval_handler.verify_claims_scifact(
+                                    ai_response, papers_for_verification
+                                )
+                                if verification_results:
+                                    verification_labels = [v.get('label', 'UNKNOWN') for v in verification_results]
+                        except Exception as e:
+                            logger.warning(f"SciFact verification failed for {question_id}: {e}")
+                    
                     ai_generation_time = time.time() - ai_start_time
 
                     # Calculate AI response similarity if expected response exists
@@ -291,7 +338,8 @@ class MockDataEvaluator:
                 dcg_at_5=dcg_at_5,
                 dcg_at_10=dcg_at_10,
                 ndcg_at_5=ndcg_at_5,
-                ndcg_at_10=ndcg_at_10
+                ndcg_at_10=ndcg_at_10,
+                verification_labels=verification_labels
             )
 
         except Exception as e:
@@ -495,10 +543,8 @@ class MockDataEvaluator:
 
             if question_data['type'] == 'graph':
                 result = await self.evaluate_graph_question(question_data)
-            elif question_data['type'] == 'semantic':  # semantic
+            else:  # semantic
                 result = await self.evaluate_semantic_question(question_data)
-            else:
-                continue
 
             results.append(result)
 
@@ -523,12 +569,34 @@ class MockDataEvaluator:
         # Prepare data for CSV table
         table_data = []
         headers = ['Question_ID', 'Query', 'AI_Response', 'Expected_AI_Response', 'Response_Similarity',
-                   'Question_Type', 'Success']
+                   'Question_Type', 'Success', 'SciFact_Labels']
 
         for result in results:
             ai_response = result.ai_response if result.ai_response else "No AI response generated"
             expected_response = result.expected_ai_response if result.expected_ai_response else "No expected response available"
             similarity = f"{result.ai_response_similarity:.3f}" if result.ai_response_similarity is not None else "N/A"
+            
+            # Format verification labels
+            scifact_labels = "No verification"
+            if result.verification_labels:
+                # Count different label types
+                label_counts = {}
+                for label in result.verification_labels:
+                    clean_label = str(label).strip().upper()
+                    if 'SUPPORTED' in clean_label:
+                        label_counts['SUPPORTED'] = label_counts.get('SUPPORTED', 0) + 1
+                    elif 'CONTRADICTED' in clean_label:
+                        label_counts['CONTRADICTED'] = label_counts.get('CONTRADICTED', 0) + 1
+                    elif 'NO_EVIDENCE' in clean_label:
+                        label_counts['NO_EVIDENCE'] = label_counts.get('NO_EVIDENCE', 0) + 1
+                    else:
+                        label_counts['UNKNOWN'] = label_counts.get('UNKNOWN', 0) + 1
+                
+                # Format as readable summary
+                label_parts = []
+                for label_type, count in label_counts.items():
+                    label_parts.append(f"{label_type}:{count}")
+                scifact_labels = ", ".join(label_parts) if label_parts else "No labels"
 
             table_data.append([
                 result.question_id,
@@ -537,7 +605,8 @@ class MockDataEvaluator:
                 expected_response,
                 similarity,
                 result.question_type,
-                "Yes" if result.success else "No"
+                "Yes" if result.success else "No",
+                scifact_labels
             ])
 
         # Create output directory if it doesn't exist
@@ -559,8 +628,8 @@ class MockDataEvaluator:
             f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
 
             # Markdown table headers
-            f.write("| Question ID | Query | AI Response | Expected AI Response | Similarity | Type | Success |\n")
-            f.write("|-------------|-------|-------------|---------------------|------------|------|--------|\n")
+            f.write("| Question ID | Query | AI Response | Expected AI Response | Similarity | Type | Success | SciFact Labels |\n")
+            f.write("|-------------|-------|-------------|---------------------|------------|------|--------|----------------|\n")
 
             # Markdown table rows
             for row in table_data:
@@ -568,13 +637,15 @@ class MockDataEvaluator:
                 query = (row[1][:100] + "...") if len(row[1]) > 100 else row[1]
                 ai_resp = (row[2][:150] + "...") if len(row[2]) > 150 else row[2]
                 expected_resp = (row[3][:150] + "...") if len(row[3]) > 150 else row[3]
+                scifact_labels = (row[7][:50] + "...") if len(row[7]) > 50 else row[7]
 
                 # Escape pipe characters in text
                 query = query.replace("|", "\\|")
                 ai_resp = ai_resp.replace("|", "\\|")
                 expected_resp = expected_resp.replace("|", "\\|")
+                scifact_labels = scifact_labels.replace("|", "\\|")
 
-                f.write(f"| {row[0]} | {query} | {ai_resp} | {expected_resp} | {row[4]} | {row[5]} | {row[6]} |\n")
+                f.write(f"| {row[0]} | {query} | {ai_resp} | {expected_resp} | {row[4]} | {row[5]} | {row[6]} | {scifact_labels} |\n")
 
         logger.info(f"AI responses comparison saved to: {csv_file} and {md_file}")
         return csv_file
@@ -832,7 +903,8 @@ class MockDataEvaluator:
                     'ndcg_at_5': r.ndcg_at_5,
                     'ndcg_at_10': r.ndcg_at_10,
                     'error_message': r.error_message,
-                    'similarity_scores': r.similarity_scores
+                    'similarity_scores': r.similarity_scores,
+                    'verification_labels': r.verification_labels
                 }
                 for r in results
             ]
