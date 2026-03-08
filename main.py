@@ -53,6 +53,8 @@ logger = logging.getLogger(__name__)
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from models.engines.ServiceFactory import ServiceFactory
 from pipelines.evaluation.MockDataEvaluator import MockDataEvaluator
@@ -64,15 +66,15 @@ services = ServiceFactory()
 
 class RequestCounterMiddleware(BaseHTTPMiddleware):
     """Middleware to count and track all API requests."""
-    
+
     async def dispatch(self, request: Request, call_next: Callable):
         # Extract endpoint details
         endpoint = request.url.path
         method = request.method
-        
+
         # Start timing
         start_time = time.time()
-        
+
         # Track request start
         if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
             services.prometheus_monitor.metrics.request_count.labels(
@@ -81,17 +83,17 @@ class RequestCounterMiddleware(BaseHTTPMiddleware):
                 routing_strategy="unknown",
                 query_type="unknown"
             ).inc()
-            
+
             # Track active requests
             services.prometheus_monitor.metrics.active_requests.inc()
-        
+
         try:
             # Process request
             response = await call_next(request)
-            
+
             # Calculate duration
             duration = time.time() - start_time
-            
+
             # Track success metrics
             if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
                 services.prometheus_monitor.metrics.request_duration.labels(
@@ -99,41 +101,41 @@ class RequestCounterMiddleware(BaseHTTPMiddleware):
                     method=method,
                     status_code=str(response.status_code)
                 ).observe(duration)
-                
+
                 # Track endpoint success
                 services.prometheus_monitor.metrics.endpoint_requests.labels(
                     endpoint=endpoint,
                     method=method,
                     status="success"
                 ).inc()
-            
+
             return response
-            
+
         except Exception as e:
             # Track error metrics
             duration = time.time() - start_time
-            
+
             if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
                 services.prometheus_monitor.metrics.request_duration.labels(
                     endpoint=endpoint,
                     method=method,
                     status_code="500"
                 ).observe(duration)
-                
+
                 # Track endpoint errors
                 services.prometheus_monitor.metrics.endpoint_requests.labels(
                     endpoint=endpoint,
                     method=method,
                     status="error"
                 ).inc()
-                
+
                 services.prometheus_monitor.metrics.error_count.labels(
                     component="api",
                     error_type=type(e).__name__
                 ).inc()
-            
+
             raise
-            
+
         finally:
             # Decrement active requests
             if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
@@ -151,8 +153,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="IAAIR Unified API", lifespan=lifespan)
 
+# CORS — allow frontend and external tools
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Add request counting middleware
 app.add_middleware(RequestCounterMiddleware)
+
+# Serve frontend static files
+import os
+_frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
+if os.path.isdir(_frontend_dir):
+    app.mount("/static", StaticFiles(directory=_frontend_dir), name="frontend")
 
 # Dependency to inject services into routes
 def get_services() -> ServiceFactory:
@@ -160,8 +176,17 @@ def get_services() -> ServiceFactory:
 
 
 # ===============================================================================
-# ROOT ENDPOINT
+# ROOT ENDPOINT & FRONTEND
 # ===============================================================================
+
+@app.get("/ui")
+async def serve_frontend():
+    """Serve the IAAIR frontend UI."""
+    index_path = os.path.join(_frontend_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path, media_type="text/html")
+    raise HTTPException(status_code=404, detail="Frontend not found")
+
 
 @app.get("/")
 async def root():
@@ -170,6 +195,7 @@ async def root():
         "name": "IAAIR Unified API",
         "version": "2.0.0",
         "description": "Unified API for academic paper ingestion, graph queries, and semantic search",
+        "frontend": "Visit /ui for the web interface",
         "endpoints": {
             "ingestion": {
                 "/pull-papers": "POST - Pull papers from OpenAlex and process through pipeline",
@@ -195,7 +221,7 @@ async def root():
                 "/performance/stats": "GET - Get performance statistics and bottleneck analysis",
                 "/performance/report": "GET - Export detailed performance report",
                 "/performance/tune": "POST - Tune performance parameters at runtime",
-                "/cache/stats": "GET - Get cache performance statistics", 
+                "/cache/stats": "GET - Get cache performance statistics",
                 "/cache/clear": "POST - Clear system caches"
             },
             "system": {
@@ -224,23 +250,23 @@ async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services
                 "error": "Prometheus monitoring not available",
                 "message": "Enable monitoring with ServiceFactory.setup_monitoring()"
             }
-        
+
         # Get endpoint statistics
         prometheus_metrics = factory.performance_monitor.prometheus_integration.metrics
         endpoint_stats = prometheus_metrics.get_endpoint_statistics()
-        
+
         # Sort by total request count
         sorted_stats = sorted(
             endpoint_stats.values(),
             key=lambda x: x['total_count'],
             reverse=True
         )
-        
+
         # Calculate summary statistics
         total_requests = sum(s['total_count'] for s in sorted_stats)
         total_successes = sum(s['success_count'] for s in sorted_stats)
         total_errors = sum(s['error_count'] for s in sorted_stats)
-        
+
         return {
             "timestamp": datetime.now().isoformat(),
             "monitoring": {
@@ -267,7 +293,7 @@ async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services
                 "perfect_endpoints": len([s for s in sorted_stats if s['error_count'] == 0 and s['total_count'] > 0])
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting API statistics: {e}")
         return {
@@ -300,7 +326,7 @@ async def health_check():
 async def pull_papers(request: PaperRequest, factory: ServiceFactory = Depends(get_services)):
     """
     Pull papers from OpenAlex, enrich with Semantic Scholar, and upload to databases.
-    
+
     This endpoint:
     1. Fetches papers from OpenAlex API with PDF URLs and optionally processes PDFs to extract figures/tables
     2. Enriches abstracts using Semantic Scholar
@@ -450,7 +476,7 @@ async def generate_and_upload_embeddings(papers_data: List[Dict], timestamp: dat
 async def semantic_search(request: SearchRequest, factory: ServiceFactory = Depends(get_services)):
     """
     Perform semantic or hybrid search for similar papers.
-    
+
     This endpoint:
     1. Generates dense embedding for the query text
     2. Optionally generates sparse embedding for hybrid search
@@ -541,10 +567,10 @@ async def semantic_search(request: SearchRequest, factory: ServiceFactory = Depe
 async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFactory = Depends(get_services)):
     """
     Advanced hybrid search with fusion, reranking, attribution, and AI response generation.
-    
+
     This endpoint implements:
     1. Query classification and adaptive routing with smart optimization
-    2. Vector-first, graph-first, or parallel search strategies  
+    2. Vector-first, graph-first, or parallel search strategies
     3. Result fusion with configurable weights
     4. Selective scientific domain-aware reranking (only when beneficial)
     5. Source attribution and provenance tracking
@@ -561,7 +587,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         # Step 1: Query classification and intelligent routing decision
         query_type, confidence = factory.routing_engine.query_classifier.classify_query(request.query)
-        
+
         # Record query type
         factory.performance_monitor.record_query_type(query_type.value if hasattr(query_type, 'value') else str(query_type))
 
@@ -622,7 +648,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         logger.info(
             f"Before fusion - vector_results: {len(vector_results or [])}, graph_results: {len(graph_results or [])}")
         logger.info(graph_results)
-        
+
         with factory.performance_monitor.track_operation('fusion'):
             fused_results = factory.result_fusion.fuse_results(
                 vector_results or [],
@@ -641,7 +667,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             reranking_start = datetime.now()
             # Use selective reranking with limited candidates for speed
             fused_results = await factory.scientific_reranker.rerank_results(
-                fused_results, request.query, 
+                fused_results, request.query,
                 selective=True,  # Enable selective reranking
                 max_rerank_candidates=20  # Limit candidates for speed
             )
@@ -672,11 +698,11 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         response_generation_time = None
         if request.enable_ai_response and fused_results:
             response_start = datetime.now()
-            
+
             # Check AI response cache
             results_hash = str(hash(str([r.paper_id for r in fused_results[:5]])))  # Simple hash of top results
             cached_response = factory.cache_manager.get_ai_response(request.query, results_hash)
-            
+
             if cached_response:
                 factory.performance_monitor.record_cache_hit('ai_response', True)
                 ai_response = cached_response
@@ -1190,7 +1216,7 @@ async def run_scimmir_benchmark(
         factory: ServiceFactory = Depends(get_services)
 ):
     """Run SciMMIR multi-modal benchmark evaluation.
-    
+
     Args:
         limit_samples: Number of samples to evaluate (default: 50 for quick testing)
         generate_report: Generate markdown report
@@ -1268,7 +1294,7 @@ async def get_performance_stats(recent_queries: int = 100, factory: ServiceFacto
                 "slow_queries_count": len(metrics.slow_queries),
                 "breakdown": {
                     "embedding": round(metrics.avg_embedding_time, 3),
-                    "vector_search": round(metrics.avg_vector_search_time, 3), 
+                    "vector_search": round(metrics.avg_vector_search_time, 3),
                     "graph_search": round(metrics.avg_graph_search_time, 3),
                     "fusion": round(metrics.avg_fusion_time, 3),
                     "reranking": round(metrics.avg_reranking_time, 3),
@@ -1304,7 +1330,7 @@ async def export_performance_report(factory: ServiceFactory = Depends(get_servic
     """Export detailed performance report in markdown format."""
     try:
         report = factory.performance_monitor.export_performance_report()
-        
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -1319,7 +1345,7 @@ async def export_performance_report(factory: ServiceFactory = Depends(get_servic
 @app.post("/cache/clear")
 async def clear_caches(cache_type: str = "all", factory: ServiceFactory = Depends(get_services)):
     """Clear system caches.
-    
+
     Args:
         cache_type: Type of cache to clear ("embedding", "search", "ai_response", "all")
     """
@@ -1355,7 +1381,7 @@ async def get_cache_stats(factory: ServiceFactory = Depends(get_services)):
     """Get cache statistics and performance metrics."""
     try:
         stats = factory.cache_manager.get_cache_stats()
-        
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -1381,7 +1407,7 @@ async def tune_performance_parameters(
     factory: ServiceFactory = Depends(get_services)
 ):
     """Tune performance parameters at runtime.
-    
+
     Args:
         milvus_nprobe: Milvus search parameter (lower = faster, higher = more accurate)
         embedding_cache_size: Size of embedding cache
@@ -1402,7 +1428,7 @@ async def tune_performance_parameters(
             changes_made.append(f"Embedding cache size set to {embedding_cache_size}")
 
         if search_cache_size is not None:
-            # Would need to implement cache resizing  
+            # Would need to implement cache resizing
             changes_made.append(f"Search cache size set to {search_cache_size}")
 
         return {
@@ -1425,7 +1451,7 @@ async def get_prometheus_metrics(factory: ServiceFactory = Depends(get_services)
         # Update cache metrics
         cache_stats = factory.cache_manager.get_cache_stats()
         factory.performance_monitor.update_cache_metrics(cache_stats)
-        
+
         # Get metrics from Prometheus integration
         if factory.performance_monitor.prometheus_integration:
             metrics_output = factory.performance_monitor.prometheus_integration.metrics.get_metrics()
@@ -1450,23 +1476,23 @@ async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services
                 "error": "Prometheus monitoring not available",
                 "message": "Enable monitoring with ServiceFactory.setup_monitoring()"
             }
-        
+
         # Get endpoint statistics
         prometheus_metrics = factory.performance_monitor.prometheus_integration.metrics
         endpoint_stats = prometheus_metrics.get_endpoint_statistics()
-        
+
         # Sort by total request count
         sorted_stats = sorted(
             endpoint_stats.values(),
             key=lambda x: x['total_count'],
             reverse=True
         )
-        
+
         # Calculate summary statistics
         total_requests = sum(s['total_count'] for s in sorted_stats)
         total_successes = sum(s['success_count'] for s in sorted_stats)
         total_errors = sum(s['error_count'] for s in sorted_stats)
-        
+
         return {
             "timestamp": datetime.now().isoformat(),
             "monitoring": {
@@ -1493,7 +1519,7 @@ async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services
                 "perfect_endpoints": len([s for s in sorted_stats if s['error_count'] == 0 and s['total_count'] > 0])
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting API statistics: {e}")
         return {
@@ -1509,23 +1535,23 @@ async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services
     try:
         if not (factory.performance_monitor and factory.performance_monitor.prometheus_integration):
             return {"error": "Prometheus monitoring not available"}
-        
+
         # Get endpoint statistics
         prometheus_monitor = factory.performance_monitor.prometheus_integration.metrics
         endpoint_stats = prometheus_monitor.get_endpoint_statistics()
-        
+
         # Sort by total request count
         sorted_stats = sorted(
             endpoint_stats.values(),
             key=lambda x: x['total_count'],
             reverse=True
         )
-        
+
         # Calculate summary statistics
         total_requests = sum(s['total_count'] for s in sorted_stats)
         total_successes = sum(s['success_count'] for s in sorted_stats)
         total_errors = sum(s['error_count'] for s in sorted_stats)
-        
+
         return {
             "timestamp": datetime.now().isoformat(),
             "total_endpoints": len(sorted_stats),
@@ -1545,7 +1571,7 @@ async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services
                 "grafana_dashboard": "http://localhost:3000"
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting API statistics: {e}")
         return {
@@ -1553,6 +1579,72 @@ async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services
             "details": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+
+# ===============================================================================
+# MODEL MANAGEMENT ENDPOINTS
+# ===============================================================================
+
+@app.get("/models/list")
+async def list_supported_models():
+    """List all supported LLM models with their specifications."""
+    from models.configurators.DeepseekConfig import SUPPORTED_MODELS
+
+    models = []
+    for name, info in SUPPORTED_MODELS.items():
+        models.append({
+            "model_name": name,
+            **info,
+            "is_current": name == (services.deepseek_client.config.model_name if services.deepseek_client else None)
+        })
+
+    return {
+        "current_model": services.deepseek_client.config.model_name if services.deepseek_client else None,
+        "supported_models": models,
+        "usage": {
+            "env_var": "Set LLM_MODEL=<model_name> before starting the API",
+            "api": "POST /models/switch with body {\"model_name\": \"<model_name>\"}"
+        }
+    }
+
+
+@app.post("/models/switch")
+async def switch_model(model_name: str, factory: ServiceFactory = Depends(get_services)):
+    """Hot-swap the LLM model at runtime (downloads if not cached).
+
+    Args:
+        model_name: HuggingFace model identifier (e.g. 'Qwen/Qwen2.5-3B-Instruct')
+    """
+    if not factory.deepseek_client:
+        raise HTTPException(status_code=503, detail="LLM client not initialized")
+
+    old_model = factory.deepseek_client.config.model_name
+    if old_model == model_name:
+        return {"message": f"Already using {model_name}", "status": "no_change"}
+
+    try:
+        result = factory.deepseek_client.reload_model(model_name)
+        return {
+            "status": "success",
+            "message": result,
+            "old_model": old_model,
+            "new_model": model_name,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to switch model: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load model '{model_name}': {str(e)}")
+
+
+@app.get("/models/stats")
+async def get_llm_stats(factory: ServiceFactory = Depends(get_services)):
+    """Get LLM usage statistics (call counts, latency per purpose)."""
+    if not factory.deepseek_client:
+        raise HTTPException(status_code=503, detail="LLM client not initialized")
+
+    stats = factory.deepseek_client.get_llm_stats()
+    stats["current_model"] = factory.deepseek_client.config.model_name
+    return stats
 
 
 # ===============================================================================

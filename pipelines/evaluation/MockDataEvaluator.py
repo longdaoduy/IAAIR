@@ -152,30 +152,30 @@ class MockDataEvaluator:
                     )
                     ai_generation_time = time.time() - ai_start_time
 
-                    # # Perform SciFact verification and store results
-                    # if ai_response and search_results:
-                    #     try:
-                    #         # Convert search results to proper format if needed
-                    #         papers_for_verification = []
-                    #         for result in search_results:
-                    #             if isinstance(result, dict):
-                    #                 papers_for_verification.append(result)
-                    #             elif hasattr(result, '__dict__'):
-                    #                 papers_for_verification.append(vars(result))
-                    #
-                    #         if papers_for_verification:
-                    #             verification_results = await self.service_factory.retrieval_handler.verify_claims_scifact(
-                    #                 ai_response, papers_for_verification
-                    #             )
-                    #             if verification_results:
-                    #                 verification_labels = [v.get('label', 'UNKNOWN') for v in verification_results]
-                    #     except Exception as e:
-                    #         logger.warning(f"SciFact verification failed for {question_id}: {e}")
-                    #
-                    #
-                    # # Calculate AI response similarity if expected response exists
-                    # if expected_ai_response and ai_response:
-                    #     ai_response_similarity = self._calculate_text_similarity(ai_response, expected_ai_response)
+                    # Perform SciFact verification and store results
+                    if ai_response and search_results:
+                        try:
+                            # Convert search results to proper format if needed
+                            papers_for_verification = []
+                            for result in search_results:
+                                if isinstance(result, dict):
+                                    papers_for_verification.append(result)
+                                elif hasattr(result, '__dict__'):
+                                    papers_for_verification.append(vars(result))
+
+                            if papers_for_verification:
+                                verification_results = await self.service_factory.retrieval_handler.verify_claims_scifact(
+                                    ai_response, papers_for_verification
+                                )
+                                if verification_results:
+                                    verification_labels = [v.get('label', 'UNKNOWN') for v in verification_results]
+                        except Exception as e:
+                            logger.warning(f"SciFact verification failed for {question_id}: {e}")
+
+
+                    # Calculate AI response similarity if expected response exists
+                    if expected_ai_response and ai_response:
+                        ai_response_similarity = self._calculate_text_similarity(ai_response, expected_ai_response)
 
                 except Exception as e:
                     logger.warning(f"AI response generation failed for {question_id}: {e}")

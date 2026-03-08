@@ -39,7 +39,7 @@ class RoutingDecisionEngine:
             return RoutingStrategy.VECTOR_FIRST
 
         # For complex queries, use AI-powered routing
-        routing_result = self._few_shot_route_decision(query, request)
+        routing_result = self._few_shot_route_decision(query)
 
         if routing_result is None:
             logger.warning("Few-shot routing failed, falling back to rule-based routing")
@@ -173,7 +173,7 @@ class RoutingDecisionEngine:
         
         return False
 
-    def _few_shot_route_decision(self, query: str, request: HybridSearchRequest) -> Optional[
+    def _few_shot_route_decision(self, query: str) -> Optional[
         Tuple[RoutingStrategy, QueryType, float]]:
         """Use few-shot learning with Llama to make intelligent routing decisions."""
         try:
