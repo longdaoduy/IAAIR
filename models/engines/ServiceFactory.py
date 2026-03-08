@@ -34,8 +34,8 @@ class ServiceFactory:
         self.neo4j_handler = GraphNeo4jHandler()
         self.milvus_client = MilvusClient()
         self.scibert_client = SciBERTClient()
-        self.clip_client = None
-        self.deepseek_client = DeepseekClient()
+        self.clip_client = CLIPClient()
+        self.deepseek_client = None
 
         # Performance & Caching
         self.cache_manager = CacheManager(
@@ -61,7 +61,8 @@ class ServiceFactory:
             self.deepseek_client,
             self.scibert_client,
             self.cache_manager,
-            self.performance_monitor
+            self.performance_monitor,
+            self.clip_client
         )
 
     def run_scimmir_benchmark_suite(
@@ -111,7 +112,7 @@ class ServiceFactory:
     async def connect_all(self):
         """Standardize startup for all database clients"""
         self.milvus_client.connect()
-        # self.clip_client.initialize()
+        self.clip_client.initialize()
         # await self.neo4j_handler.connect() if async
 
     async def disconnect_all(self):

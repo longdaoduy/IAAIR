@@ -1005,3 +1005,211 @@ class MilvusClient:
             print("🔌 Disconnected from Zilliz")
         except:
             pass
+
+    # =========================================================================
+    # IMAGE SEARCH METHODS (Figures & Tables collections)
+    # =========================================================================
+
+    def search_figures_by_image(self, image_embedding: List[float], top_k: int = 10) -> List[Dict]:
+        """Search figures collection using an image embedding (CLIP).
+
+        Args:
+            image_embedding: CLIP image embedding vector
+            top_k: Number of results to return
+
+        Returns:
+            List of matching figures with scores
+        """
+        try:
+            collection_name = "figures_collection"
+            if not utility.has_collection(collection_name):
+                print(f"⚠️ Collection '{collection_name}' not found")
+                return []
+
+            figures_collection = Collection(collection_name)
+            figures_collection.load()
+
+            search_params = {
+                "metric_type": "COSINE",
+                "params": {"nprobe": min(32, max(1, top_k))}
+            }
+
+            results = figures_collection.search(
+                data=[image_embedding],
+                anns_field="image_embedding",
+                param=search_params,
+                limit=top_k,
+                output_fields=["id", "paper_id", "description"]
+            )
+
+            formatted = []
+            if results and len(results[0]) > 0:
+                for hit in results[0]:
+                    formatted.append({
+                        "id": hit.entity.get("id"),
+                        "paper_id": hit.entity.get("paper_id"),
+                        "description": hit.entity.get("description"),
+                        "similarity_score": float(hit.score),
+                        "collection": "figures",
+                        "search_type": "image_to_figure"
+                    })
+
+            print(f"🖼️ Image search found {len(formatted)} similar figures")
+            return formatted
+
+        except Exception as e:
+            print(f"❌ Figure image search failed: {e}")
+            return []
+
+    def search_tables_by_image(self, image_embedding: List[float], top_k: int = 10) -> List[Dict]:
+        """Search tables collection using an image embedding (CLIP).
+
+        Args:
+            image_embedding: CLIP image embedding vector
+            top_k: Number of results to return
+
+        Returns:
+            List of matching tables with scores
+        """
+        try:
+            collection_name = "tables_collection"
+            if not utility.has_collection(collection_name):
+                print(f"⚠️ Collection '{collection_name}' not found")
+                return []
+
+            tables_collection = Collection(collection_name)
+            tables_collection.load()
+
+            search_params = {
+                "metric_type": "COSINE",
+                "params": {"nprobe": min(32, max(1, top_k))}
+            }
+
+            results = tables_collection.search(
+                data=[image_embedding],
+                anns_field="image_embedding",
+                param=search_params,
+                limit=top_k,
+                output_fields=["id", "paper_id", "description"]
+            )
+
+            formatted = []
+            if results and len(results[0]) > 0:
+                for hit in results[0]:
+                    formatted.append({
+                        "id": hit.entity.get("id"),
+                        "paper_id": hit.entity.get("paper_id"),
+                        "description": hit.entity.get("description"),
+                        "similarity_score": float(hit.score),
+                        "collection": "tables",
+                        "search_type": "image_to_table"
+                    })
+
+            print(f"📊 Image search found {len(formatted)} similar tables")
+            return formatted
+
+        except Exception as e:
+            print(f"❌ Table image search failed: {e}")
+            return []
+
+    def search_figures_by_description(self, description_embedding: List[float], top_k: int = 10) -> List[Dict]:
+        """Search figures collection using a text description embedding (SciBERT).
+
+        Args:
+            description_embedding: SciBERT text embedding vector
+            top_k: Number of results to return
+
+        Returns:
+            List of matching figures with scores
+        """
+        try:
+            collection_name = "figures_collection"
+            if not utility.has_collection(collection_name):
+                print(f"⚠️ Collection '{collection_name}' not found")
+                return []
+
+            figures_collection = Collection(collection_name)
+            figures_collection.load()
+
+            search_params = {
+                "metric_type": "COSINE",
+                "params": {"nprobe": min(32, max(1, top_k))}
+            }
+
+            results = figures_collection.search(
+                data=[description_embedding],
+                anns_field="description_embedding",
+                param=search_params,
+                limit=top_k,
+                output_fields=["id", "paper_id", "description"]
+            )
+
+            formatted = []
+            if results and len(results[0]) > 0:
+                for hit in results[0]:
+                    formatted.append({
+                        "id": hit.entity.get("id"),
+                        "paper_id": hit.entity.get("paper_id"),
+                        "description": hit.entity.get("description"),
+                        "similarity_score": float(hit.score),
+                        "collection": "figures",
+                        "search_type": "text_to_figure"
+                    })
+
+            print(f"🖼️ Description search found {len(formatted)} similar figures")
+            return formatted
+
+        except Exception as e:
+            print(f"❌ Figure description search failed: {e}")
+            return []
+
+    def search_tables_by_description(self, description_embedding: List[float], top_k: int = 10) -> List[Dict]:
+        """Search tables collection using a text description embedding (SciBERT).
+
+        Args:
+            description_embedding: SciBERT text embedding vector
+            top_k: Number of results to return
+
+        Returns:
+            List of matching tables with scores
+        """
+        try:
+            collection_name = "tables_collection"
+            if not utility.has_collection(collection_name):
+                print(f"⚠️ Collection '{collection_name}' not found")
+                return []
+
+            tables_collection = Collection(collection_name)
+            tables_collection.load()
+
+            search_params = {
+                "metric_type": "COSINE",
+                "params": {"nprobe": min(32, max(1, top_k))}
+            }
+
+            results = tables_collection.search(
+                data=[description_embedding],
+                anns_field="description_embedding",
+                param=search_params,
+                limit=top_k,
+                output_fields=["id", "paper_id", "description"]
+            )
+
+            formatted = []
+            if results and len(results[0]) > 0:
+                for hit in results[0]:
+                    formatted.append({
+                        "id": hit.entity.get("id"),
+                        "paper_id": hit.entity.get("paper_id"),
+                        "description": hit.entity.get("description"),
+                        "similarity_score": float(hit.score),
+                        "collection": "tables",
+                        "search_type": "text_to_table"
+                    })
+
+            print(f"📊 Description search found {len(formatted)} similar tables")
+            return formatted
+
+        except Exception as e:
+            print(f"❌ Table description search failed: {e}")
+            return []

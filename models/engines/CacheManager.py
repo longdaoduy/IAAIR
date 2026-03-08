@@ -91,6 +91,7 @@ class CacheManager:
         self.search_cache = LRUCache(search_cache_size, search_ttl)
         self.ai_response_cache = LRUCache(1000, 3600)  # 1 hour for AI responses
         self.cypher_cache = LRUCache(500, 7200)  # 2 hours for Cypher queries (schema rarely changes)
+        self.image_embedding_cache = LRUCache(500, embedding_ttl)  # Same TTL as text embeddings
         
         # Persistent cache directory
         self.persistent_cache_dir = persistent_cache_dir
@@ -106,7 +107,9 @@ class CacheManager:
             'ai_response_hits': 0,
             'ai_response_misses': 0,
             'cypher_hits': 0,
-            'cypher_misses': 0
+            'cypher_misses': 0,
+            'image_embedding_hits': 0,
+            'image_embedding_misses': 0
         }
     
     def _normalize_query(self, query: str) -> str:
@@ -144,7 +147,27 @@ class CacheManager:
         cache_key = self._generate_cache_key(query)
         self.embedding_cache.put(cache_key, embedding)
         logger.debug(f"Cached embedding for query: {query[:50]}...")
-    
+
+    def get_image_embedding(self, image_bytes: bytes) -> Optional[List[float]]:
+        """Get cached CLIP embedding for an image, keyed by content hash."""
+        cache_key = hashlib.sha256(image_bytes).hexdigest()
+        embedding = self.image_embedding_cache.get(cache_key)
+
+        if embedding is not None:
+            self.stats['image_embedding_hits'] += 1
+            logger.debug(f"Image embedding cache HIT (hash={cache_key[:12]}...)")
+            return embedding
+
+        self.stats['image_embedding_misses'] += 1
+        logger.debug(f"Image embedding cache MISS (hash={cache_key[:12]}...)")
+        return None
+
+    def cache_image_embedding(self, image_bytes: bytes, embedding: List[float]):
+        """Cache a CLIP image embedding keyed by content hash."""
+        cache_key = hashlib.sha256(image_bytes).hexdigest()
+        self.image_embedding_cache.put(cache_key, embedding)
+        logger.debug(f"Cached image embedding (hash={cache_key[:12]}...)")
+
     def get_search_results(self, query: str, top_k: int, use_hybrid: bool = True,
                           routing_strategy: str = "adaptive") -> Optional[List[Dict]]:
         """Get cached search results."""
@@ -262,7 +285,8 @@ class CacheManager:
         total_search_requests = self.stats['search_hits'] + self.stats['search_misses']
         total_ai_requests = self.stats['ai_response_hits'] + self.stats['ai_response_misses']
         total_cypher_requests = self.stats['cypher_hits'] + self.stats['cypher_misses']
-        
+        total_image_embedding_requests = self.stats['image_embedding_hits'] + self.stats['image_embedding_misses']
+
         return {
             'embedding_cache': {
                 'hits': self.stats['embedding_hits'],
@@ -287,6 +311,12 @@ class CacheManager:
                 'misses': self.stats['cypher_misses'],
                 'hit_rate': (self.stats['cypher_hits'] / max(1, total_cypher_requests)) * 100,
                 'cache_size': self.cypher_cache.size()
+            },
+            'image_embedding_cache': {
+                'hits': self.stats['image_embedding_hits'],
+                'misses': self.stats['image_embedding_misses'],
+                'hit_rate': (self.stats['image_embedding_hits'] / max(1, total_image_embedding_requests)) * 100,
+                'cache_size': self.image_embedding_cache.size()
             }
         }
     
@@ -296,6 +326,7 @@ class CacheManager:
         self.search_cache.clear() 
         self.ai_response_cache.clear()
         self.cypher_cache.clear()
+        self.image_embedding_cache.clear()
         
         # Clear persistent cache
         if self.persistent_cache_dir and os.path.exists(self.persistent_cache_dir):

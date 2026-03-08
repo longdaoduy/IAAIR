@@ -14,6 +14,7 @@ from clients.vector.MilvusClient import MilvusClient
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
 from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.huggingface.DeepseekClient import DeepseekClient
+from clients.huggingface.CLIPClient import CLIPClient
 from pymilvus import (Collection)
 
 logger = logging.getLogger(__name__)
@@ -24,13 +25,15 @@ class HybridRetrievalHandler:
 
     def __init__(self, vector_db: Optional[MilvusClient], graph_db: GraphQueryHandler,
                  ai_agent: Optional[DeepseekClient], embedder: SciBERTClient,
-                 cache_manager=None, performance_monitor=None):
+                 cache_manager=None, performance_monitor=None,
+                 clip_client: Optional[CLIPClient] = None):
         self.milvus_client = vector_db
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
+        self.clip_client = clip_client
 
     async def execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
         """Execute vector search with performance tracking."""
@@ -818,3 +821,187 @@ Answer:"""
             formatted_papers.append(paper_text)
 
         return "\n\n".join(formatted_papers)
+
+    # =========================================================================
+    # IMAGE SEARCH METHODS
+    # =========================================================================
+
+    async def search_by_image(self, image_embedding: List[float], top_k: int = 10,
+                              search_figures: bool = True, search_tables: bool = True,
+                              text_query: Optional[str] = None) -> Dict:
+        """Search figures and tables collections by image embedding.
+
+        Args:
+            image_embedding: CLIP image embedding vector
+            top_k: Number of results per collection
+            search_figures: Whether to search figures collection
+            search_tables: Whether to search tables collection
+            text_query: Optional text query for hybrid image+text search
+
+        Returns:
+            Dict with figure_results, table_results, and related_papers
+        """
+        figure_results = []
+        table_results = []
+
+        try:
+            # Search figures collection
+            if search_figures:
+                figure_results = self.milvus_client.search_figures_by_image(
+                    image_embedding, top_k
+                )
+
+            # Search tables collection
+            if search_tables:
+                table_results = self.milvus_client.search_tables_by_image(
+                    image_embedding, top_k
+                )
+
+            # If text query provided, also search by description and merge results
+            if text_query and self.embedding_client:
+                text_embedding = self.embedding_client.generate_embedding(text_query)
+                if text_embedding:
+                    if search_figures:
+                        text_fig_results = self.milvus_client.search_figures_by_description(
+                            text_embedding, top_k
+                        )
+                        figure_results = self._merge_visual_results(figure_results, text_fig_results)
+
+                    if search_tables:
+                        text_tab_results = self.milvus_client.search_tables_by_description(
+                            text_embedding, top_k
+                        )
+                        table_results = self._merge_visual_results(table_results, text_tab_results)
+
+            # Collect related paper IDs from visual results
+            paper_ids = set()
+            for r in figure_results + table_results:
+                if r.get("paper_id"):
+                    paper_ids.add(r["paper_id"])
+
+            # Fetch related paper details — prefer Neo4j for full metadata
+            related_papers = []
+            paper_ids_list = list(paper_ids)[:20]
+
+            if paper_ids_list and self.graph_handler:
+                try:
+                    related_papers = await self._execute_graph_refinement(paper_ids_list, len(paper_ids_list))
+                    logger.info(f"Fetched {len(related_papers)} related papers from Neo4j")
+                except Exception as e:
+                    logger.warning(f"Neo4j paper enrichment failed, falling back to Milvus: {e}")
+                    related_papers = []
+
+            # Fallback to Milvus if Neo4j returned nothing
+            if not related_papers and paper_ids_list and self.milvus_client.collection:
+                for pid in paper_ids_list:
+                    try:
+                        paper_results = self.milvus_client.collection.query(
+                            expr=f'id == "{pid}"',
+                            output_fields=["id", "title", "abstract"]
+                        )
+                        if paper_results:
+                            p = paper_results[0]
+                            related_papers.append({
+                                "paper_id": p.get("id", ""),
+                                "title": p.get("title", ""),
+                                "abstract": p.get("abstract", ""),
+                                "authors": [],
+                                "venue": None,
+                                "doi": None,
+                                "publication_date": None
+                            })
+                    except Exception as e:
+                        logger.debug(f"Could not fetch paper {pid}: {e}")
+
+            # Attach visual match counts per paper
+            paper_visual_counts = {}
+            for r in figure_results + table_results:
+                pid = r.get("paper_id")
+                if pid:
+                    paper_visual_counts.setdefault(pid, {"figures": 0, "tables": 0})
+                    if r.get("collection") == "figures" or r.get("search_type", "").startswith("figure"):
+                        paper_visual_counts[pid]["figures"] += 1
+                    else:
+                        paper_visual_counts[pid]["tables"] += 1
+
+            for paper in related_papers:
+                pid = paper.get("paper_id", paper.get("id", ""))
+                counts = paper_visual_counts.get(pid, {"figures": 0, "tables": 0})
+                paper["matched_figures"] = counts["figures"]
+                paper["matched_tables"] = counts["tables"]
+                # Add a relevance score based on visual match density
+                paper.setdefault("relevance_score", 0.0)
+                if paper["relevance_score"] == 0:
+                    paper["relevance_score"] = min(1.0, (counts["figures"] + counts["tables"]) * 0.15)
+
+            # Sort papers by number of visual matches
+            related_papers.sort(
+                key=lambda p: p.get("matched_figures", 0) + p.get("matched_tables", 0),
+                reverse=True
+            )
+            logger.info(related_papers)
+            return {
+                "figure_results": figure_results[:top_k],
+                "table_results": table_results[:top_k],
+                "related_papers": related_papers
+            }
+
+        except Exception as e:
+            logger.error(f"Image search error: {e}")
+            return {
+                "figure_results": figure_results,
+                "table_results": table_results,
+                "related_papers": []
+            }
+
+    def _merge_visual_results(self, image_results: List[Dict], text_results: List[Dict],
+                              image_weight: float = 0.6, text_weight: float = 0.4) -> List[Dict]:
+        """Merge image-based and text-based visual search results using weighted scores.
+
+        Args:
+            image_results: Results from image embedding search
+            text_results: Results from text description search
+            image_weight: Weight for image similarity scores
+            text_weight: Weight for text similarity scores
+
+        Returns:
+            Merged and re-ranked results
+        """
+        merged = {}
+
+        for r in image_results:
+            key = r.get("id", "")
+            merged[key] = {
+                **r,
+                "image_score": r.get("similarity_score", 0),
+                "text_score": 0,
+                "combined_score": r.get("similarity_score", 0) * image_weight,
+                "search_type": "image"
+            }
+
+        for r in text_results:
+            key = r.get("id", "")
+            if key in merged:
+                merged[key]["text_score"] = r.get("similarity_score", 0)
+                merged[key]["combined_score"] = (
+                    merged[key]["image_score"] * image_weight +
+                    r.get("similarity_score", 0) * text_weight
+                )
+                merged[key]["search_type"] = "hybrid_visual"
+            else:
+                merged[key] = {
+                    **r,
+                    "image_score": 0,
+                    "text_score": r.get("similarity_score", 0),
+                    "combined_score": r.get("similarity_score", 0) * text_weight,
+                    "search_type": "text"
+                }
+
+        # Sort by combined score
+        sorted_results = sorted(merged.values(), key=lambda x: x["combined_score"], reverse=True)
+
+        # Update similarity_score to combined_score
+        for r in sorted_results:
+            r["similarity_score"] = r["combined_score"]
+
+        return sorted_results

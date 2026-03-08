@@ -255,6 +255,76 @@
         .empty-state .icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
         .empty-state p { font-size: 15px; }
 
+        /* ── Image Search ── */
+        .image-upload-area {
+            max-width: 720px; margin: 0 auto 24px;
+            border: 2px dashed var(--border); border-radius: var(--radius);
+            padding: 32px 24px; text-align: center; cursor: pointer;
+            transition: var(--transition); position: relative;
+        }
+        .image-upload-area:hover, .image-upload-area.dragover {
+            border-color: var(--accent); background: var(--accent-glow);
+        }
+        .image-upload-area input[type="file"] {
+            position: absolute; inset: 0; opacity: 0; cursor: pointer;
+        }
+        .image-upload-area .upload-icon { font-size: 36px; margin-bottom: 8px; opacity: 0.6; }
+        .image-upload-area .upload-text { font-size: 14px; color: var(--text-muted); }
+        .image-upload-area .upload-hint { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+        .image-preview-container {
+            max-width: 720px; margin: 0 auto 20px;
+            display: none; align-items: center; gap: 16px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 12px 16px;
+        }
+        .image-preview-container.visible { display: flex; }
+        .image-preview-container img {
+            width: 80px; height: 80px; object-fit: cover;
+            border-radius: var(--radius-sm); border: 1px solid var(--border);
+        }
+        .image-preview-info { flex: 1; }
+        .image-preview-info .name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+        .image-preview-info .size { font-size: 12px; color: var(--text-dim); }
+        .image-preview-remove {
+            background: var(--red-dim); border: 1px solid rgba(239,68,68,0.3);
+            color: var(--red); border-radius: var(--radius-sm);
+            padding: 6px 12px; font-size: 12px; cursor: pointer;
+        }
+        .visual-result-card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 16px; margin-bottom: 10px;
+            transition: var(--transition);
+        }
+        .visual-result-card:hover { border-color: rgba(99,102,241,0.3); background: var(--bg-card-hover); }
+        .visual-result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .visual-result-type {
+            font-size: 11px; padding: 3px 8px; border-radius: 12px; font-weight: 600;
+        }
+        .type-figure { background: rgba(6,182,212,0.15); color: var(--cyan); }
+        .type-table { background: var(--amber-dim); color: var(--amber); }
+        .visual-result-desc { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+        .visual-result-meta { display: flex; gap: 12px; margin-top: 8px; font-size: 12px; color: var(--text-dim); }
+
+        /* ── Image Search Result Tabs ── */
+        .img-result-tabs {
+            max-width: 720px; margin: 0 auto 16px;
+            display: flex; gap: 4px; border-bottom: 1px solid var(--border); padding-bottom: 0;
+        }
+        .img-result-tab {
+            padding: 10px 18px; border: none; background: transparent; color: var(--text-dim);
+            font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent;
+            transition: var(--transition); display: flex; align-items: center; gap: 6px;
+        }
+        .img-result-tab:hover { color: var(--text-muted); }
+        .img-result-tab.active { color: var(--accent-light); border-bottom-color: var(--accent); }
+        .img-result-tab .tab-count {
+            font-size: 11px; padding: 1px 7px; border-radius: 10px;
+            background: var(--bg-input); color: var(--text-dim);
+        }
+        .img-result-tab.active .tab-count { background: var(--accent-glow); color: var(--accent-light); }
+        .img-tab-content { display: none; }
+        .img-tab-content.active { display: block; }
+
         /* ── Responsive ── */
         @media (max-width: 768px) {
             .sidebar { display: none; }
@@ -288,6 +358,9 @@
                 <h3>Search</h3>
                 <button class="nav-btn active" onclick="showPanel('search')">
                     <span class="icon">🔍</span> Hybrid Search
+                </button>
+                <button class="nav-btn" onclick="showPanel('imagesearch')">
+                    <span class="icon">🖼️</span> Image Search
                 </button>
                 <button class="nav-btn" onclick="showPanel('graph')">
                     <span class="icon">🕸️</span> Graph Query
@@ -385,6 +458,81 @@
                 <div id="searchEmpty" class="empty-state">
                     <div class="icon">🔬</div>
                     <p>Enter a query to search across academic papers</p>
+                </div>
+            </div>
+
+            <!-- ═══ Image Search Panel ═══ -->
+            <div class="panel" id="panel-imagesearch">
+                <div class="search-hero">
+                    <h2>Visual Search</h2>
+                    <p>Upload an image to find similar figures and tables in academic papers</p>
+                </div>
+
+                <div class="image-upload-area" id="imageDropZone">
+                    <input type="file" id="imageFileInput" accept="image/*" onchange="handleImageSelect(event)">
+                    <div class="upload-icon">🖼️</div>
+                    <div class="upload-text">Drop an image here or click to upload</div>
+                    <div class="upload-hint">Supports PNG, JPG, WEBP • Max 10MB</div>
+                </div>
+
+                <div class="image-preview-container" id="imagePreview">
+                    <img id="imagePreviewImg" src="" alt="Preview">
+                    <div class="image-preview-info">
+                        <div class="name" id="imagePreviewName">—</div>
+                        <div class="size" id="imagePreviewSize">—</div>
+                    </div>
+                    <button class="image-preview-remove" onclick="clearImageUpload()">✕ Remove</button>
+                </div>
+
+                <div class="search-box">
+                    <input type="text" id="imageTextQuery" placeholder="Optional: add text query for hybrid image+text search...">
+                    <button class="btn btn-primary" id="imageSearchBtn" onclick="doImageSearch()" disabled>
+                        🖼️ Search
+                    </button>
+                </div>
+
+                <div class="search-options">
+                    <div class="option-group">
+                        <label>Top K</label>
+                        <select id="imageTopK">
+                            <option value="5">5</option>
+                            <option value="10" selected>10</option>
+                            <option value="20">20</option>
+                        </select>
+                    </div>
+                    <div class="option-group">
+                        <label>Papers</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="showPapers" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="option-group">
+                        <label>Figures</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="searchFigures" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="option-group">
+                        <label>Tables</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="searchTables" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="imageSearchLoading" class="loading" style="display:none">
+                    <div class="spinner"></div>
+                    <div class="loading-text">Searching figures and tables by visual similarity...</div>
+                </div>
+
+                <div id="imageSearchResults"></div>
+
+                <div id="imageSearchEmpty" class="empty-state">
+                    <div class="icon">🖼️</div>
+                    <p>Upload an image to search for similar figures and tables</p>
                 </div>
             </div>
 
@@ -637,6 +785,194 @@ function renderSearchResults(d) {
     }
 
     div.innerHTML = html;
+}
+
+// ── Image Search ──
+let selectedImageBase64 = null;
+
+function handleImageSelect(e) {
+    const file = (e.dataTransfer ? e.dataTransfer.files : e.target.files)[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { alert('Please select an image file.'); return; }
+    if (file.size > 10 * 1024 * 1024) { alert('Image must be under 10 MB.'); return; }
+
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+        selectedImageBase64 = ev.target.result;           // data:image/...;base64,...
+        document.getElementById('imagePreviewImg').src = selectedImageBase64;
+        document.getElementById('imagePreviewName').textContent = file.name;
+        document.getElementById('imagePreviewSize').textContent = (file.size / 1024).toFixed(1) + ' KB';
+        document.getElementById('imagePreview').classList.add('visible');
+        document.getElementById('imageSearchBtn').disabled = false;
+    };
+    reader.readAsDataURL(file);
+}
+
+function clearImageUpload() {
+    selectedImageBase64 = null;
+    document.getElementById('imageFileInput').value = '';
+    document.getElementById('imagePreview').classList.remove('visible');
+    document.getElementById('imageSearchBtn').disabled = true;
+}
+
+// drag-and-drop helpers
+(function() {
+    const zone = document.getElementById('imageDropZone');
+    if (!zone) return;
+    ['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add('dragover'); }));
+    ['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove('dragover'); }));
+    zone.addEventListener('drop', handleImageSelect);
+})();
+
+async function doImageSearch() {
+    if (!selectedImageBase64) return;
+
+    const resultsDiv  = document.getElementById('imageSearchResults');
+    const loading     = document.getElementById('imageSearchLoading');
+    const empty       = document.getElementById('imageSearchEmpty');
+    const btn         = document.getElementById('imageSearchBtn');
+
+    empty.style.display = 'none';
+    resultsDiv.innerHTML = '';
+    loading.style.display = 'block';
+    btn.disabled = true;
+
+    try {
+        const body = {
+            image_base64: selectedImageBase64,
+            text_query: document.getElementById('imageTextQuery').value.trim() || null,
+            top_k: parseInt(document.getElementById('imageTopK').value),
+            search_figures: document.getElementById('searchFigures').checked,
+            search_tables: document.getElementById('searchTables').checked
+        };
+        const r = await fetch(API + '/image-search/base64', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        const d = await r.json();
+        console.log('Full image search response:', JSON.stringify(d, null, 2));
+        renderImageResults(d);
+    } catch (err) {
+        resultsDiv.innerHTML = `<div class="visual-result-card" style="border-color:rgba(239,68,68,0.4)">
+            <strong style="color:var(--red)">Error:</strong> ${escHtml(err.message)}</div>`;
+    } finally {
+        loading.style.display = 'none';
+        btn.disabled = false;
+    }
+}
+
+function renderImageResults(d) {
+    const div = document.getElementById('imageSearchResults');
+    if (!d.success) { div.innerHTML = `<div class="visual-result-card" style="border-color:rgba(239,68,68,0.4)">
+        <strong style="color:var(--red)">Error:</strong> ${escHtml(d.message || 'Unknown error')}</div>`; return; }
+
+    const figures = d.figure_results || [];
+    const tables  = d.table_results  || [];
+    const papers  = d.results || d.related_papers || [];
+    const totals  = d.totals || {};
+    const showPapers  = document.getElementById('showPapers').checked;
+
+    console.log('Image search response:', { papers: papers.length, figures: figures.length, tables: tables.length, totals });
+    console.log('Papers data:', JSON.stringify(papers, null, 2));
+    console.log('showPapers toggle:', showPapers);
+
+    // ── Summary bar ──
+    let html = `<div style="max-width:720px;margin:0 auto 16px;display:flex;gap:12px;flex-wrap:wrap;font-size:13px;color:var(--text-dim)">
+        <span>\u23f1 ${(d.search_time_seconds||0).toFixed(2)}s</span>
+        <span>\ud83d\udcdd ${papers.length} papers</span>
+        <span>\ud83d\uddbc\ufe0f ${figures.length} figures</span>
+        <span>\ud83d\udcca ${tables.length} tables</span>
+    </div>`;
+
+    // ── Tabs ──
+    html += `<div class="img-result-tabs" id="imgResultTabs">
+        ${showPapers ? `<button class="img-result-tab active" onclick="switchImgTab('papers')">
+            \ud83d\udcdd Papers <span class="tab-count">${papers.length}</span></button>` : ''}
+        <button class="img-result-tab ${!showPapers ? 'active' : ''}" onclick="switchImgTab('figures')">
+            \ud83d\uddbc\ufe0f Figures <span class="tab-count">${figures.length}</span></button>
+        <button class="img-result-tab" onclick="switchImgTab('tables')">
+            \ud83d\udcca Tables <span class="tab-count">${tables.length}</span></button>
+    </div>`;
+
+    // ── Papers tab ──
+    if (showPapers) {
+        html += `<div class="img-tab-content active" id="imgTab-papers">`;
+        if (papers.length) {
+            for (const p of papers) {
+                const score = p.relevance_score || 0;
+                const scoreClass = score >= 0.7 ? 'score-high' : score >= 0.4 ? 'score-mid' : 'score-low';
+                const authors = (p.authors || []).slice(0, 3).join(', ') + (p.authors?.length > 3 ? ' et al.' : '');
+                const abstract = (p.abstract || '').substring(0, 300) + (p.abstract?.length > 300 ? '...' : '');
+                const mFig = p.matched_figures || 0;
+                const mTab = p.matched_tables || 0;
+
+                html += `<div class="paper-card" style="max-width:720px;margin-left:auto;margin-right:auto">
+                    <div class="paper-card-header">
+                        <div class="paper-title">${escHtml(p.title || 'Untitled')}</div>
+                        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+                            ${mFig ? `<span class="meta-pill" style="font-size:11px">\ud83d\uddbc\ufe0f ${mFig} fig</span>` : ''}
+                            ${mTab ? `<span class="meta-pill" style="font-size:11px">\ud83d\udcca ${mTab} tbl</span>` : ''}
+                            ${score > 0 ? `<span class="paper-score ${scoreClass}">${(score * 100).toFixed(0)}%</span>` : ''}
+                        </div>
+                    </div>
+                    ${authors ? `<div class="paper-authors">\ud83d\udc64 ${escHtml(authors)}</div>` : ''}
+                    ${abstract ? `<div class="paper-abstract">${escHtml(abstract)}</div>` : ''}
+                    <div class="paper-meta">
+                        ${p.venue ? `<span class="paper-meta-item">\ud83c\udfdb\ufe0f ${escHtml(p.venue)}</span>` : ''}
+                        ${p.publication_date ? `<span class="paper-meta-item">\ud83d\udcc5 ${escHtml(p.publication_date)}</span>` : ''}
+                        ${p.doi ? `<span class="paper-meta-item"><a href="https://doi.org/${escHtml(p.doi)}" target="_blank" rel="noopener noreferrer" style="color:var(--text-dim);text-decoration:none">\ud83d\udd17 ${escHtml(p.doi)}</a></span>` : ''}
+                        ${p.paper_id ? `<span class="paper-meta-item">\ud83d\udcc4 ${escHtml(p.paper_id)}</span>` : ''}
+                    </div>
+                </div>`;
+            }
+        } else {
+            html += `<div class="empty-state" style="padding:32px 0"><div class="icon">\ud83d\udcdd</div><p>No related papers found</p></div>`;
+        }
+        html += `</div>`;
+    }
+
+    // ── Figures tab ──
+    html += `<div class="img-tab-content ${!showPapers ? 'active' : ''}" id="imgTab-figures">`;
+    if (figures.length) {
+        figures.forEach(f => { html += visualCard(f, 'figure'); });
+    } else {
+        html += `<div class="empty-state" style="padding:32px 0"><div class="icon">\ud83d\uddbc\ufe0f</div><p>No matching figures found</p></div>`;
+    }
+    html += `</div>`;
+
+    // ── Tables tab ──
+    html += `<div class="img-tab-content" id="imgTab-tables">`;
+    if (tables.length) {
+        tables.forEach(t => { html += visualCard(t, 'table'); });
+    } else {
+        html += `<div class="empty-state" style="padding:32px 0"><div class="icon">\ud83d\udcca</div><p>No matching tables found</p></div>`;
+    }
+    html += `</div>`;
+
+    div.innerHTML = html;
+}
+
+function switchImgTab(tab) {
+    document.querySelectorAll('.img-result-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.img-tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('imgTab-' + tab).classList.add('active');
+    // Activate the clicked button
+    event.currentTarget.classList.add('active');
+}
+
+function visualCard(item, type) {
+    const score = (item.similarity_score * 100).toFixed(1);
+    const imgScore  = item.image_score  != null ? `\ud83d\uddbc ${(item.image_score*100).toFixed(1)}%` : '';
+    const textScore = item.text_score   != null ? `\ud83d\udcdd ${(item.text_score*100).toFixed(1)}%` : '';
+    return `<div class="visual-result-card" style="max-width:720px;margin-left:auto;margin-right:auto">
+        <div class="visual-result-header">
+            <span class="visual-result-type ${type === 'figure' ? 'type-figure' : 'type-table'}">${type === 'figure' ? '\ud83d\uddbc\ufe0f Figure' : '\ud83d\udcca Table'}</span>
+            <span style="font-size:13px;font-weight:600;color:var(--accent)">${score}% match</span>
+        </div>
+        <div class="visual-result-desc">${escHtml(item.description || 'No description')}</div>
+        <div class="visual-result-meta">
+            ${imgScore  ? `<span>${imgScore}</span>` : ''}
+            ${textScore ? `<span>${textScore}</span>` : ''}
+            <span>\ud83d\udcc4 Paper: ${escHtml(item.paper_id || 'N/A')}</span>
+        </div>
+    </div>`;
 }
 
 // ── Graph Query ──

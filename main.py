@@ -15,8 +15,9 @@ This unified API provides comprehensive endpoints for:
    - Hybrid search capabilities
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime
+from pydantic import BaseModel
 import logging
 import os
 import asyncio
@@ -44,6 +45,9 @@ from models.entities.retrieval.HybridSearchResponse import HybridSearchResponse
 from models.entities.retrieval.RoutingStrategy import RoutingStrategy
 
 import uvicorn
+import time
+import base64
+import io
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -203,7 +207,9 @@ async def root():
             },
             "semantic_search": {
                 "/search": "POST - Semantic search for similar papers",
-                "/hybrid-search": "POST - Hybrid fusion search with attribution and caching"
+                "/hybrid-search": "POST - Hybrid fusion search with attribution and caching",
+                "/image-search": "POST - Search figures/tables by uploading an image",
+                "/image-search/base64": "POST - Search figures/tables using base64-encoded image"
             },
             "graph_queries": {
                 "/graph/query": "POST - Execute custom Cypher queries"
@@ -621,12 +627,12 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         if routing_strategy == RoutingStrategy.VECTOR_FIRST:
             # Vector search first, then optional graph refinement
             vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k * 2)
-            if vector_results:  # Only do graph refinement for larger result sets
-                # Use top vector results to inform graph search
-                paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
-                graph_results = await factory.retrieval_handler._execute_graph_refinement(paper_ids,request.top_k)
-            else:
-                graph_results = []
+            # if vector_results and request.top_k > 10:  # Only do graph refinement for larger result sets
+            #     # Use top vector results to inform graph search
+            #     paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
+            #     graph_results = await factory.retrieval_handler._execute_graph_refinement(paper_ids,request.top_k)
+            # else:
+            #     graph_results = []
 
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
             # Graph search first - skip vector entirely for pure structural queries
@@ -718,21 +724,21 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
                     # 2. PERFORM SCIFACT VERIFICATION FIRST (Week 5/7 requirement)
                     # This reduces the 10-30% hallucination rate cited in the proposal
                     # Convert SearchResult objects to dictionaries for verification
-                    #     papers_for_verification = [result.dict() for result in fused_results]
-                    #     verification_results = await factory.retrieval_handler.verify_claims_scifact(ai_response,
-                    #                                                                                  papers_for_verification)                        # 3. Check for CONTRADICTED labels (The Error Taxonomy pass)
-                    #     is_valid = all(v['label'] != 'CONTRADICTED' for v in verification_results)
-                    #
-                    #     if is_valid:
-                    #         # 4. Only cache if the answer is grounded in evidence
-                        factory.cache_manager.cache_ai_response(request.query, results_hash, ai_response)
-                            # Log to Provenance Ledger (Week 6)
-                        #     factory.retrieval_handler.record_verified_response(ai_response, verification_results)
-                        # else:
-                        #     # Handle hallucination (Red-team mitigation)
-                        #     ai_response = "The retrieved evidence contradicts the potential answer. Refining search..."
+                        papers_for_verification = [result.dict() for result in fused_results]
+                        verification_results = await factory.retrieval_handler.verify_claims_scifact(ai_response,
+                                                                                                    papers_for_verification)                        # 3. Check for CONTRADICTED labels (The Error Taxonomy pass)
+                        is_valid = all(v['label'] != 'CONTRADICTED' for v in verification_results)
 
-            
+                        if is_valid:
+                            # 4. Only cache if the answer is grounded in evidence
+                            factory.cache_manager.cache_ai_response(request.query, results_hash, ai_response)
+                            # Log to Provenance Ledger (Week 6)
+                            # factory.retrieval_handler.record_verified_response(ai_response, verification_results)
+                        else:
+                            # Handle hallucination (Red-team mitigation)
+                            ai_response = "The retrieved evidence contradicts the potential answer. Refining search..."
+
+
             response_generation_time = (datetime.now() - response_start).total_seconds()
 
         # Finish performance tracking
@@ -762,6 +768,202 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         factory.performance_monitor.finish_query_tracking()
         logger.error(f"Error during hybrid search: {e}")
         raise HTTPException(status_code=500, detail=f"Hybrid search failed: {str(e)}")
+
+
+# ===============================================================================
+# IMAGE SEARCH ENDPOINTS
+# ===============================================================================
+
+@app.post("/image-search")
+async def image_search(
+    file: UploadFile = File(...),
+    text_query: str = Form(None),
+    top_k: int = Form(10),
+    search_figures: bool = Form(True),
+    search_tables: bool = Form(True),
+    factory: ServiceFactory = Depends(get_services)
+):
+    """
+    Search for similar figures and tables using an uploaded image.
+
+    This endpoint:
+    1. Accepts an uploaded image (PNG, JPG, WEBP)
+    2. Generates a CLIP embedding from the image
+    3. Searches figures and tables collections by visual similarity
+    4. Optionally combines with text query for hybrid image+text search
+    5. Returns matching figures, tables, and their parent papers
+    """
+    start_time = datetime.now()
+
+    try:
+        # Validate CLIP client
+        if not factory.clip_client:
+            raise HTTPException(status_code=503, detail="CLIP model not initialized")
+
+        # Read and validate the uploaded image
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+
+        # Validate file type
+        allowed_types = {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"}
+        if file.content_type and file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported image type: {file.content_type}. Allowed: {', '.join(allowed_types)}"
+            )
+
+        # Convert to PIL Image
+        from PIL import Image as PILImage
+        image = PILImage.open(io.BytesIO(contents)).convert("RGB")
+
+        logger.info(f"Processing image search: {file.filename} ({image.size[0]}x{image.size[1]})")
+
+        # Generate CLIP embedding (with caching)
+        image_embedding = None
+        if factory.cache_manager:
+            image_embedding = factory.cache_manager.get_image_embedding(contents)
+
+        if image_embedding is None:
+            image_embedding = factory.clip_client.generate_image_embedding(image)
+            if not image_embedding:
+                raise HTTPException(status_code=500, detail="Failed to generate image embedding")
+            if factory.cache_manager:
+                factory.cache_manager.cache_image_embedding(contents, image_embedding)
+
+        # Execute image search
+        results = await factory.retrieval_handler.search_by_image(
+            image_embedding=image_embedding,
+            top_k=top_k,
+            search_figures=search_figures,
+            search_tables=search_tables,
+            text_query=text_query
+        )
+
+        search_time = (datetime.now() - start_time).total_seconds()
+
+        figure_results = results.get("figure_results", [])
+        table_results = results.get("table_results", [])
+        related_papers = results.get("related_papers", [])
+
+        logger.info(
+            f"Image search completed: {len(figure_results)} figures, "
+            f"{len(table_results)} tables, {len(related_papers)} papers in {search_time:.2f}s"
+        )
+
+        return {
+            "success": True,
+            "message": f"Found {len(figure_results)} figures and {len(table_results)} tables",
+            "search_time_seconds": search_time,
+            "text_query": text_query,
+            "image_filename": file.filename,
+            "total_figures_found": len(figure_results),
+            "total_tables_found": len(table_results),
+            "figure_results": figure_results,
+            "table_results": table_results,
+            "related_papers": related_papers
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Image search error: {e}")
+        raise HTTPException(status_code=500, detail=f"Image search failed: {str(e)}")
+
+
+class ImageSearchBase64Request(BaseModel):
+    image_base64: str
+    text_query: Optional[str] = None
+    top_k: int = 10
+    search_figures: bool = True
+    search_tables: bool = True
+
+
+@app.post("/image-search/base64")
+async def image_search_base64(
+    request: ImageSearchBase64Request,
+    factory: ServiceFactory = Depends(get_services)
+):
+    """
+    Search for similar figures and tables using a base64-encoded image.
+
+    Accepts JSON body with base64 image data — useful for frontend integration
+    where file upload forms are not convenient.
+    """
+    start_time = datetime.now()
+
+    image_base64 = request.image_base64
+    text_query = request.text_query
+    top_k = request.top_k
+    search_figures = request.search_figures
+    search_tables = request.search_tables
+
+    try:
+        if not factory.clip_client:
+            raise HTTPException(status_code=503, detail="CLIP model not initialized")
+
+        if not image_base64:
+            raise HTTPException(status_code=400, detail="image_base64 is required")
+
+        # Strip data URL prefix if present (e.g., "data:image/png;base64,...")
+        if "," in image_base64:
+            image_base64 = image_base64.split(",", 1)[1]
+
+        # Decode base64 to image
+        try:
+            image_bytes = base64.b64decode(image_base64)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 image data")
+
+        from PIL import Image as PILImage
+        image = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+
+        logger.info(f"Processing base64 image search ({image.size[0]}x{image.size[1]})")
+
+        # Generate CLIP embedding (with caching)
+        image_embedding = None
+        if factory.cache_manager:
+            image_embedding = factory.cache_manager.get_image_embedding(image_bytes)
+
+        if image_embedding is None:
+            image_embedding = factory.clip_client.generate_image_embedding(image)
+            if not image_embedding:
+                raise HTTPException(status_code=500, detail="Failed to generate image embedding")
+            if factory.cache_manager:
+                factory.cache_manager.cache_image_embedding(image_bytes, image_embedding)
+
+        # Execute search
+        results = await factory.retrieval_handler.search_by_image(
+            image_embedding=image_embedding,
+            top_k=top_k,
+            search_figures=search_figures,
+            search_tables=search_tables,
+            text_query=text_query
+        )
+
+        search_time = (datetime.now() - start_time).total_seconds()
+
+        figure_results = results.get("figure_results", [])
+        table_results = results.get("table_results", [])
+        related_papers = results.get("related_papers", [])
+
+        return {
+            "success": True,
+            "message": f"Found {len(figure_results)} figures and {len(table_results)} tables",
+            "search_time_seconds": search_time,
+            "text_query": text_query,
+            "total_figures_found": len(figure_results),
+            "total_tables_found": len(table_results),
+            "figure_results": figure_results,
+            "table_results": table_results,
+            "related_papers": related_papers
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Base64 image search error: {e}")
+        raise HTTPException(status_code=500, detail=f"Image search failed: {str(e)}")
 
 
 # ===============================================================================
