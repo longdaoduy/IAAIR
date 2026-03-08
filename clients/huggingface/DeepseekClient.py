@@ -38,19 +38,43 @@ class DeepseekClient:
         self._load_model()
 
     def _load_model(self):
-        print(f"Loading model: {self.config.model_name}")
+        logger.info(f"Loading model: {self.config.model_name}")
+        self.config.validate_model()
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
 
-        # This is the important change
         self.model = AutoModelForCausalLM.from_pretrained(
             self.config.model_name,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto"   # or "cuda" / "cpu"
+            device_map="auto"
         )
 
         self.model.eval()
-        print(f"✅ Model loaded on device: {self.model.device}")
+        logger.info(f"✅ Model loaded: {self.config.model_name} on {self.model.device}")
+
+    def reload_model(self, model_name: str) -> str:
+        """Hot-swap the LLM model at runtime.
+        
+        Args:
+            model_name: HuggingFace model identifier
+            
+        Returns:
+            Status message
+        """
+        old_name = self.config.model_name
+        logger.info(f"🔄 Switching LLM: {old_name} → {model_name}")
+        
+        # Free old model memory
+        if self.model is not None:
+            del self.model
+            del self.tokenizer
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        
+        self.config.model_name = model_name
+        self._load_model()
+        self.reset_llm_stats()
+        
+        return f"Model switched from {old_name} to {model_name}"
 
     def _mean_pooling(self, model_output, attention_mask):
         """Apply mean pooling to get sentence-level embeddings."""
