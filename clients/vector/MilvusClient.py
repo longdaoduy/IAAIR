@@ -956,7 +956,7 @@ class MilvusClient:
                     "metric_type": self.config.metric_type,
                     "params": {"nprobe": min(16, max(1, top_k))}  # Reduced nprobe
                 },
-                limit=min(top_k * 1.5, 30)  # Fewer candidates for speed
+                limit=min(top_k, 30)  # Fewer candidates for speed
             )
 
             sparse_search_request = AnnSearchRequest(
@@ -966,7 +966,7 @@ class MilvusClient:
                     "metric_type": "IP",
                     "params": {}
                 },
-                limit=min(top_k * 1.5, 30)  # Fewer candidates for speed
+                limit=min(top_k, 30)  # Fewer candidates for speed
             )
 
             # Perform hybrid search with RRF (Reciprocal Rank Fusion) reranking

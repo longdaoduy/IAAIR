@@ -49,8 +49,8 @@ class ServiceFactory:
         self.query_handler = GraphQueryHandler(neo4j_client=self.neo4j_client)
         self.routing_engine = RoutingDecisionEngine(self.deepseek_client)
         self.result_fusion = ResultFusion()
-        self.scientific_reranker = None
-        self.attribution_tracker = AttributionTracker()
+        self.scientific_reranker = ScientificReranker()
+        self.attribution_tracker = None
 
         # Complex Handlers
         self.ingestion_handler = IngestionHandler(self.scibert_client, self.clip_client, self.milvus_client)
