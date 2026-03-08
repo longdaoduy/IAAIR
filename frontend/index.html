@@ -180,6 +180,12 @@
         .paper-card:hover { border-color: rgba(99,102,241,0.3); background: var(--bg-card-hover); }
         .paper-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
         .paper-title { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.4; flex: 1; }
+        .paper-title a { color: var(--text); text-decoration: none; transition: var(--transition); }
+        .paper-title a:hover { color: var(--accent-light); text-decoration: underline; }
+        .paper-card.has-link { cursor: pointer; }
+        .paper-card.has-link:hover { border-color: var(--accent); }
+        .pdf-link { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--accent-light); text-decoration: none; padding: 3px 8px; border-radius: 12px; background: var(--accent-glow); border: 1px solid rgba(99,102,241,0.3); transition: var(--transition); }
+        .pdf-link:hover { background: rgba(99,102,241,0.25); text-decoration: none; }
         .paper-score {
             font-size: 13px; font-weight: 700; padding: 4px 10px; border-radius: 20px;
             white-space: nowrap; flex-shrink: 0;
@@ -602,17 +608,26 @@ function renderSearchResults(d) {
             const authors = (p.authors || []).slice(0, 3).join(', ') + (p.authors?.length > 3 ? ' et al.' : '');
             const abstract = (p.abstract || '').substring(0, 300) + (p.abstract?.length > 300 ? '...' : '');
 
-            html += `<div class="paper-card">
+            const pdfUrl = p.pdf_url || p.pdf_link || '';
+            const hasPdf = !!pdfUrl;
+            const titleHtml = hasPdf
+                ? `<a href="${escHtml(pdfUrl)}" target="_blank" rel="noopener noreferrer" title="Open PDF">${escHtml(p.title || 'Untitled')}</a>`
+                : escHtml(p.title || 'Untitled');
+
+            html += `<div class="paper-card ${hasPdf ? 'has-link' : ''}" ${hasPdf ? `onclick="if(event.target.tagName!=='A')window.open('${escHtml(pdfUrl)}','_blank')"` : ''}>
                 <div class="paper-card-header">
-                    <div class="paper-title">${escHtml(p.title || 'Untitled')}</div>
-                    <span class="paper-score ${scoreClass}">${(score * 100).toFixed(0)}%</span>
+                    <div class="paper-title">${titleHtml}</div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+                        ${hasPdf ? `<a href="${escHtml(pdfUrl)}" target="_blank" rel="noopener noreferrer" class="pdf-link" onclick="event.stopPropagation()">📄 PDF</a>` : ''}
+                        <span class="paper-score ${scoreClass}">${(score * 100).toFixed(0)}%</span>
+                    </div>
                 </div>
                 ${authors ? `<div class="paper-authors">👤 ${escHtml(authors)}</div>` : ''}
                 ${abstract ? `<div class="paper-abstract">${escHtml(abstract)}</div>` : ''}
                 <div class="paper-meta">
                     ${p.venue ? `<span class="paper-meta-item">🏛️ ${escHtml(p.venue)}</span>` : ''}
                     ${p.publication_date ? `<span class="paper-meta-item">📅 ${escHtml(p.publication_date)}</span>` : ''}
-                    ${p.doi ? `<span class="paper-meta-item">🔗 ${escHtml(p.doi)}</span>` : ''}
+                    ${p.doi ? `<span class="paper-meta-item"><a href="https://doi.org/${escHtml(p.doi)}" target="_blank" rel="noopener noreferrer" style="color:var(--text-dim);text-decoration:none" onclick="event.stopPropagation()">🔗 ${escHtml(p.doi)}</a></span>` : ''}
                     ${p.paper_id ? `<span class="paper-meta-item">📄 ${escHtml(p.paper_id)}</span>` : ''}
                     ${p.vector_score != null ? `<span class="paper-meta-item">Vec: ${p.vector_score.toFixed(3)}</span>` : ''}
                     ${p.graph_score != null ? `<span class="paper-meta-item">Graph: ${p.graph_score.toFixed(3)}</span>` : ''}

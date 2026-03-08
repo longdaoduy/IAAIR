@@ -35,7 +35,7 @@ class ResultFusion:
                 'venue': result.get('venue'),
                 'publication_date': result.get('publication_date'),
                 'doi': result.get('doi'),
-                'vector_score': min(result.get('similarity_score', 0.0), 1.0),
+                'vector_score': result.get('distance', 0.0),
                 'graph_score': 0.0,
                 'source_path': ['vector_search']
             }

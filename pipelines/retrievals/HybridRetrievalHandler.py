@@ -120,9 +120,9 @@ class HybridRetrievalHandler:
 
             # Execute search with optimized parameters
             if use_hybrid and self.milvus_client.is_tfidf_fitted:
-                return self.milvus_client._hybrid_search_optimized(query_text, query_embedding, top_k)
+                return self.milvus_client._hybrid_search(query_text, query_embedding, top_k)
             else:
-                return self.milvus_client._dense_search_optimized(query_embedding, top_k)
+                return self.milvus_client._dense_search(query_embedding, top_k)
 
         except Exception as e:
             print(f"❌ Search failed: {e}")
