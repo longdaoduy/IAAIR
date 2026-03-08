@@ -109,7 +109,19 @@ class DeepseekClient:
         embedding = self._mean_pooling(outputs, inputs["attention_mask"])
         return embedding.squeeze().cpu().tolist()
 
-    def generate_content(self, prompt: str, system_prompt: str = None, purpose: str = "general") -> str | None:
+    # Purpose-based token limits — shorter outputs for auxiliary tasks, longer for synthesis
+    PURPOSE_TOKEN_LIMITS = {
+        'routing':              64,   # just a label
+        'author_extraction':    128,  # list of names
+        'cypher_generation':    256,  # Cypher query + params
+        'claim_extraction':     256,  # bullet list of claims
+        'scifact_verification': 32,   # SUPPORTED / CONTRADICTED / NO_EVIDENCE
+        'answer_synthesis':     384,  # main answer — allow more but still bounded
+        'general':              256,
+    }
+
+    def generate_content(self, prompt: str, system_prompt: str = None,
+                         purpose: str = "general", max_tokens: int = None) -> str | None:
         """Generate text using the LLM.
         
         Args:
@@ -117,12 +129,18 @@ class DeepseekClient:
             system_prompt: Optional system prompt
             purpose: Label for tracking (e.g. 'routing', 'cypher_generation',
                      'answer_synthesis', 'scifact_verification', 'claim_extraction')
+            max_tokens: Override max_new_tokens for this call. If None, uses
+                        purpose-based default from PURPOSE_TOKEN_LIMITS.
         """
         import time as _time
         call_start = _time.time()
         self._llm_call_count += 1
         call_number = self._llm_call_count
-        logger.info(f"LLM call #{call_number} | purpose={purpose}")
+        
+        effective_max_tokens = max_tokens or self.PURPOSE_TOKEN_LIMITS.get(
+            purpose, self.config.max_sequence_length
+        )
+        logger.info(f"LLM call #{call_number} | purpose={purpose} | max_tokens={effective_max_tokens}")
         
         try:
             messages = []
@@ -143,18 +161,13 @@ class DeepseekClient:
                 truncation=True,
             )
 
-            # Critical fix
             device = self.model.device
             inputs = {k: v.to(device) for k, v in inputs.items()}
-
-            # Optional: add this temporarily to confirm
-            print("Model device:", device)
-            print("input_ids device:", inputs["input_ids"].device)
 
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
-                    max_new_tokens=self.config.max_sequence_length,
+                    max_new_tokens=effective_max_tokens,
                     temperature=self.config.temperature or 0.7,
                     do_sample=True,
                     pad_token_id=self.tokenizer.eos_token_id,

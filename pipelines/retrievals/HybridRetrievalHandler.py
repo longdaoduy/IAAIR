@@ -644,7 +644,7 @@ Generate the query now:"""
                     context_papers.append({
                         "title": getattr(result, "title", "") or "",
                         "authors": getattr(result, "authors", []) or [],
-                        "abstract": (getattr(result, "abstract", "") or "")[:500],
+                        "abstract": (getattr(result, "abstract", "") or "")[:300],
                         "relevance_score": getattr(result, "relevance_score", 0),
                         "venue": getattr(result, "venue", "") or "",
                         "publication_date": getattr(result, "publication_date", "") or "",
@@ -656,7 +656,7 @@ Generate the query now:"""
                     context_papers.append({
                         "title": result.get("title", "") or "",
                         "authors": result.get("authors", []) or [],
-                        "abstract": (result.get("abstract", "") or "")[:500],
+                        "abstract": (result.get("abstract", "") or "")[:300],
                         "relevance_score": result.get("relevance_score", 0),
                         "venue": result.get("venue", "") or "",
                         "publication_date": result.get("publication_date", "") or "",
@@ -666,50 +666,42 @@ Generate the query now:"""
 
             # Create specialized prompt and system prompt based on query type
             if query_type == QueryType.STRUCTURAL:
-                system_prompt = "You are a helpful research assistant specialized in providing precise, factual answers about academic papers. Focus on being direct and accurate."
-                prompt = f"""Answer this question directly based on the search results provided: "{query}"
+                system_prompt = "You are a helpful research assistant. Be direct, factual, and concise."
+                prompt = f"""Answer this question directly: "{query}"
 
 Search Results:
-{self._format_papers_for_prompt(context_papers)}
+{self._format_papers_for_prompt(context_papers[:3])}
 
 Instructions:
-- Answer the question directly and concisely
-- Use specific information from the papers (authors, dates, titles, etc.)
-- If asking about authors, list them clearly
-- If asking about a specific paper, provide its details
+- Answer in 2-4 sentences maximum
+- Use specific information (authors, dates, titles)
 - Be factual and precise
 
 Answer:"""
             elif query_type == QueryType.SEMANTIC:
-                system_prompt = "You are a helpful research assistant specialized in synthesizing information from multiple academic sources. Focus on providing comprehensive, well-organized answers that connect different research findings."
-                prompt = f"""Answer this question comprehensively based on the search results: "{query}"
+                system_prompt = "You are a research assistant. Synthesize findings concisely."
+                prompt = f"""Answer this question based on the search results: "{query}"
 
 Search Results:
-{self._format_papers_for_prompt(context_papers)}
+{self._format_papers_for_prompt(context_papers[:4])}
 
 Instructions:
-- Provide a thorough answer to the question
-- Synthesize information from multiple papers when relevant
-- Explain key concepts and findings
-- Mention specific papers and authors that support your answer
-- Organize your response clearly with main points
-- Connect different research findings when applicable
+- Synthesize key findings in 3-5 sentences
+- Cite specific papers and authors
+- Connect related findings
 
 Answer:"""
             else:  # FACTUAL, HYBRID, or other types
-                system_prompt = "You are a helpful research assistant. Provide accurate, well-structured answers based on academic search results."
-                prompt = f"""Answer this question based on the search results provided: "{query}"
+                system_prompt = "You are a research assistant. Be accurate and concise."
+                prompt = f"""Answer this question based on the search results: "{query}"
 
 Search Results:
-{self._format_papers_for_prompt(context_papers)}
+{self._format_papers_for_prompt(context_papers[:4])}
 
 Instructions:
-- Answer the question directly and clearly
-- Use information from the search results to support your answer
+- Answer directly in 3-5 sentences
 - Cite specific papers and authors when relevant
-- If the question has multiple aspects, address each one
-- Be accurate and only use information from the provided results
-- Structure your answer logically
+- Be accurate — only use information from the provided results
 
 Answer:"""
 
