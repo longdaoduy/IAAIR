@@ -10,13 +10,17 @@ import logging
 from typing import Dict, Any, Optional
 from prometheus_client import (
     Counter, Histogram, Gauge, Info, CollectorRegistry,
-    generate_latest, CONTENT_TYPE_LATEST, start_http_server
+    generate_latest, CONTENT_TYPE_LATEST, start_http_server,
+    disable_created_metrics
 )
 from contextlib import contextmanager
 from dataclasses import dataclass
 import threading
 
 logger = logging.getLogger(__name__)
+
+# Disable _created metrics that cause "out of bounds" errors in newer Prometheus
+disable_created_metrics()
 
 
 class PrometheusMetrics:
@@ -84,6 +88,22 @@ class PrometheusMetrics:
             'iaair_ai_response_duration_seconds',
             'AI response generation duration in seconds',
             buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0],
+            registry=self.registry
+        )
+        
+        # LLM call metrics
+        self.llm_calls = Counter(
+            'iaair_llm_calls_total',
+            'Total LLM generation calls',
+            ['purpose'],
+            registry=self.registry
+        )
+        
+        self.llm_call_duration = Histogram(
+            'iaair_llm_call_duration_seconds',
+            'LLM call duration in seconds by purpose',
+            ['purpose'],
+            buckets=[0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0],
             registry=self.registry
         )
         
@@ -192,6 +212,12 @@ class PrometheusMetrics:
             elif component == 'ai_response':
                 self.ai_response_duration.observe(duration)
     
+    def record_llm_call(self, purpose: str, duration: float):
+        """Record an LLM generation call."""
+        with self._lock:
+            self.llm_calls.labels(purpose=purpose).inc()
+            self.llm_call_duration.labels(purpose=purpose).observe(duration)
+    
     def record_cache_hit(self, cache_type: str):
         """Record cache hit."""
         with self._lock:
@@ -294,7 +320,7 @@ class PrometheusMetrics:
             return {}
 
 
-class PrometheusIntegration:
+class PrometheusMonitoring:
     """Integration layer for Prometheus monitoring."""
     
     def __init__(self, port: int = 8001, enable_server: bool = True):
@@ -352,20 +378,20 @@ class PrometheusIntegration:
 
 
 # Global Prometheus integration instance
-prometheus_integration: Optional[PrometheusIntegration] = None
+prometheus_integration: Optional[PrometheusMonitoring] = None
 
 
-def initialize_prometheus(port: int = 8001, enable_server: bool = True) -> PrometheusIntegration:
+def initialize_prometheus(port: int = 8001, enable_server: bool = True) -> PrometheusMonitoring:
     """Initialize global Prometheus integration."""
     global prometheus_integration
     
     if prometheus_integration is None:
-        prometheus_integration = PrometheusIntegration(port=port, enable_server=enable_server)
+        prometheus_integration = PrometheusMonitoring(port=port, enable_server=enable_server)
         logger.info("Prometheus monitoring initialized")
     
     return prometheus_integration
 
 
-def get_prometheus_integration() -> Optional[PrometheusIntegration]:
+def get_prometheus_integration() -> Optional[PrometheusMonitoring]:
     """Get the global Prometheus integration instance."""
     return prometheus_integration

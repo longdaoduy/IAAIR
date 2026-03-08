@@ -90,6 +90,7 @@ class CacheManager:
         self.embedding_cache = LRUCache(embedding_cache_size, embedding_ttl)
         self.search_cache = LRUCache(search_cache_size, search_ttl)
         self.ai_response_cache = LRUCache(1000, 3600)  # 1 hour for AI responses
+        self.cypher_cache = LRUCache(500, 7200)  # 2 hours for Cypher queries (schema rarely changes)
         
         # Persistent cache directory
         self.persistent_cache_dir = persistent_cache_dir
@@ -103,7 +104,9 @@ class CacheManager:
             'search_hits': 0,
             'search_misses': 0,
             'ai_response_hits': 0,
-            'ai_response_misses': 0
+            'ai_response_misses': 0,
+            'cypher_hits': 0,
+            'cypher_misses': 0
         }
     
     def _normalize_query(self, query: str) -> str:
@@ -195,6 +198,26 @@ class CacheManager:
         self.ai_response_cache.put(cache_key, response)
         logger.debug(f"Cached AI response for query: {query[:50]}...")
     
+    def get_cypher(self, query: str, top_k: int) -> Optional[Tuple[str, Dict]]:
+        """Get cached Cypher query and parameters for a natural language query."""
+        cache_key = self._generate_cache_key(query, top_k=top_k, cache_type="cypher")
+        result = self.cypher_cache.get(cache_key)
+        
+        if result is not None:
+            self.stats['cypher_hits'] += 1
+            logger.debug(f"Cypher cache HIT for query: {query[:50]}...")
+            return result
+        
+        self.stats['cypher_misses'] += 1
+        logger.debug(f"Cypher cache MISS for query: {query[:50]}...")
+        return None
+    
+    def cache_cypher(self, query: str, top_k: int, cypher_query: str, parameters: Dict):
+        """Cache a generated Cypher query and its parameters."""
+        cache_key = self._generate_cache_key(query, top_k=top_k, cache_type="cypher")
+        self.cypher_cache.put(cache_key, (cypher_query, parameters))
+        logger.debug(f"Cached Cypher for query: {query[:50]}...")
+    
     def get_persistent_cache(self, cache_key: str) -> Optional[Any]:
         """Get value from persistent cache."""
         if not self.persistent_cache_dir:
@@ -238,6 +261,7 @@ class CacheManager:
         total_embedding_requests = self.stats['embedding_hits'] + self.stats['embedding_misses']
         total_search_requests = self.stats['search_hits'] + self.stats['search_misses']
         total_ai_requests = self.stats['ai_response_hits'] + self.stats['ai_response_misses']
+        total_cypher_requests = self.stats['cypher_hits'] + self.stats['cypher_misses']
         
         return {
             'embedding_cache': {
@@ -257,6 +281,12 @@ class CacheManager:
                 'misses': self.stats['ai_response_misses'], 
                 'hit_rate': (self.stats['ai_response_hits'] / max(1, total_ai_requests)) * 100,
                 'cache_size': self.ai_response_cache.size()
+            },
+            'cypher_cache': {
+                'hits': self.stats['cypher_hits'],
+                'misses': self.stats['cypher_misses'],
+                'hit_rate': (self.stats['cypher_hits'] / max(1, total_cypher_requests)) * 100,
+                'cache_size': self.cypher_cache.size()
             }
         }
     
@@ -265,6 +295,7 @@ class CacheManager:
         self.embedding_cache.clear()
         self.search_cache.clear() 
         self.ai_response_cache.clear()
+        self.cypher_cache.clear()
         
         # Clear persistent cache
         if self.persistent_cache_dir and os.path.exists(self.persistent_cache_dir):

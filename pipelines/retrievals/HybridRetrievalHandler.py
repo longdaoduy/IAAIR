@@ -233,7 +233,7 @@ Author names:
 """
 
         try:
-            response = self.ai_agent.generate_content(prompt=prompt)
+            response = self.ai_agent.generate_content(prompt=prompt, purpose='author_extraction')
             if not response or response.strip().upper() == "NONE":
                 return []
 
@@ -338,27 +338,44 @@ Author names:
         return list(set(keywords))  # Remove duplicates
 
     def _build_intelligent_cypher_query(self, query: str, top_k: int) -> tuple:
-        """Build Cypher query using AI agent based on Neo4j schema and user query."""
+        """Build Cypher query using AI agent based on Neo4j schema and user query.
+        
+        Uses a cache-first strategy to avoid redundant LLM calls for Cypher generation.
+        Cache key is derived from the normalized query + top_k.
+        """
         try:
-            if not self.ai_agent:
-                logger.warning("AI agent not available, falling back to basic query generation")
-                return self._build_fallback_cypher_query(query, top_k)
-            
-            # Generate Cypher query using AI agent
-            schema_prompt = self._create_schema_prompt(query, top_k)
-            ai_response = self.ai_agent.generate_content(prompt=schema_prompt)
-            
-            if not ai_response:
-                logger.error("Empty response from AI agent for Cypher generation")
-                return self._build_fallback_cypher_query(query, top_k)
-            
-            # Parse AI response to extract Cypher query and parameters
-            cypher_query, parameters = self._parse_ai_cypher_response(ai_response, query, top_k)
-            
-            logger.info(f"AI-generated Cypher: {cypher_query}")
-            logger.info(f"AI-generated Parameters: {parameters}")
-            
-            return cypher_query, parameters
+            # Check Cypher cache first — avoid expensive LLM call
+            if self.cache_manager:
+                cached = self.cache_manager.get_cypher(query, top_k)
+                if cached is not None:
+                    cypher_query, parameters = cached
+                    logger.info(f"Cypher cache HIT — reusing cached query for: {query[:50]}...")
+                    return cypher_query, parameters
+            return self._build_fallback_cypher_query(query, top_k)
+
+            # if not self.ai_agent:
+            #     logger.warning("AI agent not available, falling back to basic query generation")
+            #     return self._build_fallback_cypher_query(query, top_k)
+            #
+            # # Generate Cypher query using AI agent
+            # schema_prompt = self._create_schema_prompt(query, top_k)
+            # ai_response = self.ai_agent.generate_content(prompt=schema_prompt, purpose='cypher_generation')
+            #
+            # if not ai_response:
+            #     logger.error("Empty response from AI agent for Cypher generation")
+            #     return self._build_fallback_cypher_query(query, top_k)
+            #
+            # # Parse AI response to extract Cypher query and parameters
+            # cypher_query, parameters = self._parse_ai_cypher_response(ai_response, query, top_k)
+            #
+            # logger.info(f"AI-generated Cypher: {cypher_query}")
+            # logger.info(f"AI-generated Parameters: {parameters}")
+            #
+            # # Cache the successfully generated Cypher query
+            # if self.cache_manager:
+            #     self.cache_manager.cache_cypher(query, top_k, cypher_query, parameters)
+            #
+            # return cypher_query, parameters
             
         except Exception as e:
             logger.error(f"Error in AI Cypher generation: {e}")
@@ -699,7 +716,8 @@ Answer:"""
             # Generate response using DeepseekClient with both prompt and system_prompt
             ai_answer = self.ai_agent.generate_content(
                 prompt=prompt,
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
+                purpose='answer_synthesis'
             )
 
             if not ai_answer:
@@ -737,7 +755,7 @@ Answer:"""
             - NO_EVIDENCE: If the evidence is relevant but doesn't prove/disprove it.
             """
 
-            label = self.ai_agent.generate_content(logic_prompt)
+            label = self.ai_agent.generate_content(logic_prompt, purpose='scifact_verification')
             verification_results.append({"claim": claim, "label": label})
 
         return verification_results
@@ -769,7 +787,7 @@ Answer:"""
             """
 
             # Using your existing AI agent infrastructure
-            raw_claims = self.ai_agent.generate_content(prompt=extraction_prompt)
+            raw_claims = self.ai_agent.generate_content(prompt=extraction_prompt, purpose='claim_extraction')
 
             if not raw_claims:
                 return []

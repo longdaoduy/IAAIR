@@ -3,6 +3,7 @@ import logging
 # Import handlers
 from pipelines.ingestions.IngestionHandler import IngestionHandler
 from pipelines.ingestions.GraphNeo4jHandler import GraphNeo4jHandler
+from clients.graph.Neo4jClient import Neo4jClient
 from clients.vector.MilvusClient import MilvusClient
 from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.huggingface.DeepseekClient import DeepseekClient
@@ -29,11 +30,12 @@ logger = logging.getLogger(__name__)
 class ServiceFactory:
     def __init__(self):
         # Clients
+        self.neo4j_client = Neo4jClient()  # Shared Neo4j client for queries
         self.neo4j_handler = GraphNeo4jHandler()
         self.milvus_client = MilvusClient()
         self.scibert_client = SciBERTClient()
         self.clip_client = None
-        self.deepseek_client = DeepseekClient()
+        self.deepseek_client = None
 
         # Performance & Caching
         self.cache_manager = CacheManager(
@@ -44,7 +46,7 @@ class ServiceFactory:
         self.performance_monitor = PerformanceMonitor(slow_query_threshold=5.0)
 
         # Pipelines & Engines
-        self.query_handler = GraphQueryHandler()
+        self.query_handler = GraphQueryHandler(neo4j_client=self.neo4j_client)
         self.routing_engine = RoutingDecisionEngine(self.deepseek_client)
         self.result_fusion = ResultFusion()
         self.scientific_reranker = None

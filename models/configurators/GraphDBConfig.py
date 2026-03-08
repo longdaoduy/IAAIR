@@ -11,6 +11,7 @@ class GraphDBConfig:
     uri: str = "neo4j+s://4d600688.databases.neo4j.io"
     max_connection_lifetime: int = 3600
     max_connection_pool_size: int = 50
+    batch_size: int = 20
 
     @classmethod
     def from_env(cls) -> 'GraphDBConfig':

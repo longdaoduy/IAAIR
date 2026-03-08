@@ -29,6 +29,12 @@ class DeepseekClient:
         self.tokenizer = None
         self.model = None
         self.device = None
+        
+        # LLM call tracking
+        self._llm_call_count = 0
+        self._llm_call_log = []  # list of {purpose, timestamp, duration_ms}
+        self._llm_total_time = 0.0  # cumulative seconds
+        
         self._load_model()
 
     def _load_model(self):
@@ -79,7 +85,21 @@ class DeepseekClient:
         embedding = self._mean_pooling(outputs, inputs["attention_mask"])
         return embedding.squeeze().cpu().tolist()
 
-    def generate_content(self, prompt: str, system_prompt: str = None) -> str | None:
+    def generate_content(self, prompt: str, system_prompt: str = None, purpose: str = "general") -> str | None:
+        """Generate text using the LLM.
+        
+        Args:
+            prompt: User prompt
+            system_prompt: Optional system prompt
+            purpose: Label for tracking (e.g. 'routing', 'cypher_generation',
+                     'answer_synthesis', 'scifact_verification', 'claim_extraction')
+        """
+        import time as _time
+        call_start = _time.time()
+        self._llm_call_count += 1
+        call_number = self._llm_call_count
+        logger.info(f"LLM call #{call_number} | purpose={purpose}")
+        
         try:
             messages = []
             if system_prompt:
@@ -119,8 +139,61 @@ class DeepseekClient:
             input_length = inputs["input_ids"].shape[1]
             generated_ids = outputs[0, input_length:]
             response = self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+            
+            duration = _time.time() - call_start
+            self._llm_total_time += duration
+            self._llm_call_log.append({
+                'call_number': call_number,
+                'purpose': purpose,
+                'duration_sec': round(duration, 3),
+                'tokens_generated': len(generated_ids),
+                'timestamp': _time.strftime('%H:%M:%S')
+            })
+            logger.info(f"LLM call #{call_number} completed | purpose={purpose} | {duration:.2f}s | {len(generated_ids)} tokens")
             return response
 
         except Exception as e:
-            logger.error(f"Generation failed: {e}", exc_info=True)
+            duration = _time.time() - call_start
+            self._llm_total_time += duration
+            self._llm_call_log.append({
+                'call_number': call_number,
+                'purpose': purpose,
+                'duration_sec': round(duration, 3),
+                'tokens_generated': 0,
+                'error': str(e),
+                'timestamp': _time.strftime('%H:%M:%S')
+            })
+            logger.error(f"LLM call #{call_number} FAILED | purpose={purpose} | {duration:.2f}s | {e}", exc_info=True)
             return None
+    
+    def get_llm_stats(self) -> dict:
+        """Get LLM usage statistics."""
+        by_purpose = {}
+        for entry in self._llm_call_log:
+            p = entry['purpose']
+            if p not in by_purpose:
+                by_purpose[p] = {'count': 0, 'total_time': 0.0, 'errors': 0}
+            by_purpose[p]['count'] += 1
+            by_purpose[p]['total_time'] += entry['duration_sec']
+            if 'error' in entry:
+                by_purpose[p]['errors'] += 1
+        
+        for p in by_purpose:
+            by_purpose[p]['avg_time'] = round(
+                by_purpose[p]['total_time'] / max(1, by_purpose[p]['count']), 3
+            )
+            by_purpose[p]['total_time'] = round(by_purpose[p]['total_time'], 3)
+        
+        return {
+            'total_llm_calls': self._llm_call_count,
+            'total_llm_time_sec': round(self._llm_total_time, 3),
+            'avg_time_per_call_sec': round(self._llm_total_time / max(1, self._llm_call_count), 3),
+            'by_purpose': by_purpose,
+            'recent_calls': self._llm_call_log[-10:]  # last 10 calls
+        }
+    
+    def reset_llm_stats(self):
+        """Reset LLM call statistics."""
+        self._llm_call_count = 0
+        self._llm_call_log.clear()
+        self._llm_total_time = 0.0

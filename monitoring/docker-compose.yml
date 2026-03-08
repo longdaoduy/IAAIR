@@ -2,8 +2,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: iaair-prometheus
-    ports:
-      - "9090:9090"
+    network_mode: host
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - ./iaair_alerts.yml:/etc/prometheus/iaair_alerts.yml
@@ -16,14 +15,14 @@ services:
       - '--storage.tsdb.retention.time=200h'
       - '--web.enable-lifecycle'
     restart: unless-stopped
-    networks:
-      - iaair-monitoring
 
   grafana:
     image: grafana/grafana:latest
     container_name: iaair-grafana
     ports:
       - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=iaair123
       - GF_USERS_ALLOW_SIGN_UP=false

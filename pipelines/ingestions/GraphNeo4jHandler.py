@@ -9,9 +9,9 @@ logger = logging.getLogger(__name__)
 class GraphNeo4jHandler:
     """Handler for Neo4j database operations with concurrent task management."""
 
-    def __init__(self, batch_size: int = 20):
-        self.neo4j_client: Optional[Neo4jClient] = None
-        self.batch_size = batch_size
+    def __init__(self, neo4j_client: Optional[Neo4jClient] = None):
+        self.neo4j_client = neo4j_client
+        self.batch_size = 20
 
     async def _get_client(self) -> Neo4jClient:
         """Lazy initialization of the client."""
