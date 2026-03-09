@@ -155,7 +155,7 @@ class EmbeddingSciBERTHandler:
                 continue
             
             try:
-                embedding = self.client.generate_embedding(text)
+                embedding = self.client.generate_text_embedding(text)
                 
                 results.append({
                     "paper_id": paper_id,

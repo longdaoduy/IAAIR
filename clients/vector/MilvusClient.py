@@ -416,9 +416,8 @@ class MilvusClient:
         Returns:
             Sparse vector as dictionary {index: value}
         """
-        if not self.is_tfidf_fitted:
-            raise ValueError("TF-IDF vectorizer not fitted. Call fit_tfidf_vectorizer first.")
-
+        if not self.is_tfidf_fitted and text:
+            self.fit_tfidf_vectorizer([text])
         # Transform text to TF-IDF vector
         tfidf_vector = self.tfidf_vectorizer.transform([text])
 

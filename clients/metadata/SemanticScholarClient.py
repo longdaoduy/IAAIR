@@ -40,8 +40,6 @@ class SemanticScholarClient:
 
         headers = {
             "x-api-key": self.config.API_KEY,
-            "Accept": "application/json",
-            "User-Agent": "KnowledgeFabric/1.0",
         }
 
         for attempt in range(1, max_retries + 1):
@@ -192,6 +190,11 @@ class SemanticScholarClient:
 
             enhanced_paper_data["paper"].metadata.update(semantic_scholar_data)
             enhanced_paper_data["paper"].metadata["confidence"] = compute_confidence(paper_data, semantic_scholar_data)
+
+            # Update cited_by_count from Semantic Scholar if higher
+            s2_citation_count = s2_paper.get("citationCount", 0) or 0
+            if s2_citation_count > (enhanced_paper_data["paper"].cited_by_count or 0):
+                enhanced_paper_data["paper"].cited_by_count = s2_citation_count
 
             # Enrich the paper if we found it in Semantic Scholar
             if s2_paper and s2_paper.get("abstract"):

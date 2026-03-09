@@ -35,6 +35,7 @@ class ResultFusion:
                 'venue': result.get('venue'),
                 'publication_date': result.get('publication_date'),
                 'doi': result.get('doi'),
+                'cited_by_count': result.get('cited_by_count', 0) or 0,
                 'vector_score': result.get('distance', 0.0),
                 'graph_score': 0.0,
                 'source_path': ['vector_search']
@@ -54,6 +55,7 @@ class ResultFusion:
                 existing['venue'] = existing.get('venue') or result.get('venue')
                 existing['doi'] = existing.get('doi') or result.get('doi')
                 existing['publication_date'] = existing.get('publication_date') or result.get('publication_date')
+                existing['cited_by_count'] = existing.get('cited_by_count') or result.get('cited_by_count', 0) or 0
 
                 # Update scores and path
                 existing['graph_score'] = min(result.get('relevance_score', 0.5), 1.0)
@@ -68,6 +70,7 @@ class ResultFusion:
                     'venue': result.get('venue'),
                     'publication_date': result.get('publication_date'),
                     'doi': result.get('doi'),
+                    'cited_by_count': result.get('cited_by_count', 0) or 0,
                     'vector_score': 0.0,
                     'graph_score': min(result.get('relevance_score', 0.5), 1.0),
                     'source_path': ['graph_search']
@@ -93,6 +96,7 @@ class ResultFusion:
                 venue=result_data['venue'],
                 publication_date=result_data['publication_date'],
                 doi=result_data['doi'],
+                cited_by_count=result_data.get('cited_by_count', 0) or 0,
                 relevance_score=relevance_score,
                 vector_score=result_data['vector_score'],
                 graph_score=result_data['graph_score'],

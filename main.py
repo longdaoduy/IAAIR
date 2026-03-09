@@ -351,7 +351,8 @@ async def pull_papers(request: PaperRequest, factory: ServiceFactory = Depends(g
             count=request.num_papers,
             filters=request.filters,
             save_to_file=True,
-            process_pdfs=request.process_pdfs
+            process_pdfs=request.process_pdfs,
+            resume=request.resume_from_last
         )
 
         if not papers_data:
@@ -417,6 +418,43 @@ async def pull_papers(request: PaperRequest, factory: ServiceFactory = Depends(g
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+@app.get("/ingestion/cursor-state")
+async def get_cursor_state(factory: ServiceFactory = Depends(get_services)):
+    """Get the current OpenAlex pagination cursor state."""
+    try:
+        state = factory.ingestion_handler.openalex_client._load_cursor_state()
+        if state:
+            return {
+                "success": True,
+                "has_cursor": True,
+                "total_papers_fetched": state.get("total_papers_fetched", 0),
+                "total_pages_fetched": state.get("total_pages_fetched", 0),
+                "last_updated": state.get("last_updated"),
+                "filter": state.get("filter", ""),
+                "message": f"Cursor saved — next pull will continue from paper #{state.get('total_papers_fetched', 0) + 1}"
+            }
+        return {
+            "success": True,
+            "has_cursor": False,
+            "message": "No cursor state saved — next pull will start from the beginning"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/ingestion/cursor-state")
+async def reset_cursor_state(factory: ServiceFactory = Depends(get_services)):
+    """Reset the OpenAlex cursor state to start fetching from the beginning."""
+    try:
+        factory.ingestion_handler.openalex_client._clear_cursor_state()
+        return {
+            "success": True,
+            "message": "Cursor state cleared — next pull will start from the beginning"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/download/{filename}")
 async def download_file(filename: str):
     """Download a generated JSON file."""
@@ -477,97 +515,6 @@ async def generate_and_upload_embeddings(papers_data: List[Dict], timestamp: dat
 # ===============================================================================
 # SEMANTIC SEARCH ENDPOINTS
 # ===============================================================================
-
-@app.post("/search", response_model=SearchResponse)
-async def semantic_search(request: SearchRequest, factory: ServiceFactory = Depends(get_services)):
-    """
-    Perform semantic or hybrid search for similar papers.
-
-    This endpoint:
-    1. Generates dense embedding for the query text
-    2. Optionally generates sparse embedding for hybrid search
-    3. Searches Zilliz using hybrid search (dense + sparse) or dense-only search
-    4. Retrieves detailed information from Neo4j (if requested)
-    5. Returns ranked results with similarity scores
-    """
-    start_time = datetime.now()
-
-    try:
-        logger.info(f"Starting semantic search for query: '{request.query}'")
-
-        # Search for similar papers in Zilliz
-        similar_papers = factory.retrieval_handler.search_similar_papers(
-            query_text=request.query,
-            top_k=request.top_k,
-            use_hybrid=request.use_hybrid
-        )
-
-        if not similar_papers:
-            return SearchResponse(
-                success=True,
-                message="No similar papers found",
-                query=request.query,
-                results_found=0,
-                search_time_seconds=(datetime.now() - start_time).total_seconds(),
-                results=[]
-            )
-
-        results = similar_papers
-
-        # Step 2: Enrich with detailed information from Neo4j (if requested)
-        if request.include_details:
-            logger.info(f"Enriching {len(similar_papers)} results with Neo4j data...")
-
-            paper_ids = [paper["paper_id"] for paper in similar_papers if paper.get("paper_id")]
-
-            if paper_ids:
-                detailed_papers = await factory.neo4j_handler.get_papers_by_ids(paper_ids)
-
-                # Create a lookup dict for detailed paper data
-                detailed_lookup = {paper["id"]: paper for paper in detailed_papers}
-
-                # Merge Zilliz results with Neo4j details
-                enriched_results = []
-                for zilliz_result in similar_papers:
-                    paper_id = zilliz_result.get("paper_id")
-                    detailed_paper = detailed_lookup.get(paper_id, {})
-
-                    # Combine data, prioritizing Neo4j details where available
-                    enriched_result = {
-                        "paper_id": paper_id,
-                        "similarity_score": zilliz_result["similarity_score"],
-                        "distance": zilliz_result["distance"],
-                        "title": detailed_paper.get("title") or zilliz_result.get("title"),
-                        "abstract": detailed_paper.get("abstract") or zilliz_result.get("abstract"),
-                        "doi": detailed_paper.get("doi"),
-                        "publication_date": detailed_paper.get("publication_date"),
-                        "authors": detailed_paper.get("authors", []),
-                        "venue": detailed_paper.get("venue"),
-                        "cited_by_count": detailed_paper.get("cited_by_count", 0),
-                        "citations_count": len(detailed_paper.get("citations", [])),
-                        "source": detailed_paper.get("source")
-                    }
-                    enriched_results.append(enriched_result)
-
-                results = enriched_results
-
-        search_time = (datetime.now() - start_time).total_seconds()
-
-        logger.info(f"Semantic search completed. Found {len(results)} results in {search_time:.2f} seconds")
-
-        return SearchResponse(
-            success=True,
-            message=f"Found {len(results)} similar papers",
-            query=request.query,
-            results_found=len(results),
-            search_time_seconds=search_time,
-            results=results
-        )
-
-    except Exception as e:
-        logger.error(f"Error during semantic search: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
-
 
 @app.post("/hybrid-search", response_model=HybridSearchResponse)
 async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFactory = Depends(get_services)):
@@ -853,15 +800,19 @@ async def image_search(
 
         return {
             "success": True,
-            "message": f"Found {len(figure_results)} figures and {len(table_results)} tables",
+            "message": f"Found {len(figure_results)} figures and {len(table_results)} tables from {len(related_papers)} papers",
             "search_time_seconds": search_time,
             "text_query": text_query,
             "image_filename": file.filename,
-            "total_figures_found": len(figure_results),
-            "total_tables_found": len(table_results),
+            "results_found": len(related_papers),
+            "results": related_papers,
+            "totals": {
+                "figures": len(figure_results),
+                "tables": len(table_results),
+                "related_papers": len(related_papers)
+            },
             "figure_results": figure_results,
-            "table_results": table_results,
-            "related_papers": related_papers
+            "table_results": table_results
         }
 
     except HTTPException:
@@ -949,14 +900,18 @@ async def image_search_base64(
 
         return {
             "success": True,
-            "message": f"Found {len(figure_results)} figures and {len(table_results)} tables",
+            "message": f"Found {len(figure_results)} figures and {len(table_results)} tables from {len(related_papers)} papers",
             "search_time_seconds": search_time,
             "text_query": text_query,
-            "total_figures_found": len(figure_results),
-            "total_tables_found": len(table_results),
+            "results_found": len(related_papers),
+            "results": related_papers,
+            "totals": {
+                "figures": len(figure_results),
+                "tables": len(table_results),
+                "related_papers": len(related_papers)
+            },
             "figure_results": figure_results,
-            "table_results": table_results,
-            "related_papers": related_papers
+            "table_results": table_results
         }
 
     except HTTPException:

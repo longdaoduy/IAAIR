@@ -9,3 +9,4 @@ class PaperRequest(BaseModel):
     include_zilliz: bool = Field(False, description="Whether to upload to Zilliz")
     process_pdfs: bool = Field(False, description="Whether to process PDFs and extract figures/tables")
     enhance_with_ai: bool = Field(False, description="Whether to enhance descriptions with AI")
+    resume_from_last: bool = Field(True, description="Whether to resume from last OpenAlex cursor position (continue fetching new papers)")

@@ -121,7 +121,7 @@ def test_embedding_generation():
             print(f"Text: {desc}")
             
             # Generate embedding
-            embedding = scibert_client.generate_embedding(desc)
+            embedding = scibert_client.generate_text_embedding(desc)
             
             print(f"Embedding dimension: {len(embedding)}")
             print(f"First 5 values: {embedding[:5]}")

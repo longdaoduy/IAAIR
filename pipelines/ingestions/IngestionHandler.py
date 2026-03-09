@@ -17,7 +17,7 @@ class IngestionHandler():
         self.semantic_scholar_client = SemanticScholarClient()
         self.openalex_client = OpenAlexClient()
         self.clip_client = clip_client
-        self.scibert_client = scibert_client or SciBERTClient()
+        self.scibert_client = scibert_client
         self.milvus_client = milvus_client or MilvusClient()
         self.pdf_handler = PDFProcessingHandler(
             self.clip_client,
@@ -112,7 +112,7 @@ class IngestionHandler():
         print(f"Saved {len(json_data)} papers to {filename}")
 
     def pull_open_alex_paper(self, count: int, filters: Dict = None, save_to_file: bool = True,
-                             process_pdfs: bool = False) -> List[Dict]:
+                             process_pdfs: bool = False, resume: bool = True) -> List[Dict]:
         """Main method to ingest papers from OpenAlex.
         
         Args:
@@ -120,15 +120,16 @@ class IngestionHandler():
             filters: Additional filters for the API request
             save_to_file: Whether to save results to JSON file
             process_pdfs: Whether to process PDFs and extract figures/tables
+            resume: Whether to resume from the last saved cursor position
 
         Returns:
             List of paper data with authors, citations, and optionally figures/tables
         """
 
-        print(f"Starting paper ingestion from OpenAlex (target: {count} papers)")
+        print(f"Starting paper ingestion from OpenAlex (target: {count} papers, resume={resume})")
 
         # Fetch papers with PDF URLs
-        papers_data = self.openalex_client.fetch_papers(count, filters)
+        papers_data = self.openalex_client.fetch_papers(count, filters, resume=resume)
 
         # Process PDFs if requested
         if process_pdfs and papers_data:

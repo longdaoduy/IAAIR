@@ -17,7 +17,6 @@ async def test_enhanced_ingestion():
     # Fetch papers with PDF processing enabled
     papers_data = ingestion_handler.pull_open_alex_paper(
         count=5,  # Small batch for testing
-        filters={"has_pdf": True},  # Only papers with PDFs
         save_to_file=True,
         process_pdfs=True  # Enable PDF processing
     )

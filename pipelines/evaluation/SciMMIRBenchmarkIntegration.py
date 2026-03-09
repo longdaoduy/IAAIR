@@ -502,7 +502,7 @@ class SciMMIRBenchmarkRunner:
                     # Fall back to individual processing
                     batch_text_embeddings = []
                     for text in batch_texts:
-                        emb = self.scibert_client.generate_embedding(text) if self.scibert_client else None
+                        emb = self.scibert_client.generate_text_embedding(text) if self.scibert_client else None
                         if emb is None:
                             emb = [0.0] * 768  # Standard BERT dimension fallback
                         batch_text_embeddings.append(emb)

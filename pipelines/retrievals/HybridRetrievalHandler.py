@@ -109,9 +109,9 @@ class HybridRetrievalHandler:
                 if self.performance_monitor:
                     self.performance_monitor.record_cache_hit('embedding', False)
                     with self.performance_monitor.track_operation('embedding'):
-                        query_embedding = self.embedding_client.generate_embedding(query_text)
+                        query_embedding = self.embedding_client.generate_text_embedding(query_text)
                 else:
-                    query_embedding = self.embedding_client.generate_embedding(query_text)
+                    query_embedding = self.embedding_client.generate_text_embedding(query_text)
 
                 # Cache the embedding
                 if self.cache_manager and query_embedding is not None:
@@ -122,10 +122,7 @@ class HybridRetrievalHandler:
                 return []
 
             # Execute search with optimized parameters
-            if use_hybrid and self.milvus_client.is_tfidf_fitted:
-                return self.milvus_client._hybrid_search(query_text, query_embedding, top_k)
-            else:
-                return self.milvus_client._dense_search(query_embedding, top_k)
+            return self.milvus_client._hybrid_search(query_text, query_embedding, top_k)
 
         except Exception as e:
             print(f"❌ Search failed: {e}")
@@ -530,6 +527,7 @@ Generate the query now:"""
             OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
             RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
                    p.doi as doi, p.publication_date as publication_date,
+                   p.cited_by_count as cited_by_count,
                    collect(DISTINCT a.name) as authors,
                    v.name as venue
             ORDER BY p.id
@@ -544,6 +542,7 @@ Generate the query now:"""
             OPTIONAL MATCH (all_authors:Author)-[:AUTHORED]->(p)
             RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
                    p.doi as doi, p.publication_date as publication_date,
+                   p.cited_by_count as cited_by_count,
                    collect(DISTINCT all_authors.name) as authors,
                    v.name as venue
             LIMIT $limit
@@ -564,6 +563,7 @@ Generate the query now:"""
             OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
             RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
                    p.doi as doi, p.publication_date as publication_date,
+                   p.cited_by_count as cited_by_count,
                    collect(DISTINCT a.name) as authors,
                    v.name as venue
             LIMIT $limit
@@ -585,6 +585,7 @@ Generate the query now:"""
                 OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
                 RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
                        p.doi as doi, p.publication_date as publication_date,
+                       p.cited_by_count as cited_by_count,
                        collect(DISTINCT a.name) as authors,
                        v.name as venue
                 ORDER BY p.id
@@ -859,7 +860,7 @@ Answer:"""
 
             # If text query provided, also search by description and merge results
             if text_query and self.embedding_client:
-                text_embedding = self.embedding_client.generate_embedding(text_query)
+                text_embedding = self.embedding_client.generate_text_embedding(text_query)
                 if text_embedding:
                     if search_figures:
                         text_fig_results = self.milvus_client.search_figures_by_description(
@@ -908,7 +909,8 @@ Answer:"""
                                 "authors": [],
                                 "venue": None,
                                 "doi": None,
-                                "publication_date": None
+                                "publication_date": None,
+                                "cited_by_count": 0
                             })
                     except Exception as e:
                         logger.debug(f"Could not fetch paper {pid}: {e}")

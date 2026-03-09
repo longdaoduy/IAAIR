@@ -125,7 +125,7 @@ class PDFProcessingHandler:
 
                             description = self._extract_figure_description(page, img, page_num + 1)
                             if description:
-                                desc_embedding = self.scibert_client.generate_embedding(description)
+                                desc_embedding = self.scibert_client.generate_text_embedding(description)
 
                                 figures.append(Figure(
                                     id=figure_id,
@@ -244,7 +244,7 @@ class PDFProcessingHandler:
                     description_embedding = None
                     if block_text.strip():
                         # We embed the actual content of the table for semantic search
-                        description_embedding = self.scibert_client.generate_embedding(block_text)
+                        description_embedding = self.scibert_client.generate_text_embedding(block_text)
 
                     headers, rows = self._parse_table_structure(block_text)
                     image_path, image_embedding = self._capture_table_image(page, block["bbox"], table_id)

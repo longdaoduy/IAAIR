@@ -54,7 +54,7 @@ class SciBERTClient:
             input_mask_expanded.sum(dim=1), min=1e-9
         )
 
-    def generate_embedding(self, text: str) -> List[float]:
+    def generate_text_embedding(self, text: str) -> List[float]:
         """Generate embedding for a single text.
 
         Args:

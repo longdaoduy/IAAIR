@@ -12,6 +12,7 @@ class SearchResult(BaseModel):
     venue: Optional[str] = None
     publication_date: Optional[str] = None
     doi: Optional[str] = None
+    cited_by_count: int = 0
     # Scoring and ranking
     relevance_score: float = Field(..., ge=0.0, description="Composite relevance score")
     vector_score: Optional[float] = None

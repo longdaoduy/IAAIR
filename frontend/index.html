@@ -775,6 +775,7 @@ function renderSearchResults(d) {
                 <div class="paper-meta">
                     ${p.venue ? `<span class="paper-meta-item">🏛️ ${escHtml(p.venue)}</span>` : ''}
                     ${p.publication_date ? `<span class="paper-meta-item">📅 ${escHtml(p.publication_date)}</span>` : ''}
+                    ${p.cited_by_count ? `<span class="paper-meta-item">📚 Cited: ${p.cited_by_count}</span>` : ''}
                     ${p.doi ? `<span class="paper-meta-item"><a href="https://doi.org/${escHtml(p.doi)}" target="_blank" rel="noopener noreferrer" style="color:var(--text-dim);text-decoration:none" onclick="event.stopPropagation()">🔗 ${escHtml(p.doi)}</a></span>` : ''}
                     ${p.paper_id ? `<span class="paper-meta-item">📄 ${escHtml(p.paper_id)}</span>` : ''}
                     ${p.vector_score != null ? `<span class="paper-meta-item">Vec: ${p.vector_score.toFixed(3)}</span>` : ''}
@@ -917,6 +918,7 @@ function renderImageResults(d) {
                     <div class="paper-meta">
                         ${p.venue ? `<span class="paper-meta-item">\ud83c\udfdb\ufe0f ${escHtml(p.venue)}</span>` : ''}
                         ${p.publication_date ? `<span class="paper-meta-item">\ud83d\udcc5 ${escHtml(p.publication_date)}</span>` : ''}
+                        ${p.cited_by_count ? `<span class="paper-meta-item">\ud83d\udcda Cited: ${p.cited_by_count}</span>` : ''}
                         ${p.doi ? `<span class="paper-meta-item"><a href="https://doi.org/${escHtml(p.doi)}" target="_blank" rel="noopener noreferrer" style="color:var(--text-dim);text-decoration:none">\ud83d\udd17 ${escHtml(p.doi)}</a></span>` : ''}
                         ${p.paper_id ? `<span class="paper-meta-item">\ud83d\udcc4 ${escHtml(p.paper_id)}</span>` : ''}
                     </div>

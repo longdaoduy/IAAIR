@@ -23,6 +23,7 @@ class Paper:
     pmid: Optional[str] = None
     arxiv_id: Optional[str] = None
     pdf_url: Optional[str] = None
+    cited_by_count: int = 0
 
     # metadata: PaperMetadata
     ingested_at: datetime = field(default_factory=datetime.now)

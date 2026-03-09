@@ -10,7 +10,6 @@ class SemanticScholarConfig:
     @property
     def headers(self):
         headers = {
-            "User-Agent": "KnowledgeFabric/1.0 (mailto:your-email@domain.com)",
             "Accept": "application/json"
         }
         if self.API_KEY:
