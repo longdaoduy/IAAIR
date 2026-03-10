@@ -83,8 +83,8 @@ class PDFProcessingHandler:
           • Image files saved to disk with references in the markdown
           • Structured metadata per page (images list, tables list)
 
-        We post-process that output to build our Figure / Table entities
-        with CLIP and SciBERT embeddings.
+        All CLIP/SciBERT embeddings are generated in batches at the end
+        for maximum throughput.
         """
         figures: List[Figure] = []
         tables: List[Table] = []
@@ -95,31 +95,57 @@ class PDFProcessingHandler:
             os.makedirs(paper_image_dir, exist_ok=True)
 
             # ── Run pymupdf4llm ──────────────────────────────────────────
-            page_data = _to_markdown(
-                pdf_path,
-                page_chunks=True,       # one dict per page
-                write_images=True,      # save images to disk
+            _common_kwargs = dict(
+                page_chunks=True,
+                write_images=True,
                 image_path=paper_image_dir,
                 image_format="png",
-                dpi=200,                # good balance quality/speed
-                image_size_limit=0.05,  # skip tiny icons (<5% of page)
-                force_text=True,        # also keep text overlapping images
+                dpi=150,                # 150 is sufficient and ~45% faster than 200
+                image_size_limit=0.05,
+                force_text=True,
                 show_progress=False,
             )
+
+            page_data = None
+            for attempt, extra in enumerate([
+                {},
+                {"table_strategy": "lines"},
+                {"table_strategy": "text"},
+                {"ignore_graphics": True},
+            ]):
+                try:
+                    page_data = _to_markdown(pdf_path, **{**_common_kwargs, **extra})
+                    break
+                except (ValueError, TypeError, AttributeError) as e:
+                    self.logger.warning(
+                        f"pymupdf4llm attempt {attempt + 1} failed for {paper_id}: {e}"
+                    )
+                    continue
+
+            if page_data is None:
+                self.logger.error(f"All pymupdf4llm attempts failed for {paper_id}")
+                return figures, tables
+
+            # ── Phase 1: Collect raw figure/table data (no embeddings yet) ──
+            # We accumulate images and text descriptions so they can be
+            # embedded in one batch call at the end.
+            _FigureRaw = type('_FigureRaw', (), {})   # lightweight temp containers
+            _TableRaw  = type('_TableRaw', (), {})
+
+            raw_figures: List[object] = []   # list of _FigureRaw
+            raw_tables:  List[object] = []   # list of _TableRaw
 
             figure_counter = 1
             table_counter = 1
 
             for chunk in page_data:
-                page_num = chunk["metadata"].get("page") or chunk["metadata"].get("page_number", 0)  # 1-based
+                page_num = chunk["metadata"].get("page") or chunk["metadata"].get("page_number", 0)
                 md_text = chunk.get("text", "")
 
                 # ── 1. FIGURES ───────────────────────────────────────────
-                # pymupdf4llm writes images and inserts markdown references
-                # like  ![<desc>](path/to/image.png)
                 img_pattern = re.compile(
                     r'!\[([^\]]*)\]\(([^)]+\.(?:png|jpg|jpeg|webp|gif))\)',
-                    re.IGNORECASE
+                    re.IGNORECASE,
                 )
                 for match in img_pattern.finditer(md_text):
                     alt_text = match.group(1).strip()
@@ -135,11 +161,9 @@ class PDFProcessingHandler:
                         self.logger.warning(f"Cannot open image {img_rel_path}: {e}")
                         continue
 
-                    # Filter tiny images that slipped through
                     if pil_image.width < 100 or pil_image.height < 100:
                         continue
 
-                    # Look for a "Figure N" / "Fig. N" caption nearby in the markdown
                     description = self._find_caption_near_image(
                         md_text, match.start(), prefix_pattern=r'(?:fig(?:ure)?)\s*\.?\s*\d+'
                     ) or alt_text or None
@@ -147,37 +171,28 @@ class PDFProcessingHandler:
                     if not description:
                         continue
 
-                    # Generate embeddings
-                    image_embedding = self.clip_client.generate_image_embedding(pil_image)
-                    desc_embedding = self.scibert_client.generate_text_embedding(description)
-
-                    # Rename saved image to our canonical path
                     figure_id = f"{paper_id}#figure_{figure_counter}"
                     canonical_path = os.path.join(self.figures_dir, f"{figure_id}.png")
                     try:
                         if img_rel_path != canonical_path:
                             os.rename(img_rel_path, canonical_path)
                     except OSError:
-                        canonical_path = img_rel_path  # keep original
+                        canonical_path = img_rel_path
 
-                    figures.append(Figure(
-                        id=figure_id,
-                        paper_id=paper_id,
-                        figure_number=figure_counter,
-                        description=description,
-                        page_number=page_num,
-                        image_path=canonical_path,
-                        image_embedding=image_embedding,
-                        description_embedding=desc_embedding,
-                    ))
+                    rf = _FigureRaw()
+                    rf.figure_id = figure_id
+                    rf.paper_id = paper_id
+                    rf.figure_number = figure_counter
+                    rf.description = description
+                    rf.page_number = page_num
+                    rf.image_path = canonical_path
+                    rf.pil_image = pil_image          # keep for batch CLIP later
+                    raw_figures.append(rf)
                     figure_counter += 1
 
                 # ── 2. TABLES ────────────────────────────────────────────
-                # pymupdf4llm renders tables as GFM markdown tables.
-                # We detect them with the standard  | … | pattern.
                 table_blocks = self._extract_markdown_tables(md_text)
                 for table_md in table_blocks:
-                    # Try to find a "Table N" caption near the table block
                     table_caption = self._find_caption_near_table(
                         md_text, table_md,
                         prefix_pattern=r'(?:table|tab)\s*\.?\s*\d+'
@@ -190,30 +205,97 @@ class PDFProcessingHandler:
                     table_id = f"{paper_id}#table_{table_counter}"
                     description = table_caption or table_md[:8000]
 
-                    # Embeddings
-                    description_embedding = self.scibert_client.generate_text_embedding(description)
-
-                    # Render the table region as an image for CLIP embedding
-                    image_path, image_embedding = self._render_table_image_from_page(
-                        pdf_path, page_num - 1, table_md, table_id
-                    )
-
-                    tables.append(Table(
-                        id=table_id,
-                        paper_id=paper_id,
-                        table_number=table_counter,
-                        description=description,
-                        page_number=page_num,
-                        headers=headers,
-                        rows=rows,
-                        description_embedding=description_embedding,
-                        image_embedding=image_embedding,
-                    ))
+                    rt = _TableRaw()
+                    rt.table_id = table_id
+                    rt.paper_id = paper_id
+                    rt.table_number = table_counter
+                    rt.description = description
+                    rt.page_number = page_num
+                    rt.headers = headers
+                    rt.rows = rows
+                    rt.table_md = table_md
+                    raw_tables.append(rt)
                     table_counter += 1
+
+            # ── Phase 2: Render table images (open PDF only once) ────────
+            table_images: List[Tuple[Optional[str], Optional[Image.Image]]] = []
+            if raw_tables:
+                try:
+                    doc = fitz.open(pdf_path)
+                    for rt in raw_tables:
+                        img_path, pil_img = self._render_table_image_from_doc(
+                            doc, rt.page_number - 1, rt.table_md, rt.table_id
+                        )
+                        table_images.append((img_path, pil_img))
+                    doc.close()
+                except Exception as e:
+                    self.logger.error(f"Error rendering table images: {e}")
+                    table_images = [(None, None)] * len(raw_tables)
+
+            # ── Phase 3: Batch embeddings ────────────────────────────────
+            # Collect all images and texts to embed in one call each.
+            fig_pil_images   = [rf.pil_image for rf in raw_figures]
+            fig_descriptions = [rf.description for rf in raw_figures]
+
+            tbl_descriptions = [rt.description for rt in raw_tables]
+            tbl_pil_images   = [ti[1] for ti in table_images]  # may contain None
+
+            # CLIP image embeddings: figures + tables in one batch
+            all_clip_images: List[Optional[Image.Image]] = fig_pil_images + tbl_pil_images
+            if all_clip_images:
+                all_clip_embs = self.clip_client.generate_image_embeddings_batch(
+                    [img for img in all_clip_images],  # pass through, batch method handles None
+                )
+            else:
+                all_clip_embs = []
+
+            fig_clip_embs = all_clip_embs[:len(raw_figures)]
+            tbl_clip_embs = all_clip_embs[len(raw_figures):]
+
+            # SciBERT text embeddings: figure descriptions + table descriptions in one batch
+            all_scibert_texts = fig_descriptions + tbl_descriptions
+            if all_scibert_texts:
+                all_scibert_embs = self.scibert_client.generate_text_embeddings_batch(all_scibert_texts)
+            else:
+                all_scibert_embs = []
+
+            fig_scibert_embs = all_scibert_embs[:len(raw_figures)]
+            tbl_scibert_embs = all_scibert_embs[len(raw_figures):]
+
+            # ── Phase 4: Build final entities ────────────────────────────
+            for i, rf in enumerate(raw_figures):
+                figures.append(Figure(
+                    id=rf.figure_id,
+                    paper_id=rf.paper_id,
+                    figure_number=rf.figure_number,
+                    description=rf.description,
+                    page_number=rf.page_number,
+                    image_path=rf.image_path,
+                    image_embedding=fig_clip_embs[i] if i < len(fig_clip_embs) else None,
+                    description_embedding=fig_scibert_embs[i] if i < len(fig_scibert_embs) else None,
+                ))
+
+            for i, rt in enumerate(raw_tables):
+                img_path = table_images[i][0] if i < len(table_images) else None
+                tables.append(Table(
+                    id=rt.table_id,
+                    paper_id=rt.paper_id,
+                    table_number=rt.table_number,
+                    description=rt.description,
+                    page_number=rt.page_number,
+                    headers=rt.headers,
+                    rows=rt.rows,
+                    description_embedding=tbl_scibert_embs[i] if i < len(tbl_scibert_embs) else None,
+                    image_embedding=tbl_clip_embs[i] if i < len(tbl_clip_embs) else None,
+                ))
+
+            # Free references to PIL images
+            for rf in raw_figures:
+                rf.pil_image = None
 
             self.logger.info(
                 f"Extracted {len(figures)} figures and {len(tables)} tables "
-                f"from {paper_id} using pymupdf4llm"
+                f"from {paper_id} using pymupdf4llm (batch embeddings)"
             )
 
         except Exception as e:
@@ -245,11 +327,89 @@ class PDFProcessingHandler:
         return None
 
     @staticmethod
+    def _is_valid_table(table_lines: List[str]) -> bool:
+        """
+        Validate that a candidate table block is a genuine GFM markdown table.
+
+        Checks performed:
+        1. Must have a proper separator row (cells like ``---``, ``:---:``, etc.)
+        2. Separator row must be the 2nd line (header | separator | data…)
+        3. Must have at least 2 columns
+        4. Must have at least 1 data row (below the separator)
+        5. Column count must be roughly consistent across rows
+        6. Data cells must not all be empty / whitespace
+        7. Reject if most cells look like long prose (>120 chars avg)
+        """
+        if len(table_lines) < 3:          # header + separator + ≥1 data row
+            return False
+
+        def _split_cells(line: str) -> List[str]:
+            return [c.strip() for c in line.strip('|').split('|')]
+
+        # ── Locate separator row (must be line index 1) ──────────────
+        sep_line = table_lines[1]
+        sep_cells = _split_cells(sep_line)
+
+        # Each separator cell must be composed of dashes, colons, spaces only
+        # and must contain at least 3 dashes  (e.g. ``---``, ``:---:``)
+        SEP_CELL = re.compile(r'^:?\s*-{3,}\s*:?$')
+        if not all(SEP_CELL.match(c) for c in sep_cells):
+            return False
+
+        num_cols = len(sep_cells)
+        if num_cols < 2:
+            return False
+
+        # ── Header column count must match separator ─────────────────
+        header_cells = _split_cells(table_lines[0])
+        if abs(len(header_cells) - num_cols) > 1:
+            return False
+
+        # ── Must have at least 1 data row ────────────────────────────
+        data_lines = table_lines[2:]
+        if not data_lines:
+            return False
+
+        # ── Column-count consistency: allow ±1 difference ────────────
+        mismatches = 0
+        for dl in data_lines:
+            row_cols = len(_split_cells(dl))
+            if abs(row_cols - num_cols) > 1:
+                mismatches += 1
+        if mismatches > len(data_lines) * 0.5:
+            return False
+
+        # ── Data rows must not be all-empty ──────────────────────────
+        non_empty_cells = 0
+        total_cell_len = 0
+        total_cells = 0
+        for dl in data_lines:
+            for c in _split_cells(dl):
+                total_cells += 1
+                total_cell_len += len(c)
+                if c:
+                    non_empty_cells += 1
+        if non_empty_cells == 0:
+            return False
+
+        # ── Reject prose masquerading as a table ─────────────────────
+        # If the average cell length is very long, it's likely a
+        # multi-column layout or bibliography, not a data table.
+        if total_cells > 0 and (total_cell_len / total_cells) > 120:
+            return False
+
+        return True
+
+    @staticmethod
     def _extract_markdown_tables(md_text: str) -> List[str]:
         """
         Extract all GFM markdown table blocks from text.
-        A markdown table is a sequence of lines starting/ending with ``|``
-        that includes a separator row like ``|---|---|``.
+
+        A valid markdown table must have:
+          - A header row
+          - A separator row with ``---`` cells (line 2)
+          - At least one data row
+          - At least 2 columns
         """
         tables = []
         lines = md_text.split('\n')
@@ -263,18 +423,15 @@ class PDFProcessingHandler:
                 in_table = True
             else:
                 if in_table and current_table_lines:
-                    # Validate: must contain a separator row  |---|...|
-                    table_text = '\n'.join(current_table_lines)
-                    if re.search(r'\|[\s:.-]+\|', table_text):
-                        tables.append(table_text)
+                    if PDFProcessingHandler._is_valid_table(current_table_lines):
+                        tables.append('\n'.join(current_table_lines))
                     current_table_lines = []
                 in_table = False
 
         # Handle table at end of text
         if current_table_lines:
-            table_text = '\n'.join(current_table_lines)
-            if re.search(r'\|[\s:.-]+\|', table_text):
-                tables.append(table_text)
+            if PDFProcessingHandler._is_valid_table(current_table_lines):
+                tables.append('\n'.join(current_table_lines))
 
         return tables
 
@@ -303,30 +460,91 @@ class PDFProcessingHandler:
         """
         Parse a GFM markdown table into headers and rows.
 
-        Example input::
+        Expected format::
 
             | Model | Acc | F1 |
             |-------|-----|-----|
             | BERT  | 0.9 | 0.8 |
+
+        Returns (None, None) for invalid input.
         """
         lines = [l.strip() for l in table_md.strip().split('\n') if l.strip()]
-        if len(lines) < 2:
+        if len(lines) < 3:               # header + separator + ≥1 data row
             return None, None
 
         def _split_row(line: str) -> List[str]:
-            # Remove leading/trailing pipes and split
             return [c.strip() for c in line.strip('|').split('|')]
 
+        # Line 0 = header, line 1 = separator, lines 2+ = data
         headers = _split_row(lines[0])
 
         rows = []
-        for line in lines[1:]:
-            # Skip separator rows
+        for line in lines[2:]:            # skip header (0) and separator (1)
             if re.match(r'^[\s|:-]+$', line):
-                continue
+                continue                  # extra separator row
             rows.append(_split_row(line))
 
         return headers, rows if rows else None
+
+    def _render_table_image_from_doc(self, doc: fitz.Document, page_index: int,
+                                     table_md: str, table_id: str
+                                     ) -> Tuple[Optional[str], Optional[Image.Image]]:
+        """
+        Render a table region from an already-open PDF document as a PNG.
+
+        Returns (image_path, pil_image) — the PIL image is kept so the
+        caller can pass it into a batch CLIP embedding call later.
+        """
+        try:
+            if page_index >= doc.page_count or page_index < 0:
+                return None, None
+
+            page = doc[page_index]
+
+            lines = [l.strip() for l in table_md.strip().split('\n') if l.strip()]
+            if not lines:
+                return None, None
+
+            header_cells = [c.strip() for c in lines[0].strip('|').split('|') if c.strip()]
+            search_term = header_cells[0] if header_cells else None
+
+            table_rect = None
+            if search_term:
+                instances = page.search_for(search_term)
+                if instances:
+                    table_rect = instances[0]
+                    if len(header_cells) > 1:
+                        last_instances = page.search_for(header_cells[-1])
+                        if last_instances:
+                            table_rect = table_rect | last_instances[0]
+
+                    num_data_rows = len([l for l in lines[1:] if not re.match(r'^[\s|:-]+$', l)])
+                    table_rect.y1 = min(page.rect.height, table_rect.y1 + num_data_rows * 22)
+
+                    padding = 12
+                    table_rect.x0 = max(0, table_rect.x0 - padding)
+                    table_rect.y0 = max(0, table_rect.y0 - padding)
+                    table_rect.x1 = min(page.rect.width, table_rect.x1 + padding)
+                    table_rect.y1 = min(page.rect.height, table_rect.y1 + padding)
+
+            if table_rect is None or table_rect.is_empty:
+                table_rect = page.rect
+
+            mat = fitz.Matrix(2.0, 2.0)
+            pix = page.get_pixmap(matrix=mat, clip=table_rect)
+
+            img_data = pix.tobytes("png")
+            pil_image = Image.open(io.BytesIO(img_data)).convert("RGB")
+
+            image_path = os.path.join(self.tables_dir, f"{table_id}_image.png")
+            pil_image.save(image_path)
+
+            pix = None
+            return image_path, pil_image
+
+        except Exception as e:
+            self.logger.error(f"Error rendering table image for {table_id}: {e}")
+            return None, None
 
     def _render_table_image_from_page(self, pdf_path: str, page_index: int,
                                       table_md: str, table_id: str

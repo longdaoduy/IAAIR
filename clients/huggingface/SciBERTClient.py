@@ -78,3 +78,50 @@ class SciBERTClient:
 
         embedding = self._mean_pooling(outputs, inputs["attention_mask"])
         return embedding.squeeze().cpu().tolist()
+
+    def generate_text_embeddings_batch(
+        self, texts: List[str], batch_size: int = 32
+    ) -> List[Optional[List[float]]]:
+        """Generate SciBERT embeddings for a batch of texts.
+
+        Args:
+            texts: List of input texts.
+            batch_size: Number of texts to process in a single forward pass.
+
+        Returns:
+            List of embedding vectors (None for failed items).
+        """
+        if not texts:
+            return []
+
+        results: List[Optional[List[float]]] = [None] * len(texts)
+
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            try:
+                inputs = self.tokenizer(
+                    batch,
+                    return_tensors="pt",
+                    truncation=True,
+                    padding=True,
+                    max_length=self.config.max_sequence_length,
+                )
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+
+                embeddings = self._mean_pooling(outputs, inputs["attention_mask"])
+                embeddings_list = embeddings.cpu().tolist()
+                for j, idx in enumerate(range(start, start + len(batch))):
+                    results[idx] = embeddings_list[j]
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Batch text embedding error: {e}")
+                for idx in range(start, start + len(batch)):
+                    try:
+                        results[idx] = self.generate_text_embedding(texts[idx])
+                    except Exception:
+                        results[idx] = None
+
+        return results
