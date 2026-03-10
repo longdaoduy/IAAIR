@@ -356,8 +356,8 @@ class OpenAlexClient:
         per_page = 25  # OpenAlex default, max 200
 
         base_params = {
-            "filter": "has_doi:true,has_pdf_url:true",
-            "select": "id,title,publication_year,doi,ids,authorships,referenced_works,cited_by_count,primary_location,best_oa_location,locations,content_urls",
+            "filter": "has_doi:true,type:article",
+            "select": "id,title,abstract,publication_year,doi,ids,authorships,referenced_works,cited_by_count,primary_location,best_oa_location,locations,content_urls",
             "per-page": per_page
         }
 
