@@ -265,7 +265,7 @@ class PDFProcessingHandler:
                 if in_table and current_table_lines:
                     # Validate: must contain a separator row  |---|...|
                     table_text = '\n'.join(current_table_lines)
-                    if re.search(r'\|[\s-:]+\|', table_text):
+                    if re.search(r'\|[\s:.-]+\|', table_text):
                         tables.append(table_text)
                     current_table_lines = []
                 in_table = False
@@ -273,7 +273,7 @@ class PDFProcessingHandler:
         # Handle table at end of text
         if current_table_lines:
             table_text = '\n'.join(current_table_lines)
-            if re.search(r'\|[\s-:]+\|', table_text):
+            if re.search(r'\|[\s:.-]+\|', table_text):
                 tables.append(table_text)
 
         return tables
