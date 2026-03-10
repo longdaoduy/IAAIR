@@ -1,8 +1,9 @@
 """
 PDF Processing Handler for extracting figures and tables from academic papers.
 
-This handler downloads PDFs, extracts visual content (figures and tables),
-and generates descriptions and embeddings using various AI models.
+Uses pymupdf4llm for robust, LLM-optimised extraction of images and tables
+from PDF documents.  pymupdf4llm handles multi-column layouts, colorspace
+quirks and table detection out of the box.
 """
 
 import logging
@@ -11,6 +12,7 @@ import json
 import requests
 from typing import List, Optional, Tuple
 import fitz  # PyMuPDF
+import pymupdf4llm
 from PIL import Image
 import io
 import re
@@ -73,298 +75,345 @@ class PDFProcessingHandler:
 
     def extract_figures_and_tables(self, pdf_path: str, paper_id: str) -> Tuple[List[Figure], List[Table]]:
         """
-        Extract figures and tables from PDF with robust colorspace handling
-        and memory management.
+        Extract figures and tables from a PDF using pymupdf4llm.
+
+        pymupdf4llm's ``to_markdown`` with ``page_chunks=True`` and
+        ``write_images=True`` gives us:
+          • Per-page markdown text (tables rendered as GFM markdown tables)
+          • Image files saved to disk with references in the markdown
+          • Structured metadata per page (images list, tables list)
+
+        We post-process that output to build our Figure / Table entities
+        with CLIP and SciBERT embeddings.
         """
-        figures = []
-        tables = []
+        figures: List[Figure] = []
+        tables: List[Table] = []
 
         try:
-            doc = fitz.open(pdf_path)
+            # Use a paper-specific subfolder so images don't collide
+            paper_image_dir = os.path.join(self.figures_dir, paper_id)
+            os.makedirs(paper_image_dir, exist_ok=True)
+
+            # ── Run pymupdf4llm ──────────────────────────────────────────
+            page_data = pymupdf4llm.to_markdown(
+                pdf_path,
+                page_chunks=True,       # one dict per page
+                write_images=True,      # save images to disk
+                image_path=paper_image_dir,
+                image_format="png",
+                dpi=200,                # good balance quality/speed
+                image_size_limit=0.05,  # skip tiny icons (<5% of page)
+                force_text=True,        # also keep text overlapping images
+                show_progress=False,
+            )
+
             figure_counter = 1
             table_counter = 1
 
-            for page_num in range(doc.page_count):
-                page = doc[page_num]
+            for chunk in page_data:
+                page_num = chunk["metadata"]["page_number"]  # 1-based
+                md_text = chunk.get("text", "")
 
-                # --- 1. Figure Extraction ---
-                image_list = page.get_images()
-                for img_index, img in enumerate(image_list):
-                    pix = None
+                # ── 1. FIGURES ───────────────────────────────────────────
+                # pymupdf4llm writes images and inserts markdown references
+                # like  ![<desc>](path/to/image.png)
+                img_pattern = re.compile(
+                    r'!\[([^\]]*)\]\(([^)]+\.(?:png|jpg|jpeg|webp|gif))\)',
+                    re.IGNORECASE
+                )
+                for match in img_pattern.finditer(md_text):
+                    alt_text = match.group(1).strip()
+                    img_rel_path = match.group(2).strip()
+
+                    # Resolve to absolute path
+                    if not os.path.isabs(img_rel_path):
+                        img_abs_path = os.path.normpath(
+                            os.path.join(os.path.dirname(pdf_path), img_rel_path)
+                        )
+                    else:
+                        img_abs_path = img_rel_path
+
+                    if not os.path.exists(img_abs_path):
+                        self.logger.warning(f"Image file not found: {img_abs_path}")
+                        continue
+
                     try:
-                        xref = img[0]
-                        # PRIMARY FIX: Wrap the initial Pixmap creation
-                        try:
-                            pix = fitz.Pixmap(doc, xref)
-                        except Exception:
-                            # If colorspace is missing/unsupported, create an RGB Pixmap from the xref directly
-                            pix = fitz.Pixmap(fitz.csRGB, doc, xref)
+                        pil_image = Image.open(img_abs_path).convert("RGB")
+                    except Exception as e:
+                        self.logger.warning(f"Cannot open image {img_abs_path}: {e}")
+                        continue
 
-                        # Fix: Force colorspace conversion to RGB
-                        # This solves the "unsupported colorspace for png" error
-                        if pix.colorspace is None or pix.colorspace.n != 3:
-                            pix = fitz.Pixmap(fitz.csRGB, pix)
+                    # Filter tiny images that slipped through
+                    if pil_image.width < 100 or pil_image.height < 100:
+                        continue
 
-                        # Fix: Use PPM as intermediate buffer for PIL
-                        # PPM is a raw format that doesn't care about complex PDF colorspace metadata
-                        try:
-                            img_data = pix.tobytes("ppm")
-                            pil_image = Image.open(io.BytesIO(img_data)).convert("RGB")
-                        except Exception as conv_error:
-                            self.logger.warning(f"Conversion failed on page {page_num + 1}: {conv_error}")
-                            continue
+                    # Look for a "Figure N" / "Fig. N" caption nearby in the markdown
+                    description = self._find_caption_near_image(
+                        md_text, match.start(), prefix_pattern=r'(?:fig(?:ure)?)\s*\.?\s*\d+'
+                    ) or alt_text or None
 
-                        # Filter: Ignore icons/tiny UI elements
-                        if pil_image.width >= 100 and pil_image.height >= 100:
-                            figure_id = f"{paper_id}#figure_{figure_counter}"
-                            image_path = os.path.join(self.figures_dir, f"{figure_id}.png")
+                    if not description:
+                        continue
 
-                            # Save and Generate Embeddings
-                            pil_image.save(image_path)
-                            image_embedding = self.clip_client.generate_image_embedding(pil_image)
+                    # Generate embeddings
+                    image_embedding = self.clip_client.generate_image_embedding(pil_image)
+                    desc_embedding = self.scibert_client.generate_text_embedding(description)
 
-                            description = self._extract_figure_description(page, img, page_num + 1)
-                            if description:
-                                desc_embedding = self.scibert_client.generate_text_embedding(description)
+                    # Rename saved image to our canonical path
+                    figure_id = f"{paper_id}#figure_{figure_counter}"
+                    canonical_path = os.path.join(self.figures_dir, f"{figure_id}.png")
+                    try:
+                        if img_abs_path != canonical_path:
+                            os.rename(img_abs_path, canonical_path)
+                    except OSError:
+                        canonical_path = img_abs_path  # keep original
 
-                                figures.append(Figure(
-                                    id=figure_id,
-                                    paper_id=paper_id,
-                                    figure_number=figure_counter,
-                                    description=description or "",
-                                    page_number=page_num + 1,
-                                    image_path=image_path,
-                                    image_embedding=image_embedding,
-                                    description_embedding=desc_embedding
-                                ))
-                                figure_counter += 1
+                    figures.append(Figure(
+                        id=figure_id,
+                        paper_id=paper_id,
+                        figure_number=figure_counter,
+                        description=description,
+                        page_number=page_num,
+                        image_path=canonical_path,
+                        image_embedding=image_embedding,
+                        description_embedding=desc_embedding,
+                    ))
+                    figure_counter += 1
 
-                    except Exception as img_e:
-                        self.logger.error(f"Image error on page {page_num + 1}: {img_e}")
-                    finally:
-                        # Explicitly release memory (important for 140+ page docs)
-                        pix = None
+                # ── 2. TABLES ────────────────────────────────────────────
+                # pymupdf4llm renders tables as GFM markdown tables.
+                # We detect them with the standard  | … | pattern.
+                table_blocks = self._extract_markdown_tables(md_text)
+                for table_md in table_blocks:
+                    # Try to find a "Table N" caption near the table block
+                    table_caption = self._find_caption_near_table(
+                        md_text, table_md,
+                        prefix_pattern=r'(?:table|tab)\s*\.?\s*\d+'
+                    )
 
-                # --- 2. Table Extraction ---
-                try:
-                    page_tables = self._extract_tables_from_page(page, paper_id, table_counter, page_num + 1)
-                    tables.extend(page_tables)
-                    table_counter += len(page_tables)
-                except Exception as tab_e:
-                    self.logger.error(f"Table error on page {page_num + 1}: {tab_e}")
+                    headers, rows = self._parse_markdown_table(table_md)
+                    if not headers and not rows:
+                        continue
 
-            doc.close()
-            self.logger.info(f"Extracted {len(figures)} figures and {len(tables)} tables from {paper_id}")
+                    table_id = f"{paper_id}#table_{table_counter}"
+                    description = table_caption or table_md[:8000]
 
-        except Exception as e:
-            self.logger.error(f"Critical error processing PDF {pdf_path}: {e}")
+                    # Embeddings
+                    description_embedding = self.scibert_client.generate_text_embedding(description)
 
-        return figures, tables
+                    # Render the table region as an image for CLIP embedding
+                    image_path, image_embedding = self._render_table_image_from_page(
+                        pdf_path, page_num - 1, table_md, table_id
+                    )
 
-    def _extract_figure_description(self, page, img_info, page_num: int) -> Optional[str]:
-        """
-        Extract figure caption by analyzing proximity and vertical alignment.
-        """
-        try:
-            # 1. Get image bounding box
-            img_rects = page.get_image_rects(img_info[0])
-            if not img_rects:
-                return None
-            img_rect = img_rects[0]
-
-            # 2. Extract page text as dictionary for structural analysis
-            blocks = page.get_text("dict")["blocks"]
-            potential_captions = []
-
-            for block in blocks:
-                if "lines" not in block:
-                    continue
-
-                # Combine lines to handle multi-line captions
-                block_text = ""
-                for line in block["lines"]:
-                    line_text = "".join([span["text"] for span in line["spans"]])
-                    block_text += " " + line_text
-
-                block_text = block_text.strip()
-                block_rect = fitz.Rect(block["bbox"])
-
-                # 3. Look for Figure/Fig prefix at the start of blocks
-                # This distinguishes actual captions from "As shown in Fig 1..."
-                if re.search(r'^(fig|figure)\.?\s*\d+', block_text, re.IGNORECASE):
-                    # Calculate Euclidean distance
-                    distance = self._calculate_distance(img_rect, block_rect)
-
-                    # Heuristic: Captions are usually vertically aligned and close
-                    # We give a "bonus" to blocks starting below the image
-                    is_below = block_rect.y0 >= img_rect.y1 - 5
-
-                    # Weighting: favor blocks below and very close
-                    score = distance if is_below else distance * 2.0
-
-                    potential_captions.append((block_text, score))
-
-            if potential_captions:
-                # Sort by our weighted score
-                potential_captions.sort(key=lambda x: x[1])
-                return potential_captions[0][0]
-
-            return None
-
-        except Exception as e:
-            self.logger.error(f"Error extracting figure description: {e}")
-            return None
-
-    def _extract_tables_from_page(self, page, paper_id: str, start_counter: int, page_num: int) -> List[Table]:
-        tables = []
-        try:
-            text_dict = page.get_text("dict")
-
-            for block in text_dict["blocks"]:
-                if "lines" not in block:
-                    continue
-
-                # Reconstruct block text
-                block_text = ""
-                for line in block["lines"]:
-                    line_text = "".join([span["text"] for span in line["spans"]])
-                    block_text += line_text + "\n"
-
-                # Check if this block is the table body or contains the "Table X:" identifier
-                is_table_content = self._is_likely_table(block_text)
-                is_table_caption = re.search(r'^\s*(Table|Tab)\.?\s*\d+', block_text, re.IGNORECASE)
-
-                if is_table_content and is_table_caption:
-                    table_id = f"{paper_id}#table_{start_counter + len(tables)}"
-
-                    # Extract surrounding description specifically looking for "Table X:"
-                    description = self._extract_table_description(page, block["bbox"])
-
-                    # If we found table-like text, generate embeddings
-                    description_embedding = None
-                    if block_text.strip():
-                        # We embed the actual content of the table for semantic search
-                        description_embedding = self.scibert_client.generate_text_embedding(block_text)
-
-                    headers, rows = self._parse_table_structure(block_text)
-                    image_path, image_embedding = self._capture_table_image(page, block["bbox"], table_id)
-
-                    table = Table(
+                    tables.append(Table(
                         id=table_id,
                         paper_id=paper_id,
-                        table_number=start_counter + len(tables),
-                        description=description or block_text[:8000],  # Fallback to start of text
+                        table_number=table_counter,
+                        description=description,
                         page_number=page_num,
                         headers=headers,
                         rows=rows,
                         description_embedding=description_embedding,
-                        image_embedding=image_embedding
-                    )
-                    tables.append(table)
+                        image_embedding=image_embedding,
+                    ))
+                    table_counter += 1
+
+            self.logger.info(
+                f"Extracted {len(figures)} figures and {len(tables)} tables "
+                f"from {paper_id} using pymupdf4llm"
+            )
 
         except Exception as e:
-            self.logger.error(f"Error extracting tables from page {page_num}: {e}")
+            self.logger.error(f"Critical error processing PDF {pdf_path}: {e}", exc_info=True)
+
+        return figures, tables
+
+    # ─── Helper methods for the pymupdf4llm-based extraction ────────────
+
+    @staticmethod
+    def _find_caption_near_image(md_text: str, img_pos: int,
+                                 prefix_pattern: str, window: int = 600) -> Optional[str]:
+        """
+        Search for a caption (e.g. "Figure 1: …") in the markdown text
+        within *window* characters before/after the image reference.
+        """
+        start = max(0, img_pos - window)
+        end = min(len(md_text), img_pos + window)
+        neighbourhood = md_text[start:end]
+
+        # Match lines that start with "Figure N" / "Fig. N"
+        pattern = re.compile(
+            rf'({prefix_pattern}[.:]?\s*.+?)(?:\n\n|\n(?=[#|\[])|$)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m = pattern.search(neighbourhood)
+        if m:
+            return m.group(1).strip()
+        return None
+
+    @staticmethod
+    def _extract_markdown_tables(md_text: str) -> List[str]:
+        """
+        Extract all GFM markdown table blocks from text.
+        A markdown table is a sequence of lines starting/ending with ``|``
+        that includes a separator row like ``|---|---|``.
+        """
+        tables = []
+        lines = md_text.split('\n')
+        current_table_lines: List[str] = []
+        in_table = False
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('|') and stripped.endswith('|'):
+                current_table_lines.append(stripped)
+                in_table = True
+            else:
+                if in_table and current_table_lines:
+                    # Validate: must contain a separator row  |---|...|
+                    table_text = '\n'.join(current_table_lines)
+                    if re.search(r'\|[\s-:]+\|', table_text):
+                        tables.append(table_text)
+                    current_table_lines = []
+                in_table = False
+
+        # Handle table at end of text
+        if current_table_lines:
+            table_text = '\n'.join(current_table_lines)
+            if re.search(r'\|[\s-:]+\|', table_text):
+                tables.append(table_text)
 
         return tables
 
-    def _is_likely_table(self, text: str) -> bool:
-        """
-        Heuristic to determine if text block is likely a table.
-        
-        Args:
-            text: Text block to analyze
-            
-        Returns:
-            True if likely a table
-        """
-        lines = text.strip().split('\n')
-
-        # Simple heuristics
-        if len(lines) < 3:  # Tables usually have at least 3 lines
-            return False
-
-        # Check for consistent column-like structure
-        line_lengths = [len(line.split()) for line in lines if line.strip()]
-
-        if not line_lengths:
-            return False
-
-        # Look for numerical data patterns
-        numerical_lines = sum(1 for line in lines if re.search(r'\d+', line))
-
-        # If more than half the lines contain numbers, likely a table
-        return numerical_lines / len(lines) > 0.5
-
-    def _extract_table_description(self, page, table_bbox) -> Optional[str]:
-        """Extract caption for a table."""
-        try:
-            text_instances = page.get_text("dict")
-            potential_captions = []
-
-            for block in text_instances["blocks"]:
-                if "lines" in block:
-                    for line in block["lines"]:
-                        line_text = ""
-                        line_rect = fitz.Rect(line["bbox"])
-
-                        for span in line["spans"]:
-                            line_text += span["text"]
-
-                        line_text = line_text.strip()
-
-                        # Check if text contains table references
-                        if re.search(r'(table|tab)\s*\d+', line_text.lower()):
-                            distance = self._calculate_distance(fitz.Rect(table_bbox), line_rect)
-                            potential_captions.append((line_text, distance))
-
-            if potential_captions:
-                potential_captions.sort(key=lambda x: x[1])
-                return potential_captions[0][0]
-
+    @staticmethod
+    def _find_caption_near_table(md_text: str, table_md: str,
+                                 prefix_pattern: str, window: int = 400) -> Optional[str]:
+        """Find a table caption in the neighbourhood of the table block."""
+        pos = md_text.find(table_md)
+        if pos == -1:
             return None
+        start = max(0, pos - window)
+        end = min(len(md_text), pos + len(table_md) + window)
+        neighbourhood = md_text[start:end]
 
-        except Exception as e:
-            self.logger.error(f"Error extracting table description: {e}")
-            return None
+        pattern = re.compile(
+            rf'({prefix_pattern}[.:]?\s*.+?)(?:\n\n|\n(?=\|)|$)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m = pattern.search(neighbourhood)
+        if m:
+            return m.group(1).strip()
+        return None
 
-    def _parse_table_structure(self, table_text: str) -> Tuple[Optional[List[str]], Optional[List[List[str]]]]:
+    @staticmethod
+    def _parse_markdown_table(table_md: str) -> Tuple[Optional[List[str]], Optional[List[List[str]]]]:
         """
-        Parse table structure from text.
-        
-        Args:
-            table_text: Raw table text
-            
-        Returns:
-            Tuple of (headers, rows)
+        Parse a GFM markdown table into headers and rows.
+
+        Example input::
+
+            | Model | Acc | F1 |
+            |-------|-----|-----|
+            | BERT  | 0.9 | 0.8 |
         """
-        try:
-            lines = [line.strip() for line in table_text.split('\n') if line.strip()]
-
-            if len(lines) < 2:
-                return None, None
-
-            # Assume first line is headers
-            headers = lines[0].split()
-
-            # Parse remaining lines as rows
-            rows = []
-            for line in lines[1:]:
-                row = line.split()
-                if row:  # Only add non-empty rows
-                    rows.append(row)
-
-            return headers, rows if rows else None
-
-        except Exception as e:
-            self.logger.error(f"Error parsing table structure: {e}")
+        lines = [l.strip() for l in table_md.strip().split('\n') if l.strip()]
+        if len(lines) < 2:
             return None, None
 
-    def _calculate_distance(self, rect1: fitz.Rect, rect2: fitz.Rect) -> float:
-        """Calculate distance between two rectangles."""
-        center1 = ((rect1.x0 + rect1.x1) / 2, (rect1.y0 + rect1.y1) / 2)
-        center2 = ((rect2.x0 + rect2.x1) / 2, (rect2.y0 + rect2.y1) / 2)
+        def _split_row(line: str) -> List[str]:
+            # Remove leading/trailing pipes and split
+            return [c.strip() for c in line.strip('|').split('|')]
 
-        return ((center1[0] - center2[0]) ** 2 + (center1[1] - center2[1]) ** 2) ** 0.5
+        headers = _split_row(lines[0])
+
+        rows = []
+        for line in lines[1:]:
+            # Skip separator rows
+            if re.match(r'^[\s|:-]+$', line):
+                continue
+            rows.append(_split_row(line))
+
+        return headers, rows if rows else None
+
+    def _render_table_image_from_page(self, pdf_path: str, page_index: int,
+                                      table_md: str, table_id: str
+                                      ) -> Tuple[Optional[str], Optional[List[float]]]:
+        """
+        Render the table region on the given PDF page as a PNG image and
+        generate a CLIP embedding for it.
+
+        We search the page text for the first cell of the table header to
+        locate the table's bounding box, then clip and render that region.
+        """
+        try:
+            doc = fitz.open(pdf_path)
+            if page_index >= doc.page_count:
+                doc.close()
+                return None, None
+
+            page = doc[page_index]
+
+            # Try to find table bbox by searching for header cells on the page
+            lines = [l.strip() for l in table_md.strip().split('\n') if l.strip()]
+            if not lines:
+                doc.close()
+                return None, None
+
+            header_cells = [c.strip() for c in lines[0].strip('|').split('|') if c.strip()]
+            search_term = header_cells[0] if header_cells else None
+
+            table_rect = None
+            if search_term:
+                instances = page.search_for(search_term)
+                if instances:
+                    # Start with the first hit and expand with other cells
+                    table_rect = instances[0]
+                    # Also search for last header cell to get width
+                    if len(header_cells) > 1:
+                        last_instances = page.search_for(header_cells[-1])
+                        if last_instances:
+                            table_rect = table_rect | last_instances[0]
+
+                    # Expand downward to cover all rows  (estimate ~20pt per row)
+                    num_data_rows = len([l for l in lines[1:] if not re.match(r'^[\s|:-]+$', l)])
+                    table_rect.y1 = min(page.rect.height, table_rect.y1 + num_data_rows * 22)
+
+                    # Add padding
+                    padding = 12
+                    table_rect.x0 = max(0, table_rect.x0 - padding)
+                    table_rect.y0 = max(0, table_rect.y0 - padding)
+                    table_rect.x1 = min(page.rect.width, table_rect.x1 + padding)
+                    table_rect.y1 = min(page.rect.height, table_rect.y1 + padding)
+
+            if table_rect is None or table_rect.is_empty:
+                # Fallback: render the whole page
+                table_rect = page.rect
+
+            mat = fitz.Matrix(2.0, 2.0)
+            pix = page.get_pixmap(matrix=mat, clip=table_rect)
+
+            # Convert to PIL
+            img_data = pix.tobytes("png")
+            pil_image = Image.open(io.BytesIO(img_data)).convert("RGB")
+
+            image_path = os.path.join(self.tables_dir, f"{table_id}_image.png")
+            pil_image.save(image_path)
+
+            image_embedding = None
+            try:
+                image_embedding = self.clip_client.generate_image_embedding(pil_image)
+            except Exception as embed_err:
+                self.logger.warning(f"Failed embedding for table {table_id}: {embed_err}")
+
+            pix = None
+            doc.close()
+            self.logger.info(f"Rendered table image for {table_id}: {image_path}")
+            return image_path, image_embedding
+
+        except Exception as e:
+            self.logger.error(f"Error rendering table image for {table_id}: {e}")
+            return None, None
 
     def _save_figures_to_milvus(self, figures: List[Figure]) -> bool:
         """
@@ -547,87 +596,3 @@ class PDFProcessingHandler:
             pass
 
         return figures, tables
-
-    def _capture_table_image(self, page, bbox, table_id: str) -> Tuple[Optional[str], Optional[List[float]]]:
-        """
-        Capture table region as image and generate CLIP embedding.
-
-        Args:
-            page: PyMuPDF page object
-            bbox: Bounding box of the table region
-            table_id: Table ID for filename
-
-        Returns:
-            Tuple of (image_path, image_embedding) or (None, None) if failed
-        """
-        try:
-            # Create a rect from bbox with some padding
-            table_rect = fitz.Rect(bbox)
-
-            # Add padding around the table (10 points on each side)
-            padding = 10
-            table_rect.x0 = max(0, table_rect.x0 - padding)
-            table_rect.y0 = max(0, table_rect.y0 - padding)
-            table_rect.x1 = min(page.rect.width, table_rect.x1 + padding)
-            table_rect.y1 = min(page.rect.height, table_rect.y1 + padding)
-
-            # Create pixmap of the table region
-            mat = fitz.Matrix(2.0, 2.0)  # 2x zoom for better quality
-            pix = page.get_pixmap(matrix=mat, clip=table_rect)
-
-            # Handle colorspace issues similar to figure extraction
-            if pix.colorspace is None:
-                self.logger.warning(f"Skipping table with None colorspace: {table_id}")
-                pix = None
-                return None, None
-
-            # Convert to RGB colorspace for consistent processing
-            if pix.n - pix.alpha > 4:  # CMYK or other multi-channel
-                pix = fitz.Pixmap(fitz.csRGB, pix)
-            elif pix.n - pix.alpha == 1:  # Grayscale
-                pix = fitz.Pixmap(fitz.csRGB, pix)
-            elif pix.alpha:  # Has alpha channel
-                pix = fitz.Pixmap(fitz.csRGB, pix)
-
-            # Verify we have a valid pixmap
-            if pix.colorspace is None:
-                self.logger.warning(f"Skipping table with problematic colorspace: {table_id}")
-                pix = None
-                return None, None
-
-            # Convert to PIL Image
-            try:
-                img_data = pix.tobytes("png")
-                pil_image = Image.open(io.BytesIO(img_data))
-            except Exception as conv_error:
-                self.logger.warning(f"Failed to convert table pixmap to PIL Image: {conv_error}")
-                pix = None
-                return None, None
-
-            # Save table image
-            image_path = os.path.join(self.tables_dir, f"{table_id}_image.png")
-            pil_image.save(image_path)
-
-            # Generate CLIP embedding for the table image
-            image_embedding = None
-            try:
-                image_embedding = self.clip_client.generate_image_embedding(pil_image)
-            except Exception as embed_error:
-                self.logger.warning(f"Failed to generate embedding for table image {table_id}: {embed_error}")
-
-            # Clean up pixmap
-            if pix:
-                pix = None
-
-            self.logger.info(f"Captured table image for {table_id}: {image_path}")
-            return image_path, image_embedding
-
-        except Exception as e:
-            self.logger.error(f"Error capturing table image for {table_id}: {e}")
-            # Ensure pixmap cleanup even in error cases
-            try:
-                if 'pix' in locals() and pix:
-                    pix = None
-            except:
-                pass
-            return None, None
