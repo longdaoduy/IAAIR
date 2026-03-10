@@ -947,8 +947,14 @@ class PDFProcessingHandler:
         """
         Render a table region from an already-open PDF document as a PNG.
 
-        Returns (image_path, pil_image) — the PIL image is kept so the
-        caller can pass it into a batch CLIP embedding call later.
+        Strategy order:
+        1. Use PyMuPDF ``page.find_tables()`` — gives pixel-perfect bboxes.
+           Match our markdown table to the best native table by header overlap.
+        2. Fallback: text-search for header AND last-row cells to anchor
+           top-left and bottom-right corners precisely.
+        3. Last resort: render entire page (rare).
+
+        Returns (image_path, pil_image).
         """
         try:
             if page_index >= doc.page_count or page_index < 0:
@@ -961,28 +967,117 @@ class PDFProcessingHandler:
                 return None, None
 
             header_cells = [c.strip() for c in lines[0].strip('|').split('|') if c.strip()]
-            search_term = header_cells[0] if header_cells else None
+            # Last data row (skip separator lines)
+            data_lines = [l for l in lines[2:] if not re.match(r'^[\s|:-]+$', l)]
+            last_row_cells = []
+            if data_lines:
+                last_row_cells = [c.strip() for c in data_lines[-1].strip('|').split('|') if c.strip()]
 
             table_rect = None
-            if search_term:
-                instances = page.search_for(search_term)
-                if instances:
-                    table_rect = instances[0]
-                    if len(header_cells) > 1:
-                        last_instances = page.search_for(header_cells[-1])
-                        if last_instances:
-                            table_rect = table_rect | last_instances[0]
 
-                    num_data_rows = len([l for l in lines[1:] if not re.match(r'^[\s|:-]+$', l)])
-                    table_rect.y1 = min(page.rect.height, table_rect.y1 + num_data_rows * 22)
+            # ── Strategy 1: PyMuPDF native table detection ──────────────
+            try:
+                tabs = page.find_tables()
+                if tabs and tabs.tables:
+                    header_set = {c.lower() for c in header_cells if c}
+                    best_table = None
+                    best_overlap = 0
+                    for tab in tabs.tables:
+                        # tab.header.names contains the detected header cells
+                        try:
+                            native_headers = set()
+                            if hasattr(tab, 'header') and hasattr(tab.header, 'names'):
+                                native_headers = {
+                                    str(n).strip().lower()
+                                    for n in tab.header.names if n
+                                }
+                            # Also try first row of extracted content
+                            if not native_headers and hasattr(tab, 'extract'):
+                                rows_data = tab.extract()
+                                if rows_data and rows_data[0]:
+                                    native_headers = {
+                                        str(c).strip().lower()
+                                        for c in rows_data[0] if c
+                                    }
+                            overlap = len(header_set & native_headers)
+                            if overlap > best_overlap:
+                                best_overlap = overlap
+                                best_table = tab
+                        except Exception:
+                            continue
 
-                    padding = 12
-                    table_rect.x0 = max(0, table_rect.x0 - padding)
-                    table_rect.y0 = max(0, table_rect.y0 - padding)
-                    table_rect.x1 = min(page.rect.width, table_rect.x1 + padding)
-                    table_rect.y1 = min(page.rect.height, table_rect.y1 + padding)
+                    if best_table and best_overlap >= max(1, len(header_set) // 2):
+                        table_rect = fitz.Rect(best_table.bbox)
+                        self.logger.debug(
+                            f"Table {table_id}: native bbox found "
+                            f"(overlap={best_overlap}/{len(header_set)})"
+                        )
+            except Exception as e:
+                self.logger.debug(f"find_tables() failed for {table_id}: {e}")
 
-            if table_rect is None or table_rect.is_empty:
+            # ── Strategy 2: Text-search anchoring (header + last row) ───
+            if table_rect is None:
+                top_rect = None
+                bottom_rect = None
+
+                # Search for ALL header cells to get a precise top edge
+                for cell_text in header_cells:
+                    if not cell_text or len(cell_text) < 2:
+                        continue
+                    hits = page.search_for(cell_text)
+                    if hits:
+                        # Pick the hit closest to existing top_rect, or first
+                        hit = hits[0]
+                        if top_rect is None:
+                            top_rect = hit
+                        else:
+                            top_rect = top_rect | hit
+
+                # Search for last data-row cells to anchor bottom edge
+                for cell_text in last_row_cells:
+                    if not cell_text or len(cell_text) < 2:
+                        continue
+                    hits = page.search_for(cell_text)
+                    if hits:
+                        # Pick the lowest hit on the page
+                        hit = max(hits, key=lambda r: r.y1)
+                        if bottom_rect is None:
+                            bottom_rect = hit
+                        else:
+                            bottom_rect = bottom_rect | hit
+
+                if top_rect is not None:
+                    if bottom_rect is not None:
+                        # Merge top and bottom anchors
+                        table_rect = top_rect | bottom_rect
+                    else:
+                        # No bottom anchor — estimate from row count
+                        num_data_rows = len(data_lines)
+                        table_rect = fitz.Rect(top_rect)
+                        table_rect.y1 = min(
+                            page.rect.height,
+                            table_rect.y1 + num_data_rows * 18,
+                        )
+
+            # ── Apply padding and clamp ─────────────────────────────────
+            if table_rect is not None and not table_rect.is_empty:
+                padding = 15
+                table_rect.x0 = max(0, table_rect.x0 - padding)
+                table_rect.y0 = max(0, table_rect.y0 - padding)
+                table_rect.x1 = min(page.rect.width, table_rect.x1 + padding)
+                table_rect.y1 = min(page.rect.height, table_rect.y1 + padding)
+
+                # Sanity: if the rect is >85% of page area, it's likely wrong
+                page_area = page.rect.width * page.rect.height
+                table_area = table_rect.width * table_rect.height
+                if page_area > 0 and (table_area / page_area) > 0.85:
+                    self.logger.debug(
+                        f"Table {table_id}: bbox covers {table_area/page_area:.0%} "
+                        f"of page — falling back to full page"
+                    )
+                    table_rect = page.rect
+            else:
+                # Strategy 3: full page fallback
                 table_rect = page.rect
 
             mat = fitz.Matrix(2.0, 2.0)
@@ -1005,76 +1100,26 @@ class PDFProcessingHandler:
                                       table_md: str, table_id: str
                                       ) -> Tuple[Optional[str], Optional[List[float]]]:
         """
-        Render the table region on the given PDF page as a PNG image and
-        generate a CLIP embedding for it.
+        Legacy single-call variant: opens the PDF, renders, and embeds.
 
-        We search the page text for the first cell of the table header to
-        locate the table's bounding box, then clip and render that region.
+        Delegates to ``_render_table_image_from_doc`` for the actual
+        bbox detection, then generates a CLIP embedding.
         """
         try:
             doc = fitz.open(pdf_path)
-            if page_index >= doc.page_count:
-                doc.close()
-                return None, None
-
-            page = doc[page_index]
-
-            # Try to find table bbox by searching for header cells on the page
-            lines = [l.strip() for l in table_md.strip().split('\n') if l.strip()]
-            if not lines:
-                doc.close()
-                return None, None
-
-            header_cells = [c.strip() for c in lines[0].strip('|').split('|') if c.strip()]
-            search_term = header_cells[0] if header_cells else None
-
-            table_rect = None
-            if search_term:
-                instances = page.search_for(search_term)
-                if instances:
-                    # Start with the first hit and expand with other cells
-                    table_rect = instances[0]
-                    # Also search for last header cell to get width
-                    if len(header_cells) > 1:
-                        last_instances = page.search_for(header_cells[-1])
-                        if last_instances:
-                            table_rect = table_rect | last_instances[0]
-
-                    # Expand downward to cover all rows  (estimate ~20pt per row)
-                    num_data_rows = len([l for l in lines[1:] if not re.match(r'^[\s|:-]+$', l)])
-                    table_rect.y1 = min(page.rect.height, table_rect.y1 + num_data_rows * 22)
-
-                    # Add padding
-                    padding = 12
-                    table_rect.x0 = max(0, table_rect.x0 - padding)
-                    table_rect.y0 = max(0, table_rect.y0 - padding)
-                    table_rect.x1 = min(page.rect.width, table_rect.x1 + padding)
-                    table_rect.y1 = min(page.rect.height, table_rect.y1 + padding)
-
-            if table_rect is None or table_rect.is_empty:
-                # Fallback: render the whole page
-                table_rect = page.rect
-
-            mat = fitz.Matrix(2.0, 2.0)
-            pix = page.get_pixmap(matrix=mat, clip=table_rect)
-
-            # Convert to PIL
-            img_data = pix.tobytes("png")
-            pil_image = Image.open(io.BytesIO(img_data)).convert("RGB")
-
-            image_path = os.path.join(self.tables_dir, f"{table_id}_image.png")
-            pil_image.save(image_path)
+            img_path, pil_image = self._render_table_image_from_doc(
+                doc, page_index, table_md, table_id
+            )
+            doc.close()
 
             image_embedding = None
-            try:
-                image_embedding = self.clip_client.generate_image_embedding(pil_image)
-            except Exception as embed_err:
-                self.logger.warning(f"Failed embedding for table {table_id}: {embed_err}")
+            if pil_image is not None:
+                try:
+                    image_embedding = self.clip_client.generate_image_embedding(pil_image)
+                except Exception as embed_err:
+                    self.logger.warning(f"Failed embedding for table {table_id}: {embed_err}")
 
-            pix = None
-            doc.close()
-            self.logger.info(f"Rendered table image for {table_id}: {image_path}")
-            return image_path, image_embedding
+            return img_path, image_embedding
 
         except Exception as e:
             self.logger.error(f"Error rendering table image for {table_id}: {e}")
