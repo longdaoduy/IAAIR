@@ -105,7 +105,7 @@ class PDFProcessingHandler:
                 image_path=paper_image_dir,
                 image_format="png",
                 dpi=150,                # 150 is sufficient and ~45% faster than 200
-                image_size_limit=0.05,
+                image_size_limit=0.01,  # lowered from 0.05 – many sub-figures are <5% of page
                 force_text=True,
                 show_progress=False,
             )
@@ -213,7 +213,9 @@ class PDFProcessingHandler:
                         # caption near it that references "Figure" / "Fig".
                         # Pure alt-text from the markdown tag is NOT enough.
                         description = self._find_caption_near_image(
-                            md_text, match.start(), prefix_pattern=r'(?:fig(?:ure)?)\s*\.?\s*\d+'
+                            md_text, match.start(),
+                            prefix_pattern=r'(?:fig(?:ure|\.)?)\s*\.?\s*(?:S?\d+[a-z]?(?:\([a-z]\))?)',
+                            window=800,
                         )
 
                         if not description or not re.search(r'\bfig(?:ure)?\b', description, re.IGNORECASE):
@@ -253,7 +255,8 @@ class PDFProcessingHandler:
                 for table_md in table_blocks:
                     table_caption = self._find_caption_near_table(
                         md_text, table_md,
-                        prefix_pattern=r'(?:table|tab)\s*\.?\s*\d+'
+                        prefix_pattern=r'(?:tab(?:le|\.)?)\s*\.?\s*(?:S?\d+[a-z]?)',
+                        window=600,
                     )
 
                     headers, rows = self._parse_markdown_table(table_md)
@@ -280,6 +283,104 @@ class PDFProcessingHandler:
                     table_counter += 1
                     if len(raw_tables) >= self.MAX_TABLES_PER_PAPER:
                         break
+
+            # ── Phase 1a-fallback: PyMuPDF native image extraction ──────
+            # If pymupdf4llm didn't produce enough figures (e.g. vector
+            # graphics, inline images it didn't export), fall back to
+            # PyMuPDF's page.get_images() which extracts all raster images
+            # embedded in the PDF XObjects.
+            if len(raw_figures) < self.MAX_FIGURES_PER_PAPER:
+                try:
+                    doc = fitz.open(pdf_path)
+                    full_text_by_page: Dict[int, str] = {}
+
+                    for page_idx in range(doc.page_count):
+                        if len(raw_figures) >= self.MAX_FIGURES_PER_PAPER:
+                            break
+
+                        page = doc[page_idx]
+                        page_num = page_idx + 1
+
+                        # Cache page text for caption search
+                        if page_num not in full_text_by_page:
+                            full_text_by_page[page_num] = page.get_text("text")
+
+                        image_list = page.get_images(full=True)
+                        for img_info in image_list:
+                            if len(raw_figures) >= self.MAX_FIGURES_PER_PAPER:
+                                break
+
+                            xref = img_info[0]
+                            try:
+                                base_image = doc.extract_image(xref)
+                                if not base_image or not base_image.get("image"):
+                                    continue
+
+                                img_bytes = base_image["image"]
+                                pil_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+
+                                # Skip small images (icons, logos, decorations)
+                                if pil_image.width < 100 or pil_image.height < 100:
+                                    continue
+
+                                # Exact-hash dedup
+                                md5 = hashlib.md5(img_bytes).hexdigest()
+                                if md5 in _seen_hashes:
+                                    _skipped_dupes += 1
+                                    continue
+                                _seen_hashes.add(md5)
+
+                                # Perceptual-hash dedup
+                                phash = self._compute_image_phash(pil_image)
+                                if phash and phash in _seen_phashes:
+                                    _skipped_dupes += 1
+                                    continue
+                                if phash:
+                                    _seen_phashes.add(phash)
+
+                                # Search for a figure caption on this page
+                                page_text = full_text_by_page[page_num]
+                                description = self._find_caption_in_page_text(
+                                    page_text,
+                                    prefix_pattern=r'(?:fig(?:ure|\.)?)\s*\.?\s*(?:S?\d+[a-z]?(?:\([a-z]\))?)',
+                                )
+                                if not description or not re.search(
+                                    r'\bfig(?:ure)?\b', description, re.IGNORECASE
+                                ):
+                                    continue
+
+                                figure_id = f"{paper_id}#figure_{figure_counter}"
+                                canonical_path = os.path.join(
+                                    self.figures_dir, f"{figure_id}.png"
+                                )
+                                pil_image.save(canonical_path, "PNG")
+
+                                rf = _FigureRaw()
+                                rf.figure_id = figure_id
+                                rf.paper_id = paper_id
+                                rf.figure_number = figure_counter
+                                rf.description = description
+                                rf.page_number = page_num
+                                rf.image_path = canonical_path
+                                rf.pil_image = pil_image
+                                raw_figures.append(rf)
+                                figure_counter += 1
+
+                            except Exception as img_err:
+                                self.logger.debug(
+                                    f"Could not extract image xref={xref} "
+                                    f"from page {page_num}: {img_err}"
+                                )
+                                continue
+
+                    doc.close()
+                    if figure_counter > 1:
+                        self.logger.info(
+                            f"PyMuPDF native fallback found {len(raw_figures)} "
+                            f"total figures for {paper_id}"
+                        )
+                except Exception as e:
+                    self.logger.warning(f"PyMuPDF native figure fallback failed: {e}")
 
             # ── Phase 1b: Remove sub-images contained in larger figures ─
             raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
@@ -583,23 +684,77 @@ class PDFProcessingHandler:
 
     @staticmethod
     def _find_caption_near_image(md_text: str, img_pos: int,
-                                 prefix_pattern: str, window: int = 600) -> Optional[str]:
+                                 prefix_pattern: str, window: int = 800) -> Optional[str]:
         """
         Search for a caption (e.g. "Figure 1: …") in the markdown text
         within *window* characters before/after the image reference.
+
+        Uses multiple strategies:
+        1. Standard prefix match ("Figure 1: description…")
+        2. Bold/italic caption ("**Figure 1.** description…")
+        3. Parenthetical label ((a) description) near the image
         """
         start = max(0, img_pos - window)
         end = min(len(md_text), img_pos + window)
         neighbourhood = md_text[start:end]
 
-        # Match lines that start with "Figure N" / "Fig. N"
+        # Strategy 1: Standard caption – "Figure 1: …" or "Fig. 2. …"
+        # Terminate at double-newline or a line that starts a new section
+        # (heading, another figure/table, or a pipe-table row).
         pattern = re.compile(
-            rf'({prefix_pattern}[.:]?\s*.+?)(?:\n\n|\n(?=[#|\[])|$)',
+            rf'({prefix_pattern}[.:\-—]?\s*.+?)'
+            r'(?:\n\n|\n(?=#{1,3}\s)|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?|\|)\s*\.?\s*\d)|$)',
             re.IGNORECASE | re.DOTALL,
         )
         m = pattern.search(neighbourhood)
         if m:
-            return m.group(1).strip()
+            caption = m.group(1).strip()
+            # Trim excessively long captions (> 1000 chars) – likely runaway match
+            if len(caption) > 1000:
+                caption = caption[:1000].rsplit('.', 1)[0] + '.'
+            return caption
+
+        # Strategy 2: Bold / italic markdown caption
+        # e.g. "**Figure 1.** Some description here"
+        bold_pattern = re.compile(
+            r'(\*{1,2}(?:fig(?:ure|\.)?\s*\.?\s*S?\d+[a-z]?)\*{1,2}[.:\-—]?\s*.+?)'
+            r'(?:\n\n|\n(?=#{1,3}\s)|$)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m2 = bold_pattern.search(neighbourhood)
+        if m2:
+            caption = m2.group(1).strip().strip('*').strip()
+            if len(caption) > 1000:
+                caption = caption[:1000].rsplit('.', 1)[0] + '.'
+            return caption
+
+        return None
+
+    @staticmethod
+    def _find_caption_in_page_text(page_text: str,
+                                   prefix_pattern: str) -> Optional[str]:
+        """
+        Search raw page text (from PyMuPDF ``page.get_text("text")``) for
+        a figure/table caption.  Used by the native-extraction fallback
+        where we don't have a specific image position in the markdown.
+
+        Returns the first matching caption, or None.
+        """
+        if not page_text:
+            return None
+
+        # Standard caption line(s)
+        pattern = re.compile(
+            rf'({prefix_pattern}[.:\-—]?\s*.+?)'
+            r'(?:\n\n|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?)\s*\.?\s*\d)|$)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m = pattern.search(page_text)
+        if m:
+            caption = m.group(1).strip()
+            if len(caption) > 1000:
+                caption = caption[:1000].rsplit('.', 1)[0] + '.'
+            return caption
         return None
 
     @staticmethod
@@ -713,8 +868,13 @@ class PDFProcessingHandler:
 
     @staticmethod
     def _find_caption_near_table(md_text: str, table_md: str,
-                                 prefix_pattern: str, window: int = 400) -> Optional[str]:
-        """Find a table caption in the neighbourhood of the table block."""
+                                 prefix_pattern: str, window: int = 600) -> Optional[str]:
+        """
+        Find a table caption in the neighbourhood of the table block.
+
+        Searches both above and below the table for lines starting
+        with "Table N" / "Tab. N" etc.
+        """
         pos = md_text.find(table_md)
         if pos == -1:
             return None
@@ -722,13 +882,32 @@ class PDFProcessingHandler:
         end = min(len(md_text), pos + len(table_md) + window)
         neighbourhood = md_text[start:end]
 
+        # Strategy 1: standard caption line
         pattern = re.compile(
-            rf'({prefix_pattern}[.:]?\s*.+?)(?:\n\n|\n(?=\|)|$)',
+            rf'({prefix_pattern}[.:\-—]?\s*.+?)'
+            r'(?:\n\n|\n(?=\|)|\n(?=#{1,3}\s)|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?)\.?\s*\d)|$)',
             re.IGNORECASE | re.DOTALL,
         )
         m = pattern.search(neighbourhood)
         if m:
-            return m.group(1).strip()
+            caption = m.group(1).strip()
+            if len(caption) > 1000:
+                caption = caption[:1000].rsplit('.', 1)[0] + '.'
+            return caption
+
+        # Strategy 2: bold/italic table caption
+        bold_pattern = re.compile(
+            r'(\*{1,2}(?:tab(?:le|\.)?\s*\.?\s*S?\d+[a-z]?)\*{1,2}[.:\-—]?\s*.+?)'
+            r'(?:\n\n|\n(?=\|)|$)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m2 = bold_pattern.search(neighbourhood)
+        if m2:
+            caption = m2.group(1).strip().strip('*').strip()
+            if len(caption) > 1000:
+                caption = caption[:1000].rsplit('.', 1)[0] + '.'
+            return caption
+
         return None
 
     @staticmethod
