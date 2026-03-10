@@ -12,7 +12,24 @@ import json
 import requests
 from typing import List, Optional, Tuple
 import fitz  # PyMuPDF
-import pymupdf4llm
+
+# Import pymupdf4llm with a fallback to the legacy (pure-Python) path.
+# On some environments (e.g. Colab) the layout auto-detection in
+# pymupdf4llm.__init__ can fail with a NameError when pymupdf._get_layout
+# is partially defined but pymupdf_layout is not installed.
+try:
+    import pymupdf4llm
+    # Quick sanity check: make sure to_markdown is actually callable
+    pymupdf4llm.to_markdown  # noqa: B018
+except (ImportError, NameError, AttributeError):
+    pymupdf4llm = None
+
+if pymupdf4llm is None:
+    # Fallback: import the legacy converter directly
+    from pymupdf4llm.helpers.pymupdf_rag import to_markdown as _to_markdown
+else:
+    _to_markdown = pymupdf4llm.to_markdown
+
 from PIL import Image
 import io
 import re
@@ -95,7 +112,7 @@ class PDFProcessingHandler:
             os.makedirs(paper_image_dir, exist_ok=True)
 
             # ── Run pymupdf4llm ──────────────────────────────────────────
-            page_data = pymupdf4llm.to_markdown(
+            page_data = _to_markdown(
                 pdf_path,
                 page_chunks=True,       # one dict per page
                 write_images=True,      # save images to disk
