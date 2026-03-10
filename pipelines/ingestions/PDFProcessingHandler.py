@@ -125,22 +125,14 @@ class PDFProcessingHandler:
                     alt_text = match.group(1).strip()
                     img_rel_path = match.group(2).strip()
 
-                    # Resolve to absolute path
-                    if not os.path.isabs(img_rel_path):
-                        img_abs_path = os.path.normpath(
-                            os.path.join(os.path.dirname(pdf_path), img_rel_path)
-                        )
-                    else:
-                        img_abs_path = img_rel_path
-
-                    if not os.path.exists(img_abs_path):
-                        self.logger.warning(f"Image file not found: {img_abs_path}")
+                    if not os.path.exists(img_rel_path):
+                        self.logger.warning(f"Image file not found: {img_rel_path}")
                         continue
 
                     try:
-                        pil_image = Image.open(img_abs_path).convert("RGB")
+                        pil_image = Image.open(img_rel_path).convert("RGB")
                     except Exception as e:
-                        self.logger.warning(f"Cannot open image {img_abs_path}: {e}")
+                        self.logger.warning(f"Cannot open image {img_rel_path}: {e}")
                         continue
 
                     # Filter tiny images that slipped through
@@ -163,10 +155,10 @@ class PDFProcessingHandler:
                     figure_id = f"{paper_id}#figure_{figure_counter}"
                     canonical_path = os.path.join(self.figures_dir, f"{figure_id}.png")
                     try:
-                        if img_abs_path != canonical_path:
-                            os.rename(img_abs_path, canonical_path)
+                        if img_rel_path != canonical_path:
+                            os.rename(img_rel_path, canonical_path)
                     except OSError:
-                        canonical_path = img_abs_path  # keep original
+                        canonical_path = img_rel_path  # keep original
 
                     figures.append(Figure(
                         id=figure_id,
