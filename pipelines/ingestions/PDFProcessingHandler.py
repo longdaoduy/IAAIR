@@ -209,15 +209,19 @@ class PDFProcessingHandler:
                         if phash:
                             _seen_phashes.add(phash)
 
+                        # A figure is only valid if we can find a real
+                        # caption near it that references "Figure" / "Fig".
+                        # Pure alt-text from the markdown tag is NOT enough.
                         description = self._find_caption_near_image(
                             md_text, match.start(), prefix_pattern=r'(?:fig(?:ure)?)\s*\.?\s*\d+'
-                        ) or alt_text or None
+                        )
 
-                        if not description:
-                            continue
-
-                        # Only keep figures whose description references a figure
-                        if not re.search(r'\bfig(?:ure)?\b', description, re.IGNORECASE):
+                        if not description or not re.search(r'\bfig(?:ure)?\b', description, re.IGNORECASE):
+                            # No valid caption → discard the image file
+                            try:
+                                os.remove(img_rel_path)
+                            except OSError:
+                                pass
                             continue
 
                         figure_id = f"{paper_id}#figure_{figure_counter}"
