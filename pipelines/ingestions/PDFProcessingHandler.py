@@ -111,7 +111,7 @@ class PDFProcessingHandler:
             table_counter = 1
 
             for chunk in page_data:
-                page_num = chunk["metadata"]["page_number"]  # 1-based
+                page_num = chunk["metadata"].get("page") or chunk["metadata"].get("page_number", 0)  # 1-based
                 md_text = chunk.get("text", "")
 
                 # ── 1. FIGURES ───────────────────────────────────────────
