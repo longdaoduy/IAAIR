@@ -357,7 +357,7 @@ class OpenAlexClient:
 
         base_params = {
             "filter": "has_doi:true,type:article",
-            "select": "id,title,abstract,publication_year,doi,ids,authorships,referenced_works,cited_by_count,primary_location,best_oa_location,locations,content_urls",
+            "select": "id,title,publication_year,doi,ids,authorships,referenced_works,cited_by_count,primary_location,best_oa_location,locations,content_urls",
             "per-page": per_page
         }
 
