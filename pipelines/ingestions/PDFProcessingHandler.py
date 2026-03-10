@@ -148,88 +148,103 @@ class PDFProcessingHandler:
             _skipped_dupes = 0
 
             for chunk in page_data:
+                # Early exit: stop scanning pages once both limits are reached
+                if (len(raw_figures) >= self.MAX_FIGURES_PER_PAPER
+                        and len(raw_tables) >= self.MAX_TABLES_PER_PAPER):
+                    break
+
                 page_num = chunk["metadata"].get("page") or chunk["metadata"].get("page_number", 0)
                 md_text = chunk.get("text", "")
 
                 # ── 1. FIGURES ───────────────────────────────────────────
-                img_pattern = re.compile(
-                    r'!\[([^\]]*)\]\(([^)]+\.(?:png|jpg|jpeg|webp|gif))\)',
-                    re.IGNORECASE,
-                )
-                for match in img_pattern.finditer(md_text):
-                    alt_text = match.group(1).strip()
-                    img_rel_path = match.group(2).strip()
+                if len(raw_figures) < self.MAX_FIGURES_PER_PAPER:
+                    img_pattern = re.compile(
+                        r'!\[([^\]]*)\]\(([^)]+\.(?:png|jpg|jpeg|webp|gif))\)',
+                        re.IGNORECASE,
+                    )
+                    for match in img_pattern.finditer(md_text):
+                        alt_text = match.group(1).strip()
+                        img_rel_path = match.group(2).strip()
 
-                    if not os.path.exists(img_rel_path):
-                        self.logger.warning(f"Image file not found: {img_rel_path}")
-                        continue
+                        if not os.path.exists(img_rel_path):
+                            self.logger.warning(f"Image file not found: {img_rel_path}")
+                            continue
 
-                    # ── Exact-hash dedup (fast, catches identical files) ──
-                    try:
-                        raw_bytes = open(img_rel_path, 'rb').read()
-                        md5 = hashlib.md5(raw_bytes).hexdigest()
-                    except Exception:
-                        md5 = None
-                    if md5 and md5 in _seen_hashes:
-                        _skipped_dupes += 1
-                        self.logger.debug(f"Skipped exact-duplicate image: {img_rel_path}")
+                        # ── Exact-hash dedup (fast, catches identical files) ──
                         try:
-                            os.remove(img_rel_path)
-                        except OSError:
-                            pass
-                        continue
-                    if md5:
-                        _seen_hashes.add(md5)
+                            raw_bytes = open(img_rel_path, 'rb').read()
+                            md5 = hashlib.md5(raw_bytes).hexdigest()
+                        except Exception:
+                            md5 = None
+                        if md5 and md5 in _seen_hashes:
+                            _skipped_dupes += 1
+                            self.logger.debug(f"Skipped exact-duplicate image: {img_rel_path}")
+                            try:
+                                os.remove(img_rel_path)
+                            except OSError:
+                                pass
+                            continue
+                        if md5:
+                            _seen_hashes.add(md5)
 
-                    try:
-                        pil_image = Image.open(img_rel_path).convert("RGB")
-                    except Exception as e:
-                        self.logger.warning(f"Cannot open image {img_rel_path}: {e}")
-                        continue
-
-                    if pil_image.width < 100 or pil_image.height < 100:
-                        continue
-
-                    # ── Perceptual-hash dedup (catches resized/recompressed dupes) ──
-                    phash = self._compute_image_phash(pil_image)
-                    if phash and phash in _seen_phashes:
-                        _skipped_dupes += 1
-                        self.logger.debug(f"Skipped perceptually-duplicate image: {img_rel_path}")
                         try:
-                            os.remove(img_rel_path)
+                            pil_image = Image.open(img_rel_path).convert("RGB")
+                        except Exception as e:
+                            self.logger.warning(f"Cannot open image {img_rel_path}: {e}")
+                            continue
+
+                        if pil_image.width < 100 or pil_image.height < 100:
+                            continue
+
+                        # ── Perceptual-hash dedup (catches resized/recompressed dupes) ──
+                        phash = self._compute_image_phash(pil_image)
+                        if phash and phash in _seen_phashes:
+                            _skipped_dupes += 1
+                            self.logger.debug(f"Skipped perceptually-duplicate image: {img_rel_path}")
+                            try:
+                                os.remove(img_rel_path)
+                            except OSError:
+                                pass
+                            continue
+                        if phash:
+                            _seen_phashes.add(phash)
+
+                        description = self._find_caption_near_image(
+                            md_text, match.start(), prefix_pattern=r'(?:fig(?:ure)?)\s*\.?\s*\d+'
+                        ) or alt_text or None
+
+                        if not description:
+                            continue
+
+                        # Only keep figures whose description references a figure
+                        if not re.search(r'\bfig(?:ure)?\b', description, re.IGNORECASE):
+                            continue
+
+                        figure_id = f"{paper_id}#figure_{figure_counter}"
+                        canonical_path = os.path.join(self.figures_dir, f"{figure_id}.png")
+                        try:
+                            if img_rel_path != canonical_path:
+                                os.rename(img_rel_path, canonical_path)
                         except OSError:
-                            pass
-                        continue
-                    if phash:
-                        _seen_phashes.add(phash)
+                            canonical_path = img_rel_path
 
-                    description = self._find_caption_near_image(
-                        md_text, match.start(), prefix_pattern=r'(?:fig(?:ure)?)\s*\.?\s*\d+'
-                    ) or alt_text or None
-
-                    if not description:
-                        continue
-
-                    figure_id = f"{paper_id}#figure_{figure_counter}"
-                    canonical_path = os.path.join(self.figures_dir, f"{figure_id}.png")
-                    try:
-                        if img_rel_path != canonical_path:
-                            os.rename(img_rel_path, canonical_path)
-                    except OSError:
-                        canonical_path = img_rel_path
-
-                    rf = _FigureRaw()
-                    rf.figure_id = figure_id
-                    rf.paper_id = paper_id
-                    rf.figure_number = figure_counter
-                    rf.description = description
-                    rf.page_number = page_num
-                    rf.image_path = canonical_path
-                    rf.pil_image = pil_image          # keep for batch CLIP later
-                    raw_figures.append(rf)
-                    figure_counter += 1
+                        rf = _FigureRaw()
+                        rf.figure_id = figure_id
+                        rf.paper_id = paper_id
+                        rf.figure_number = figure_counter
+                        rf.description = description
+                        rf.page_number = page_num
+                        rf.image_path = canonical_path
+                        rf.pil_image = pil_image          # keep for batch CLIP later
+                        raw_figures.append(rf)
+                        figure_counter += 1
+                        if len(raw_figures) >= self.MAX_FIGURES_PER_PAPER:
+                            break
 
                 # ── 2. TABLES ────────────────────────────────────────────
+                if len(raw_tables) >= self.MAX_TABLES_PER_PAPER:
+                    continue  # skip table extraction, limit reached
+
                 table_blocks = self._extract_markdown_tables(md_text)
                 for table_md in table_blocks:
                     table_caption = self._find_caption_near_table(
@@ -242,7 +257,11 @@ class PDFProcessingHandler:
                         continue
 
                     table_id = f"{paper_id}#table_{table_counter}"
-                    description = table_caption or table_md[:8000]
+                    description = table_caption or None
+
+                    # Only keep tables whose caption references a table
+                    if not description or not re.search(r'\btab(?:le)?\b', description, re.IGNORECASE):
+                        continue
 
                     rt = _TableRaw()
                     rt.table_id = table_id
@@ -255,6 +274,8 @@ class PDFProcessingHandler:
                     rt.table_md = table_md
                     raw_tables.append(rt)
                     table_counter += 1
+                    if len(raw_tables) >= self.MAX_TABLES_PER_PAPER:
+                        break
 
             # ── Phase 1b: Remove sub-images contained in larger figures ─
             raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
