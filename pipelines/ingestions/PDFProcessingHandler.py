@@ -6,10 +6,11 @@ from PDF documents.  pymupdf4llm handles multi-column layouts, colorspace
 quirks and table detection out of the box.
 """
 
+import hashlib
 import logging
 import os
 import requests
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 import fitz  # PyMuPDF
 
 from pymupdf4llm.helpers.pymupdf_rag import to_markdown as _to_markdown
@@ -26,6 +27,9 @@ from clients.vector.MilvusClient import MilvusClient
 
 class PDFProcessingHandler:
     """Handler for processing PDFs and extracting visual content."""
+
+    MAX_FIGURES_PER_PAPER = 10   # cap extracted figures per PDF
+    MAX_TABLES_PER_PAPER  = 10   # cap extracted tables per PDF
 
     def __init__(self, clip_client: Optional[CLIPClient] = None, scibert_client: Optional[SciBERTClient] = None,
                  milvus_client: Optional[MilvusClient] = None):
@@ -138,6 +142,11 @@ class PDFProcessingHandler:
             figure_counter = 1
             table_counter = 1
 
+            # Deduplication tracking
+            _seen_hashes: Set[str] = set()        # exact MD5 of raw file bytes
+            _seen_phashes: Set[str] = set()       # perceptual hash (8×8 dct)
+            _skipped_dupes = 0
+
             for chunk in page_data:
                 page_num = chunk["metadata"].get("page") or chunk["metadata"].get("page_number", 0)
                 md_text = chunk.get("text", "")
@@ -155,6 +164,23 @@ class PDFProcessingHandler:
                         self.logger.warning(f"Image file not found: {img_rel_path}")
                         continue
 
+                    # ── Exact-hash dedup (fast, catches identical files) ──
+                    try:
+                        raw_bytes = open(img_rel_path, 'rb').read()
+                        md5 = hashlib.md5(raw_bytes).hexdigest()
+                    except Exception:
+                        md5 = None
+                    if md5 and md5 in _seen_hashes:
+                        _skipped_dupes += 1
+                        self.logger.debug(f"Skipped exact-duplicate image: {img_rel_path}")
+                        try:
+                            os.remove(img_rel_path)
+                        except OSError:
+                            pass
+                        continue
+                    if md5:
+                        _seen_hashes.add(md5)
+
                     try:
                         pil_image = Image.open(img_rel_path).convert("RGB")
                     except Exception as e:
@@ -163,6 +189,19 @@ class PDFProcessingHandler:
 
                     if pil_image.width < 100 or pil_image.height < 100:
                         continue
+
+                    # ── Perceptual-hash dedup (catches resized/recompressed dupes) ──
+                    phash = self._compute_image_phash(pil_image)
+                    if phash and phash in _seen_phashes:
+                        _skipped_dupes += 1
+                        self.logger.debug(f"Skipped perceptually-duplicate image: {img_rel_path}")
+                        try:
+                            os.remove(img_rel_path)
+                        except OSError:
+                            pass
+                        continue
+                    if phash:
+                        _seen_phashes.add(phash)
 
                     description = self._find_caption_near_image(
                         md_text, match.start(), prefix_pattern=r'(?:fig(?:ure)?)\s*\.?\s*\d+'
@@ -216,6 +255,60 @@ class PDFProcessingHandler:
                     rt.table_md = table_md
                     raw_tables.append(rt)
                     table_counter += 1
+
+            # ── Phase 1b: Remove sub-images contained in larger figures ─
+            raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
+            _skipped_dupes += containment_removed
+
+            if _skipped_dupes > 0:
+                self.logger.info(
+                    f"Dedup: skipped {_skipped_dupes} duplicate/sub-images for {paper_id}"
+                )
+
+            # ── Phase 1c: Cap figures & tables to configured limits ──────
+            if len(raw_figures) > self.MAX_FIGURES_PER_PAPER:
+                # Keep the largest images (by pixel area) — they are the
+                # most likely to be full figures rather than icons/logos.
+                raw_figures.sort(
+                    key=lambda rf: rf.pil_image.width * rf.pil_image.height,
+                    reverse=True,
+                )
+                excess = raw_figures[self.MAX_FIGURES_PER_PAPER:]
+                raw_figures = raw_figures[:self.MAX_FIGURES_PER_PAPER]
+                for rf in excess:
+                    try:
+                        os.remove(rf.image_path)
+                    except OSError:
+                        pass
+                # Re-sort by page order and re-number
+                raw_figures.sort(key=lambda rf: (rf.page_number, rf.figure_number))
+                for i, rf in enumerate(raw_figures, 1):
+                    new_id = f"{rf.paper_id}#figure_{i}"
+                    if rf.figure_id != new_id:
+                        new_path = os.path.join(
+                            os.path.dirname(rf.image_path), f"{new_id}.png"
+                        )
+                        try:
+                            if os.path.exists(rf.image_path):
+                                os.rename(rf.image_path, new_path)
+                            rf.image_path = new_path
+                        except OSError:
+                            pass
+                        rf.figure_id = new_id
+                    rf.figure_number = i
+                self.logger.info(
+                    f"Capped figures from {len(raw_figures) + len(excess)} "
+                    f"to {self.MAX_FIGURES_PER_PAPER} for {paper_id}"
+                )
+
+            if len(raw_tables) > self.MAX_TABLES_PER_PAPER:
+                raw_tables = raw_tables[:self.MAX_TABLES_PER_PAPER]
+                for i, rt in enumerate(raw_tables, 1):
+                    rt.table_id = f"{rt.paper_id}#table_{i}"
+                    rt.table_number = i
+                self.logger.info(
+                    f"Capped tables to {self.MAX_TABLES_PER_PAPER} for {paper_id}"
+                )
 
             # ── Phase 2: Render table images (open PDF only once) ────────
             table_images: List[Tuple[Optional[str], Optional[Image.Image]]] = []
@@ -293,6 +386,17 @@ class PDFProcessingHandler:
             for rf in raw_figures:
                 rf.pil_image = None
 
+            # Clean up leftover pymupdf4llm temp images that weren't
+            # matched as figures (e.g. *.pdf-1-0.png in the paper subfolder)
+            try:
+                for leftover in os.listdir(paper_image_dir):
+                    leftover_path = os.path.join(paper_image_dir, leftover)
+                    if os.path.isfile(leftover_path):
+                        os.remove(leftover_path)
+                os.rmdir(paper_image_dir)
+            except OSError:
+                pass
+
             self.logger.info(
                 f"Extracted {len(figures)} figures and {len(tables)} tables "
                 f"from {paper_id} using pymupdf4llm (batch embeddings)"
@@ -302,6 +406,153 @@ class PDFProcessingHandler:
             self.logger.error(f"Critical error processing PDF {pdf_path}: {e}", exc_info=True)
 
         return figures, tables
+
+    # ─── Deduplication helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _compute_image_phash(pil_image: Image.Image, hash_size: int = 8) -> Optional[str]:
+        """
+        Compute a perceptual hash (pHash) for an image.
+
+        Uses a simplified DCT-based approach:
+        1. Resize to (hash_size*4) × (hash_size*4) with antialiasing
+        2. Convert to greyscale
+        3. Compute a simple block-average hash (fast, no scipy needed)
+
+        Returns a hex string, or None on error.
+        """
+        try:
+            # Resize to a small square and convert to greyscale
+            small = pil_image.resize((hash_size * 4, hash_size * 4), Image.LANCZOS).convert("L")
+            pixels = list(small.getdata())
+            avg = sum(pixels) / len(pixels)
+            # Build a bit string: 1 if pixel > average, else 0
+            bits = ''.join('1' if p > avg else '0' for p in pixels)
+            # Convert to hex for compact storage
+            hash_int = int(bits, 2)
+            return format(hash_int, f'0{len(bits) // 4}x')
+        except Exception:
+            return None
+
+    @staticmethod
+    def _phash_distance(h1: str, h2: str) -> int:
+        """Hamming distance between two hex-encoded hashes."""
+        if len(h1) != len(h2):
+            return 999
+        b1 = int(h1, 16)
+        b2 = int(h2, 16)
+        xor = b1 ^ b2
+        return bin(xor).count('1')
+
+    def _remove_contained_sub_images(
+        self, raw_figures: List[object], area_ratio_threshold: float = 0.35
+    ) -> Tuple[List[object], int]:
+        """
+        Remove sub-images that are visually contained in a larger figure
+        from the same page.
+
+        Two images on the same page where the smaller one's area is
+        < area_ratio_threshold of the larger, and their perceptual hashes
+        are within a tolerance, means the smaller is likely a sub-panel.
+
+        Also removes images whose pHash is nearly identical (distance ≤ 5)
+        regardless of size — those are true duplicates.
+
+        Returns (filtered_figures, num_removed).
+        """
+        if len(raw_figures) <= 1:
+            return raw_figures, 0
+
+        # Group by page
+        by_page: Dict[int, List[object]] = {}
+        for rf in raw_figures:
+            by_page.setdefault(rf.page_number, []).append(rf)
+
+        keep_ids: Set[str] = set()
+        removed = 0
+
+        for page_num, page_figs in by_page.items():
+            if len(page_figs) <= 1:
+                for rf in page_figs:
+                    keep_ids.add(rf.figure_id)
+                continue
+
+            # Compute area and phash for each figure on this page
+            areas = []
+            phashes = []
+            for rf in page_figs:
+                w, h = rf.pil_image.size
+                areas.append(w * h)
+                phashes.append(self._compute_image_phash(rf.pil_image))
+
+            # Sort by area descending so we compare smaller against larger
+            indexed = sorted(range(len(page_figs)), key=lambda i: areas[i], reverse=True)
+            removed_on_page: Set[int] = set()
+
+            for i_pos, i in enumerate(indexed):
+                if i in removed_on_page:
+                    continue
+                for j in indexed[i_pos + 1:]:
+                    if j in removed_on_page:
+                        continue
+
+                    # Near-identical pHash → duplicate regardless of size
+                    if phashes[i] and phashes[j]:
+                        dist = self._phash_distance(phashes[i], phashes[j])
+                        if dist <= 5:
+                            # Keep the larger one
+                            removed_on_page.add(j)
+                            self.logger.debug(
+                                f"Dedup: {page_figs[j].figure_id} is near-identical "
+                                f"to {page_figs[i].figure_id} (pHash dist={dist})"
+                            )
+                            continue
+
+                    # Sub-image containment: small image << large image
+                    if areas[i] > 0:
+                        ratio = areas[j] / areas[i]
+                        if ratio < area_ratio_threshold and phashes[i] and phashes[j]:
+                            # Looser pHash threshold for containment
+                            dist = self._phash_distance(phashes[i], phashes[j])
+                            if dist <= 20:
+                                removed_on_page.add(j)
+                                self.logger.debug(
+                                    f"Dedup: {page_figs[j].figure_id} is a sub-image "
+                                    f"of {page_figs[i].figure_id} "
+                                    f"(area ratio={ratio:.2f}, pHash dist={dist})"
+                                )
+
+            for idx in range(len(page_figs)):
+                if idx in removed_on_page:
+                    removed += 1
+                    # Clean up the file
+                    try:
+                        os.remove(page_figs[idx].image_path)
+                    except OSError:
+                        pass
+                else:
+                    keep_ids.add(page_figs[idx].figure_id)
+
+        # Re-number figures sequentially after removing duplicates
+        filtered = [rf for rf in raw_figures if rf.figure_id in keep_ids]
+        for i, rf in enumerate(filtered, 1):
+            old_id = rf.figure_id
+            new_id = f"{rf.paper_id}#figure_{i}"
+            if old_id != new_id:
+                new_path = os.path.join(
+                    os.path.dirname(rf.image_path),
+                    f"{new_id}.png"
+                )
+                try:
+                    if os.path.exists(rf.image_path):
+                        os.rename(rf.image_path, new_path)
+                    rf.image_path = new_path
+                except OSError:
+                    pass
+                rf.figure_id = new_id
+            rf.figure_number = i
+
+        return filtered, removed
 
     # ─── Helper methods for the pymupdf4llm-based extraction ────────────
 
