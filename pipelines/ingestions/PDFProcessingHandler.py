@@ -10,8 +10,9 @@ import hashlib
 import logging
 import mmap
 import os
+import time
 import requests
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Dict, List, Optional, Set, Tuple
 import fitz  # PyMuPDF
 
@@ -52,6 +53,8 @@ class PDFProcessingHandler:
 
     MAX_FIGURES_PER_PAPER = 10   # cap extracted figures per PDF
     MAX_TABLES_PER_PAPER  = 10   # cap extracted tables per PDF
+    EXTRACTION_TIMEOUT    = 120  # seconds – skip paper if extraction exceeds this
+    DOWNLOAD_TIMEOUT      = 60   # seconds – skip paper if PDF download exceeds this
 
     def __init__(self, clip_client: Optional[CLIPClient] = None, scibert_client: Optional[SciBERTClient] = None,
                  milvus_client: Optional[MilvusClient] = None):
@@ -114,7 +117,8 @@ class PDFProcessingHandler:
         except Exception:
             return None
 
-    def extract_figures_and_tables(self, pdf_path: str, paper_id: str) -> Tuple[List[Figure], List[Table]]:
+    def extract_figures_and_tables(self, pdf_path: str, paper_id: str,
+                                    _deadline: Optional[float] = None) -> Tuple[List[Figure], List[Table]]:
         """
         Extract figures and tables from a PDF using pymupdf4llm.
 
@@ -127,19 +131,23 @@ class PDFProcessingHandler:
         All CLIP/SciBERT embeddings are generated in batches at the end
         for maximum throughput.
 
-        Performance optimisations vs. the original implementation:
-          1. Pre-compiled regexes (module-level constants)
-          2. mmap-based MD5 for dedup (avoids copying file bytes)
-          3. Single fitz.Document opened once, reused for native fallback
-             AND table image rendering (saves ~200-400 ms per PDF)
-          4. Early size-check via os.stat before opening PIL images
-          5. Lazy PIL open – only when past size/hash filters
-          6. CLIP and SciBERT batches run concurrently via ThreadPoolExecutor
-          7. Local variable references for hot-loop speed
-          8. Temp-file cleanup offloaded to background thread
+        Args:
+            pdf_path: Path to the local PDF file.
+            paper_id: Unique paper identifier.
+            _deadline: Absolute ``time.monotonic()`` deadline.  If the
+                wall-clock time exceeds this value at any phase boundary
+                the method returns whatever it has collected so far.
+                Set to ``None`` (default) to disable the timeout.
         """
         figures: List[Figure] = []
         tables: List[Table] = []
+
+        # Timeout helper – checked between phases
+        if _deadline is None:
+            _deadline = time.monotonic() + self.EXTRACTION_TIMEOUT
+
+        def _timed_out() -> bool:
+            return time.monotonic() >= _deadline
 
         try:
             # Use a paper-specific subfolder so images don't collide
@@ -178,6 +186,10 @@ class PDFProcessingHandler:
                 self.logger.error(f"All pymupdf4llm attempts failed for {paper_id}")
                 return figures, tables
 
+            if _timed_out():
+                self.logger.warning(f"Timeout after markdown conversion for {paper_id} – skipping")
+                return figures, tables
+
             # ── Phase 1: Collect raw figure/table data (no embeddings yet) ──
             _FigureRaw = type('_FigureRaw', (), {})   # lightweight temp containers
             _TableRaw  = type('_TableRaw', (), {})
@@ -211,6 +223,12 @@ class PDFProcessingHandler:
 
             for chunk in page_data:
                 if len(raw_figures) >= _max_figs and len(raw_tables) >= _max_tabs:
+                    break
+                if _timed_out():
+                    self.logger.warning(
+                        f"Timeout during Phase 1 for {paper_id} – "
+                        f"collected {len(raw_figures)} figures, {len(raw_tables)} tables so far"
+                    )
                     break
 
                 metadata = chunk["metadata"]
@@ -346,7 +364,7 @@ class PDFProcessingHandler:
             doc = fitz.open(pdf_path)
 
             # ── Phase 1a-fallback: PyMuPDF native image extraction ──────
-            if len(raw_figures) < _max_figs:
+            if len(raw_figures) < _max_figs and not _timed_out():
                 try:
                     full_text_by_page: Dict[int, str] = {}
 
@@ -448,8 +466,12 @@ class PDFProcessingHandler:
                     self.logger.warning(f"PyMuPDF native figure fallback failed: {e}")
 
             # ── Phase 1b: Remove sub-images contained in larger figures ─
-            raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
-            _skipped_dupes += containment_removed
+            if not _timed_out():
+                raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
+                _skipped_dupes += containment_removed
+            else:
+                containment_removed = 0
+                self.logger.warning(f"Timeout before dedup for {paper_id} – skipping sub-image removal")
 
             if _skipped_dupes > 0:
                 self.logger.info(
@@ -503,7 +525,7 @@ class PDFProcessingHandler:
 
             # ── Phase 2: Render table images (reuse already-open doc) ────
             table_images: List[Tuple[Optional[str], Optional[Image.Image]]] = []
-            if raw_tables:
+            if raw_tables and not _timed_out():
                 try:
                     for rt in raw_tables:
                         img_path, pil_img = self._render_table_image_from_doc(
@@ -517,6 +539,31 @@ class PDFProcessingHandler:
 
             # Close the single PDF document
             doc.close()
+
+            if _timed_out():
+                self.logger.warning(
+                    f"Timeout before embeddings for {paper_id} – "
+                    f"returning {len(raw_figures)} figures, {len(raw_tables)} tables without embeddings"
+                )
+                # Build entities without embeddings so we don't lose the extraction work
+                for rf in raw_figures:
+                    figures.append(Figure(
+                        id=rf.figure_id, paper_id=rf.paper_id,
+                        figure_number=rf.figure_number, description=rf.description,
+                        page_number=rf.page_number, image_path=rf.image_path,
+                        image_embedding=None, description_embedding=None,
+                    ))
+                for i, rt in enumerate(raw_tables):
+                    img_path = table_images[i][0] if i < len(table_images) else None
+                    tables.append(Table(
+                        id=rt.table_id, paper_id=rt.paper_id,
+                        table_number=rt.table_number, description=rt.description,
+                        page_number=rt.page_number, headers=rt.headers, rows=rt.rows,
+                        description_embedding=None, image_embedding=None,
+                    ))
+                for rf in raw_figures:
+                    rf.pil_image = None
+                return figures, tables
 
             # ── Phase 3: Batch embeddings (CLIP + SciBERT concurrent) ────
             fig_pil_images   = [rf.pil_image for rf in raw_figures]
@@ -1319,13 +1366,20 @@ class PDFProcessingHandler:
             self.logger.error(f"Error saving tables to Milvus: {e}")
             return False
 
-    def process_paper_pdf(self, paper: Paper) -> Tuple[List[Figure], List[Table]]:
+    def process_paper_pdf(self, paper: Paper,
+                          timeout: Optional[float] = None) -> Tuple[List[Figure], List[Table]]:
         """
         Complete pipeline to process a paper's PDF and extract visual content.
-        
+
+        If the total processing time exceeds *timeout* seconds (default:
+        ``EXTRACTION_TIMEOUT``), the paper is skipped and an empty result
+        is returned.
+
         Args:
             paper: Paper entity with pdf_url
-            
+            timeout: Max wall-clock seconds for the entire pipeline.
+                     Defaults to ``self.EXTRACTION_TIMEOUT``.
+
         Returns:
             Tuple of (figures, tables) extracted from the PDF
         """
@@ -1333,13 +1387,45 @@ class PDFProcessingHandler:
             self.logger.warning(f"No PDF URL provided for paper {paper.id}")
             return [], []
 
+        if timeout is None:
+            timeout = self.EXTRACTION_TIMEOUT
+
+        t_start = time.monotonic()
+        deadline = t_start + timeout
+
         # Download PDF
         pdf_path = self.download_pdf(paper.pdf_url, paper.id)
         if not pdf_path:
             return [], []
 
-        # Extract figures and tables with embeddings
-        figures, tables = self.extract_figures_and_tables(pdf_path, paper.id)
+        elapsed_download = time.monotonic() - t_start
+        if elapsed_download >= timeout:
+            self.logger.warning(
+                f"Paper {paper.id}: download alone took {elapsed_download:.1f}s "
+                f"(limit {timeout}s) – skipping extraction"
+            )
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
+            return [], []
+
+        # Extract figures and tables with embeddings (deadline-aware)
+        figures, tables = self.extract_figures_and_tables(
+            pdf_path, paper.id, _deadline=deadline
+        )
+
+        elapsed_extract = time.monotonic() - t_start
+        if elapsed_extract >= timeout:
+            self.logger.warning(
+                f"Paper {paper.id}: extraction took {elapsed_extract:.1f}s "
+                f"(limit {timeout}s) – skipping Milvus upload"
+            )
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
+            return figures, tables
 
         # Save embeddings to Milvus using dedicated collections
         try:
@@ -1360,6 +1446,9 @@ class PDFProcessingHandler:
 
         except Exception as e:
             self.logger.error(f"Error saving to Milvus: {e}")
+
+        elapsed_total = time.monotonic() - t_start
+        self.logger.info(f"Paper {paper.id}: total processing time {elapsed_total:.1f}s")
 
         # Clean up PDF file (optional)
         try:
