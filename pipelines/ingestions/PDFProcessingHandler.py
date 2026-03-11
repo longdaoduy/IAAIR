@@ -342,16 +342,31 @@ class PDFProcessingHandler:
 
                 # ── 1. FIGURES ───────────────────────────────────────────
                 if len(raw_figures) < _max_figs:
-                    for match in _img_re.finditer(md_text):
+                    img_matches = list(_img_re.finditer(md_text))
+                    if img_matches:
+                        self.logger.debug(
+                            f"Page {page_num}: found {len(img_matches)} image tag(s) in markdown"
+                        )
+                    for match in img_matches:
                         img_rel_path = match.group(2).strip()
 
+                        # Resolve to absolute path to avoid CWD-dependent failures
+                        if not os.path.isabs(img_rel_path):
+                            img_rel_path = os.path.abspath(img_rel_path)
+
                         if not _path_exists(img_rel_path):
+                            self.logger.debug(
+                                f"Page {page_num}: image path does not exist: {img_rel_path}"
+                            )
                             continue
 
-                        # ── Fast file-size pre-check (skip tiny files < 2 KB) ──
+                        # ── Fast file-size pre-check (skip tiny files < 512 B) ──
                         try:
                             fsize = os.path.getsize(img_rel_path)
-                            if fsize < 2048:
+                            if fsize < 512:
+                                self.logger.debug(
+                                    f"Page {page_num}: skipping tiny image ({fsize} bytes): {img_rel_path}"
+                                )
                                 continue
                         except OSError:
                             continue
@@ -373,10 +388,16 @@ class PDFProcessingHandler:
                             pil_image = Image.open(img_rel_path)
                             w, h = pil_image.size
                             if w < 100 or h < 100:
+                                self.logger.debug(
+                                    f"Page {page_num}: skipping small image ({w}x{h}): {img_rel_path}"
+                                )
                                 pil_image.close()
                                 continue
                             pil_image = pil_image.convert("RGB")
-                        except Exception:
+                        except Exception as img_err:
+                            self.logger.debug(
+                                f"Page {page_num}: failed to open image: {img_rel_path}: {img_err}"
+                            )
                             continue
 
                         # ── Perceptual-hash dedup ──
@@ -395,16 +416,31 @@ class PDFProcessingHandler:
                         description = _find_cap_img(
                             md_text, match.start(),
                             prefix_pattern=r'(?:fig(?:ure|\.)?)\s*\.?\s*(?:S?\d+[a-z]?(?:\([a-z]\))?)',
-                            window=800,
+                            window=2000,
                         )
 
                         if not description or not _has_fig_re.search(description):
-                            pil_image.close()
-                            try:
-                                os.remove(img_rel_path)
-                            except OSError:
-                                pass
-                            continue
+                            # Try a broader search across the entire page text
+                            page_level_caption = None
+                            if _has_fig_re.search(md_text):
+                                page_level_caption = _find_cap_img(
+                                    md_text, match.start(),
+                                    prefix_pattern=r'(?:fig(?:ure|\.)?)\s*\.?\s*(?:S?\d+[a-z]?(?:\([a-z]\))?)',
+                                    window=len(md_text),
+                                )
+                            if page_level_caption and _has_fig_re.search(page_level_caption):
+                                description = page_level_caption
+                                self.logger.debug(
+                                    f"Page {page_num}: found caption via full-page search: "
+                                    f"{description[:80]}..."
+                                )
+                            else:
+                                # Keep the image with a generic description
+                                description = f"Figure from page {page_num} of paper {paper_id}"
+                                self.logger.info(
+                                    f"Page {page_num}: no formal caption found for image "
+                                    f"{img_rel_path}, keeping with generic description"
+                                )
 
                         figure_id = f"{paper_id}#figure_{figure_counter}"
                         canonical_path = _path_join(_figures_dir, f"{figure_id}.png")
@@ -433,22 +469,50 @@ class PDFProcessingHandler:
                     continue
 
                 table_blocks = _extract_md_tables(md_text)
+                if table_blocks:
+                    self.logger.debug(
+                        f"Page {page_num}: found {len(table_blocks)} markdown table block(s)"
+                    )
                 for table_md in table_blocks:
                     table_caption = _find_cap_tbl(
                         md_text, table_md,
                         prefix_pattern=r'(?:tab(?:le|\.)?)\s*\.?\s*(?:S?\d+[a-z]?)',
-                        window=600,
+                        window=1200,
                     )
 
                     headers, rows = _parse_md_tbl(table_md)
                     if not headers and not rows:
+                        self.logger.debug(
+                            f"Page {page_num}: table block failed parsing (no headers/rows)"
+                        )
                         continue
 
                     table_id = f"{paper_id}#table_{table_counter}"
                     description = table_caption or None
 
                     if not description or not _has_tab_re.search(description):
-                        continue
+                        # Try broader search across full page text
+                        if _has_tab_re.search(md_text):
+                            page_level_caption = _find_cap_tbl(
+                                md_text, table_md,
+                                prefix_pattern=r'(?:tab(?:le|\.)?)\s*\.?\s*(?:S?\d+[a-z]?)',
+                                window=len(md_text),
+                            )
+                            if page_level_caption and _has_tab_re.search(page_level_caption):
+                                description = page_level_caption
+                                self.logger.debug(
+                                    f"Page {page_num}: found table caption via full-page search"
+                                )
+                        if not description or not _has_tab_re.search(description):
+                            # Keep table with a generic description
+                            description = (
+                                f"Table from page {page_num} of paper {paper_id} "
+                                f"({len(headers or [])} columns, {len(rows or [])} rows)"
+                            )
+                            self.logger.info(
+                                f"Page {page_num}: no formal caption for table, "
+                                f"keeping with generic description"
+                            )
 
                     rt = _TableRaw()
                     rt.table_id = table_id
@@ -463,6 +527,13 @@ class PDFProcessingHandler:
                     table_counter += 1
                     if len(raw_tables) >= _max_tabs:
                         break
+
+            self.logger.info(
+                f"Phase 1 collection for {paper_id}: "
+                f"{len(raw_figures)} figures, {len(raw_tables)} tables "
+                f"from {len(page_data)} page chunks "
+                f"(dupes skipped: {_skipped_dupes})"
+            )
 
             # ── Open PDF once — reused for native fallback + table rendering ──
             doc = fitz.open(pdf_path)
@@ -743,17 +814,23 @@ class PDFProcessingHandler:
                 rf.pil_image = None
 
             # Clean up leftover pymupdf4llm temp images in background thread
-            def _cleanup_temp_dir(d: str):
+            # Only remove files that were NOT moved to the canonical figures_dir
+            extracted_paths = {fig.image_path for fig in figures}
+            def _cleanup_temp_dir(d: str, keep_paths: Set[str]):
                 try:
                     for leftover in os.listdir(d):
                         p = os.path.join(d, leftover)
-                        if os.path.isfile(p):
+                        if os.path.isfile(p) and p not in keep_paths:
                             os.remove(p)
-                    os.rmdir(d)
+                    # Only remove dir if empty
+                    if not os.listdir(d):
+                        os.rmdir(d)
                 except OSError:
                     pass
 
-            ThreadPoolExecutor(max_workers=1).submit(_cleanup_temp_dir, paper_image_dir)
+            ThreadPoolExecutor(max_workers=1).submit(
+                _cleanup_temp_dir, paper_image_dir, extracted_paths
+            )
 
             self.logger.info(
                 f"Extracted {len(figures)} figures and {len(tables)} tables "
