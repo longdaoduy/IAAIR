@@ -319,6 +319,7 @@ class PDFProcessingHandler:
                         rf.page_number = page_num
                         rf.image_path = canonical_path
                         rf.pil_image = pil_image
+                        rf.phash = phash          # cache for dedup phase
                         raw_figures.append(rf)
                         figure_counter += 1
                         if len(raw_figures) >= _max_figs:
@@ -447,6 +448,7 @@ class PDFProcessingHandler:
                                 rf.page_number = page_num
                                 rf.image_path = canonical_path
                                 rf.pil_image = pil_image
+                                rf.phash = phash          # cache for dedup phase
                                 raw_figures.append(rf)
                                 figure_counter += 1
 
@@ -710,6 +712,14 @@ class PDFProcessingHandler:
         Also removes images whose pHash is nearly identical (distance ≤ 5)
         regardless of size — those are true duplicates.
 
+        Performance notes:
+        - Reuses ``rf.phash`` cached during Phase 1 (no redundant
+          ``_compute_image_phash`` calls).
+        - Converts hex hashes to ints once, then uses
+          ``int.bit_count()`` (Python 3.10+) or ``bin(xor).count('1')``
+          for O(1) hamming distance in the O(n²) loop.
+        - Skips pages with only 1 figure (common case).
+
         Returns (filtered_figures, num_removed).
         """
         if len(raw_figures) <= 1:
@@ -720,64 +730,71 @@ class PDFProcessingHandler:
         for rf in raw_figures:
             by_page.setdefault(rf.page_number, []).append(rf)
 
+        # Check if int.bit_count is available (Python 3.10+)
+        _has_bit_count = hasattr(int, 'bit_count')
+
         keep_ids: Set[str] = set()
         removed = 0
 
         for page_num, page_figs in by_page.items():
             if len(page_figs) <= 1:
-                for rf in page_figs:
-                    keep_ids.add(rf.figure_id)
+                keep_ids.add(page_figs[0].figure_id)
                 continue
 
-            # Compute area and phash for each figure on this page
-            areas = []
-            phashes = []
-            for rf in page_figs:
+            n = len(page_figs)
+
+            # Pre-compute areas and convert cached hex-phashes to ints once
+            areas = [0] * n
+            phash_ints = [None] * n  # type: List[Optional[int]]
+            for idx, rf in enumerate(page_figs):
                 w, h = rf.pil_image.size
-                areas.append(w * h)
-                phashes.append(self._compute_image_phash(rf.pil_image))
+                areas[idx] = w * h
+                # Reuse phash cached on _FigureRaw during Phase 1;
+                # fall back to computing it only if missing.
+                ph = getattr(rf, 'phash', None)
+                if ph is None:
+                    ph = self._compute_image_phash(rf.pil_image)
+                    rf.phash = ph
+                if ph is not None:
+                    try:
+                        phash_ints[idx] = int(ph, 16)
+                    except (ValueError, TypeError):
+                        pass
 
             # Sort by area descending so we compare smaller against larger
-            indexed = sorted(range(len(page_figs)), key=lambda i: areas[i], reverse=True)
+            indexed = sorted(range(n), key=lambda i: areas[i], reverse=True)
             removed_on_page: Set[int] = set()
 
             for i_pos, i in enumerate(indexed):
                 if i in removed_on_page:
                     continue
+                phi = phash_ints[i]
+                ai = areas[i]
+
                 for j in indexed[i_pos + 1:]:
                     if j in removed_on_page:
                         continue
 
-                    # Near-identical pHash → duplicate regardless of size
-                    if phashes[i] and phashes[j]:
-                        dist = self._phash_distance(phashes[i], phashes[j])
+                    phj = phash_ints[j]
+
+                    # Fast hamming distance via XOR + popcount (no string ops)
+                    if phi is not None and phj is not None:
+                        xor = phi ^ phj
+                        dist = xor.bit_count() if _has_bit_count else bin(xor).count('1')
+
+                        # Near-identical pHash → duplicate regardless of size
                         if dist <= 5:
-                            # Keep the larger one
                             removed_on_page.add(j)
-                            self.logger.debug(
-                                f"Dedup: {page_figs[j].figure_id} is near-identical "
-                                f"to {page_figs[i].figure_id} (pHash dist={dist})"
-                            )
                             continue
 
-                    # Sub-image containment: small image << large image
-                    if areas[i] > 0:
-                        ratio = areas[j] / areas[i]
-                        if ratio < area_ratio_threshold and phashes[i] and phashes[j]:
-                            # Looser pHash threshold for containment
-                            dist = self._phash_distance(phashes[i], phashes[j])
-                            if dist <= 20:
-                                removed_on_page.add(j)
-                                self.logger.debug(
-                                    f"Dedup: {page_figs[j].figure_id} is a sub-image "
-                                    f"of {page_figs[i].figure_id} "
-                                    f"(area ratio={ratio:.2f}, pHash dist={dist})"
-                                )
+                        # Sub-image containment: small area << large area
+                        if ai > 0 and (areas[j] / ai) < area_ratio_threshold and dist <= 20:
+                            removed_on_page.add(j)
+                            continue
 
-            for idx in range(len(page_figs)):
+            for idx in range(n):
                 if idx in removed_on_page:
                     removed += 1
-                    # Clean up the file
                     try:
                         os.remove(page_figs[idx].image_path)
                     except OSError:
