@@ -897,44 +897,27 @@ class PDFProcessingHandler:
 
     @staticmethod
     def _find_caption_near_image(md_text: str, img_pos: int,
-                                 prefix_pattern: str, window: int = 800) -> Optional[str]:
+                                 prefix_pattern: str = '', window: int = 800) -> Optional[str]:
         """
-        Search for a caption (e.g. "Figure 1: …") in the markdown text
-        within *window* characters before/after the image reference.
+        Search for a figure caption near the image reference.
 
-        Uses multiple strategies:
-        1. Standard prefix match ("Figure 1: description…")
-        2. Bold/italic caption ("**Figure 1.** description…")
-        3. Parenthetical label ((a) description) near the image
+        Uses pre-compiled module-level regexes (_RE_FIG_CAP_STD,
+        _RE_FIG_CAP_BOLD) — zero per-call compilation cost.
         """
         start = max(0, img_pos - window)
         end = min(len(md_text), img_pos + window)
         neighbourhood = md_text[start:end]
 
-        # Strategy 1: Standard caption – "Figure 1: …" or "Fig. 2. …"
-        # Terminate at double-newline or a line that starts a new section
-        # (heading, another figure/table, or a pipe-table row).
-        pattern = re.compile(
-            rf'({prefix_pattern}[.:\-—]?\s*.+?)'
-            r'(?:\n\n|\n(?=#{1,3}\s)|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?|\|)\s*\.?\s*\d)|$)',
-            re.IGNORECASE | re.DOTALL,
-        )
-        m = pattern.search(neighbourhood)
+        # Strategy 1: Standard caption
+        m = _RE_FIG_CAP_STD.search(neighbourhood)
         if m:
             caption = m.group(1).strip()
-            # Trim excessively long captions (> 1000 chars) – likely runaway match
             if len(caption) > 1000:
                 caption = caption[:1000].rsplit('.', 1)[0] + '.'
             return caption
 
-        # Strategy 2: Bold / italic markdown caption
-        # e.g. "**Figure 1.** Some description here"
-        bold_pattern = re.compile(
-            r'(\*{1,2}(?:fig(?:ure|\.)?\s*\.?\s*S?\d+[a-z]?)\*{1,2}[.:\-—]?\s*.+?)'
-            r'(?:\n\n|\n(?=#{1,3}\s)|$)',
-            re.IGNORECASE | re.DOTALL,
-        )
-        m2 = bold_pattern.search(neighbourhood)
+        # Strategy 2: Bold/italic caption
+        m2 = _RE_FIG_CAP_BOLD.search(neighbourhood)
         if m2:
             caption = m2.group(1).strip().strip('*').strip()
             if len(caption) > 1000:
