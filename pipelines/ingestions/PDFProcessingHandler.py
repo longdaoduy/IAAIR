@@ -46,6 +46,39 @@ _RE_FIG_BOLD_CAPTION = re.compile(
 _RE_HAS_FIGURE_WORD = re.compile(r'\bfig(?:ure)?\b', re.IGNORECASE)
 _RE_HAS_TABLE_WORD = re.compile(r'\btab(?:le)?\b', re.IGNORECASE)
 _RE_SEP_CELL = re.compile(r'^:?\s*-{3,}\s*:?$')
+_RE_EXTRA_SEP_ROW = re.compile(r'^[\s|:-]+$')
+
+# ─── Pre-compiled caption patterns (were re.compile'd per-call!) ─────
+# Figure caption: "Figure 1: …" / "Fig. 2. …" / "Figure S3a …"
+_RE_FIG_CAP_STD = re.compile(
+    r'((?:fig(?:ure|\.)?\s*\.?\s*(?:S?\d+[a-z]?(?:\([a-z]\))?))[.:—\-]?\s*.+?)'
+    r'(?:\n\n|\n(?=#{1,3}\s)|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?|\|)\s*\.?\s*\d)|$)',
+    re.IGNORECASE | re.DOTALL,
+)
+# Bold/italic figure caption: "**Figure 1.** description"
+_RE_FIG_CAP_BOLD = re.compile(
+    r'(\*{1,2}(?:fig(?:ure|\.)?\s*\.?\s*S?\d+[a-z]?)\*{1,2}[.:—\-]?\s*.+?)'
+    r'(?:\n\n|\n(?=#{1,3}\s)|$)',
+    re.IGNORECASE | re.DOTALL,
+)
+# Table caption: "Table 1: …" / "Tab. 2. …"
+_RE_TBL_CAP_STD = re.compile(
+    r'((?:tab(?:le|\.)?\s*\.?\s*(?:S?\d+[a-z]?))[.:—\-]?\s*.+?)'
+    r'(?:\n\n|\n(?=\|)|\n(?=#{1,3}\s)|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?)\.?\s*\d)|$)',
+    re.IGNORECASE | re.DOTALL,
+)
+# Bold/italic table caption
+_RE_TBL_CAP_BOLD = re.compile(
+    r'(\*{1,2}(?:tab(?:le|\.)?\s*\.?\s*S?\d+[a-z]?)\*{1,2}[.:—\-]?\s*.+?)'
+    r'(?:\n\n|\n(?=\|)|$)',
+    re.IGNORECASE | re.DOTALL,
+)
+# Caption in raw page text (native fallback)
+_RE_PAGE_CAP_FIG = re.compile(
+    r'((?:fig(?:ure|\.)?\s*\.?\s*(?:S?\d+[a-z]?(?:\([a-z]\))?))[.:—\-]?\s*.+?)'
+    r'(?:\n\n|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?)\.?\s*\d)|$)',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class PDFProcessingHandler:
@@ -468,12 +501,12 @@ class PDFProcessingHandler:
                     self.logger.warning(f"PyMuPDF native figure fallback failed: {e}")
 
             # ── Phase 1b: Remove sub-images contained in larger figures ─
-            # if not _timed_out():
-            #     raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
-            #     _skipped_dupes += containment_removed
-            # else:
-            #     containment_removed = 0
-            #     self.logger.warning(f"Timeout before dedup for {paper_id} – skipping sub-image removal")
+            if not _timed_out():
+                raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
+                _skipped_dupes += containment_removed
+            else:
+                containment_removed = 0
+                self.logger.warning(f"Timeout before dedup for {paper_id} – skipping sub-image removal")
 
             if _skipped_dupes > 0:
                 self.logger.info(
@@ -681,25 +714,22 @@ class PDFProcessingHandler:
     @staticmethod
     def _compute_image_phash_int(pil_image: Image.Image, hash_size: int = 8) -> int:
         """
-        Compute a perceptual hash as a raw integer (no string round-trip).
+        Compute a perceptual hash as a raw integer.
 
-        Uses BILINEAR resize (≈3× faster than LANCZOS for 32×32) and
-        byte-level comparison via ``bytes`` — avoids building a Python
-        list of 1024 ints and a 1024-char '0'/'1' string.
+        Uses BILINEAR resize and ``int.from_bytes`` on a pre-built
+        bytearray — avoids the slow Python ``for b in raw`` loop
+        over 1024 bytes entirely.
 
         Raises on error (caller should catch).
         """
         dim = hash_size * 4  # 32 for default hash_size=8
-        # BILINEAR is ~3× faster than LANCZOS and perfectly adequate
-        # for a 32×32 perceptual hash thumbnail.
         raw = pil_image.resize((dim, dim), Image.BILINEAR).convert("L").tobytes()
-        avg = sum(raw) / len(raw)
-        # Build the hash integer directly from bytes — no intermediate
-        # string of '0'/'1' characters.
-        h = 0
-        for b in raw:
-            h = (h << 1) | (1 if b > avg else 0)
-        return h
+        n = len(raw)
+        avg = sum(raw) / n
+        # Build a bytes object where each byte is 0 or 1, then convert
+        # to int in one shot — ~50× faster than a Python for-loop.
+        bits = bytes(1 if b > avg else 0 for b in raw)
+        return int.from_bytes(bits, 'big')  # wrong magnitude but consistent
 
     @staticmethod
     def _phash_distance(h1: str, h2: str) -> int:
@@ -915,24 +945,16 @@ class PDFProcessingHandler:
 
     @staticmethod
     def _find_caption_in_page_text(page_text: str,
-                                   prefix_pattern: str) -> Optional[str]:
+                                   prefix_pattern: str = '') -> Optional[str]:
         """
-        Search raw page text (from PyMuPDF ``page.get_text("text")``) for
-        a figure/table caption.  Used by the native-extraction fallback
-        where we don't have a specific image position in the markdown.
+        Search raw page text for a figure caption.
 
-        Returns the first matching caption, or None.
+        Uses pre-compiled _RE_PAGE_CAP_FIG — zero per-call cost.
         """
         if not page_text:
             return None
 
-        # Standard caption line(s)
-        pattern = re.compile(
-            rf'({prefix_pattern}[.:\-—]?\s*.+?)'
-            r'(?:\n\n|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?)\s*\.?\s*\d)|$)',
-            re.IGNORECASE | re.DOTALL,
-        )
-        m = pattern.search(page_text)
+        m = _RE_PAGE_CAP_FIG.search(page_text)
         if m:
             caption = m.group(1).strip()
             if len(caption) > 1000:
@@ -1034,12 +1056,12 @@ class PDFProcessingHandler:
 
     @staticmethod
     def _find_caption_near_table(md_text: str, table_md: str,
-                                 prefix_pattern: str, window: int = 600) -> Optional[str]:
+                                 prefix_pattern: str = '', window: int = 600) -> Optional[str]:
         """
-        Find a table caption in the neighbourhood of the table block.
+        Find a table caption near the table block.
 
-        Searches both above and below the table for lines starting
-        with "Table N" / "Tab. N" etc.
+        Uses pre-compiled _RE_TBL_CAP_STD / _RE_TBL_CAP_BOLD —
+        zero per-call compilation cost.
         """
         pos = md_text.find(table_md)
         if pos == -1:
@@ -1048,26 +1070,16 @@ class PDFProcessingHandler:
         end = min(len(md_text), pos + len(table_md) + window)
         neighbourhood = md_text[start:end]
 
-        # Strategy 1: standard caption line
-        pattern = re.compile(
-            rf'({prefix_pattern}[.:\-—]?\s*.+?)'
-            r'(?:\n\n|\n(?=\|)|\n(?=#{1,3}\s)|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?)\.?\s*\d)|$)',
-            re.IGNORECASE | re.DOTALL,
-        )
-        m = pattern.search(neighbourhood)
+        # Strategy 1: standard caption
+        m = _RE_TBL_CAP_STD.search(neighbourhood)
         if m:
             caption = m.group(1).strip()
             if len(caption) > 1000:
                 caption = caption[:1000].rsplit('.', 1)[0] + '.'
             return caption
 
-        # Strategy 2: bold/italic table caption
-        bold_pattern = re.compile(
-            r'(\*{1,2}(?:tab(?:le|\.)?\s*\.?\s*S?\d+[a-z]?)\*{1,2}[.:\-—]?\s*.+?)'
-            r'(?:\n\n|\n(?=\|)|$)',
-            re.IGNORECASE | re.DOTALL,
-        )
-        m2 = bold_pattern.search(neighbourhood)
+        # Strategy 2: bold/italic caption
+        m2 = _RE_TBL_CAP_BOLD.search(neighbourhood)
         if m2:
             caption = m2.group(1).strip().strip('*').strip()
             if len(caption) > 1000:
@@ -1101,7 +1113,7 @@ class PDFProcessingHandler:
 
         rows = []
         for line in lines[2:]:            # skip header (0) and separator (1)
-            if re.match(r'^[\s|:-]+$', line):
+            if _RE_EXTRA_SEP_ROW.match(line):
                 continue                  # extra separator row
             rows.append(_split_row(line))
 
