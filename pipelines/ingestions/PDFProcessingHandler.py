@@ -668,25 +668,38 @@ class PDFProcessingHandler:
         """
         Compute a perceptual hash (pHash) for an image.
 
-        Uses a simplified DCT-based approach:
-        1. Resize to (hash_size*4) × (hash_size*4) with antialiasing
-        2. Convert to greyscale
-        3. Compute a simple block-average hash (fast, no scipy needed)
-
         Returns a hex string, or None on error.
         """
         try:
-            # Resize to a small square and convert to greyscale
-            small = pil_image.resize((hash_size * 4, hash_size * 4), Image.LANCZOS).convert("L")
-            pixels = list(small.getdata())
-            avg = sum(pixels) / len(pixels)
-            # Build a bit string: 1 if pixel > average, else 0
-            bits = ''.join('1' if p > avg else '0' for p in pixels)
-            # Convert to hex for compact storage
-            hash_int = int(bits, 2)
-            return format(hash_int, f'0{len(bits) // 4}x')
+            return format(
+                PDFProcessingHandler._compute_image_phash_int(pil_image, hash_size),
+                f'0{(hash_size * 4) ** 2 // 4}x',
+            )
         except Exception:
             return None
+
+    @staticmethod
+    def _compute_image_phash_int(pil_image: Image.Image, hash_size: int = 8) -> int:
+        """
+        Compute a perceptual hash as a raw integer (no string round-trip).
+
+        Uses BILINEAR resize (≈3× faster than LANCZOS for 32×32) and
+        byte-level comparison via ``bytes`` — avoids building a Python
+        list of 1024 ints and a 1024-char '0'/'1' string.
+
+        Raises on error (caller should catch).
+        """
+        dim = hash_size * 4  # 32 for default hash_size=8
+        # BILINEAR is ~3× faster than LANCZOS and perfectly adequate
+        # for a 32×32 perceptual hash thumbnail.
+        raw = pil_image.resize((dim, dim), Image.BILINEAR).convert("L").tobytes()
+        avg = sum(raw) / len(raw)
+        # Build the hash integer directly from bytes — no intermediate
+        # string of '0'/'1' characters.
+        h = 0
+        for b in raw:
+            h = (h << 1) | (1 if b > avg else 0)
+        return h
 
     @staticmethod
     def _phash_distance(h1: str, h2: str) -> int:
@@ -703,123 +716,150 @@ class PDFProcessingHandler:
     ) -> Tuple[List[object], int]:
         """
         Remove sub-images that are visually contained in a larger figure
-        from the same page.
+        from the same page, and near-identical duplicates.
 
-        Two images on the same page where the smaller one's area is
-        < area_ratio_threshold of the larger, and their perceptual hashes
-        are within a tolerance, means the smaller is likely a sub-panel.
-
-        Also removes images whose pHash is nearly identical (distance ≤ 5)
-        regardless of size — those are true duplicates.
-
-        Performance notes:
-        - Reuses ``rf.phash`` cached during Phase 1 (no redundant
-          ``_compute_image_phash`` calls).
-        - Converts hex hashes to ints once, then uses
-          ``int.bit_count()`` (Python 3.10+) or ``bin(xor).count('1')``
-          for O(1) hamming distance in the O(n²) loop.
-        - Skips pages with only 1 figure (common case).
+        Optimisations over the naïve approach:
+        - Integer pHash cached on each ``_FigureRaw`` during Phase 1 via
+          ``_compute_image_phash_int`` — no hex string round-trip.
+        - Flat ``bytearray`` (not ``set``) for removed-tracking — O(1)
+          index access without hashing overhead.
+        - Inner loop uses pre-fetched local variables and direct index
+          access into flat arrays (no ``getattr``, no dict lookup).
+        - All filesystem I/O (``os.remove``, ``os.rename``) is deferred
+          to the very end so it never blocks the comparison loop.
+        - Single-figure pages short-circuited before any allocation.
 
         Returns (filtered_figures, num_removed).
         """
-        if len(raw_figures) <= 1:
+        n_total = len(raw_figures)
+        if n_total <= 1:
             return raw_figures, 0
 
-        # Group by page
-        by_page: Dict[int, List[object]] = {}
-        for rf in raw_figures:
-            by_page.setdefault(rf.page_number, []).append(rf)
+        # ── Group by page ────────────────────────────────────────────
+        by_page: Dict[int, List[int]] = {}   # page -> indices into raw_figures
+        for idx, rf in enumerate(raw_figures):
+            by_page.setdefault(rf.page_number, []).append(idx)
 
-        # Check if int.bit_count is available (Python 3.10+)
-        _has_bit_count = hasattr(int, 'bit_count')
+        # Global boolean mask — True means "remove this figure"
+        removed_mask = bytearray(n_total)  # all zeros = keep
 
-        keep_ids: Set[str] = set()
-        removed = 0
+        # Pre-compute areas + integer pHashes for ALL figures once
+        areas = [0] * n_total
+        phash_ints = [None] * n_total       # type: List[Optional[int]]
+        _phash_int_fn = self._compute_image_phash_int
 
-        for page_num, page_figs in by_page.items():
-            if len(page_figs) <= 1:
-                keep_ids.add(page_figs[0].figure_id)
+        for idx, rf in enumerate(raw_figures):
+            w, h = rf.pil_image.size
+            areas[idx] = w * h
+            # Try integer phash cached on the object first
+            phi = getattr(rf, '_phash_int', None)
+            if phi is not None:
+                phash_ints[idx] = phi
+                continue
+            # Fall back to hex-string cache from Phase 1
+            ph = getattr(rf, 'phash', None)
+            if ph is not None:
+                try:
+                    phi = int(ph, 16)
+                except (ValueError, TypeError):
+                    phi = None
+            # Last resort: compute from image
+            if phi is None:
+                try:
+                    phi = _phash_int_fn(rf.pil_image)
+                except Exception:
+                    phi = None
+            phash_ints[idx] = phi
+            rf._phash_int = phi  # cache for future use
+
+        # Bind popcount function once
+        _bit_count = int.bit_count if hasattr(int, 'bit_count') else None
+
+        # ── Per-page pairwise comparison ─────────────────────────────
+        for page_indices in by_page.values():
+            k = len(page_indices)
+            if k <= 1:
                 continue
 
-            n = len(page_figs)
+            # Sort indices by area descending (largest first)
+            page_indices.sort(key=lambda i: areas[i], reverse=True)
 
-            # Pre-compute areas and convert cached hex-phashes to ints once
-            areas = [0] * n
-            phash_ints = [None] * n  # type: List[Optional[int]]
-            for idx, rf in enumerate(page_figs):
-                w, h = rf.pil_image.size
-                areas[idx] = w * h
-                # Reuse phash cached on _FigureRaw during Phase 1;
-                # fall back to computing it only if missing.
-                ph = getattr(rf, 'phash', None)
-                if ph is None:
-                    ph = self._compute_image_phash(rf.pil_image)
-                    rf.phash = ph
-                if ph is not None:
-                    try:
-                        phash_ints[idx] = int(ph, 16)
-                    except (ValueError, TypeError):
-                        pass
+            # Pull values into contiguous local arrays for tight loop
+            p_areas = [areas[i] for i in page_indices]
+            p_hashes = [phash_ints[i] for i in page_indices]
+            p_removed = bytearray(k)  # local removed flags
 
-            # Sort by area descending so we compare smaller against larger
-            indexed = sorted(range(n), key=lambda i: areas[i], reverse=True)
-            removed_on_page: Set[int] = set()
-
-            for i_pos, i in enumerate(indexed):
-                if i in removed_on_page:
+            # Tight O(k²) loop — all lookups are array[int] (no dict/set)
+            for a in range(k):
+                if p_removed[a]:
                     continue
-                phi = phash_ints[i]
-                ai = areas[i]
+                phi = p_hashes[a]
+                if phi is None:
+                    continue
+                ai = p_areas[a]
+                ai_inv_thresh = ai * area_ratio_threshold  # pre-multiply
 
-                for j in indexed[i_pos + 1:]:
-                    if j in removed_on_page:
+                for b in range(a + 1, k):
+                    if p_removed[b]:
+                        continue
+                    phj = p_hashes[b]
+                    if phj is None:
                         continue
 
-                    phj = phash_ints[j]
+                    xor = phi ^ phj
+                    dist = xor.bit_count() if _bit_count else bin(xor).count('1')
 
-                    # Fast hamming distance via XOR + popcount (no string ops)
-                    if phi is not None and phj is not None:
-                        xor = phi ^ phj
-                        dist = xor.bit_count() if _has_bit_count else bin(xor).count('1')
+                    # Near-identical → duplicate
+                    if dist <= 5:
+                        p_removed[b] = 1
+                        continue
 
-                        # Near-identical pHash → duplicate regardless of size
-                        if dist <= 5:
-                            removed_on_page.add(j)
-                            continue
+                    # Sub-image containment (b is smaller since sorted desc)
+                    if dist <= 20 and p_areas[b] < ai_inv_thresh:
+                        p_removed[b] = 1
 
-                        # Sub-image containment: small area << large area
-                        if ai > 0 and (areas[j] / ai) < area_ratio_threshold and dist <= 20:
-                            removed_on_page.add(j)
-                            continue
+            # Write local results back to global mask
+            for loc_idx in range(k):
+                if p_removed[loc_idx]:
+                    removed_mask[page_indices[loc_idx]] = 1
 
-            for idx in range(n):
-                if idx in removed_on_page:
-                    removed += 1
-                    try:
-                        os.remove(page_figs[idx].image_path)
-                    except OSError:
-                        pass
-                else:
-                    keep_ids.add(page_figs[idx].figure_id)
+        # ── Build filtered list and count removals ───────────────────
+        removed = 0
+        files_to_delete: List[str] = []
+        filtered: List[object] = []
 
-        # Re-number figures sequentially after removing duplicates
-        filtered = [rf for rf in raw_figures if rf.figure_id in keep_ids]
+        for idx in range(n_total):
+            if removed_mask[idx]:
+                removed += 1
+                files_to_delete.append(raw_figures[idx].image_path)
+            else:
+                filtered.append(raw_figures[idx])
+
+        # Re-number surviving figures sequentially
+        rename_ops: List[Tuple[str, str]] = []  # (old_path, new_path)
         for i, rf in enumerate(filtered, 1):
-            old_id = rf.figure_id
             new_id = f"{rf.paper_id}#figure_{i}"
-            if old_id != new_id:
+            if rf.figure_id != new_id:
                 new_path = os.path.join(
-                    os.path.dirname(rf.image_path),
-                    f"{new_id}.png"
+                    os.path.dirname(rf.image_path), f"{new_id}.png"
                 )
-                try:
-                    if os.path.exists(rf.image_path):
-                        os.rename(rf.image_path, new_path)
-                    rf.image_path = new_path
-                except OSError:
-                    pass
+                rename_ops.append((rf.image_path, new_path))
+                rf.image_path = new_path
                 rf.figure_id = new_id
             rf.figure_number = i
+
+        # ── Deferred filesystem I/O (never inside the hot loop) ──────
+        for path in files_to_delete:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        for old_path, new_path in rename_ops:
+            try:
+                if os.path.exists(old_path):
+                    os.rename(old_path, new_path)
+            except OSError:
+                pass
 
         return filtered, removed
 
