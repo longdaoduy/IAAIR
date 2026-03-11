@@ -86,8 +86,10 @@ class PDFProcessingHandler:
 
     MAX_FIGURES_PER_PAPER = 10   # cap extracted figures per PDF
     MAX_TABLES_PER_PAPER  = 10   # cap extracted tables per PDF
+    MAX_PAGES_TO_PROCESS  = 30   # only scan the first N pages for figures/tables
     EXTRACTION_TIMEOUT    = 120  # seconds – skip paper if extraction exceeds this
     DOWNLOAD_TIMEOUT      = 60   # seconds – skip paper if PDF download exceeds this
+    MARKDOWN_TIMEOUT      = 10   # seconds – hard cap per _to_markdown() attempt
 
     def __init__(self, clip_client: Optional[CLIPClient] = None, scibert_client: Optional[SciBERTClient] = None,
                  milvus_client: Optional[MilvusClient] = None):
@@ -188,7 +190,9 @@ class PDFProcessingHandler:
             os.makedirs(paper_image_dir, exist_ok=True)
 
             # ── Run pymupdf4llm ──────────────────────────────────────────
+            _max_pages = self.MAX_PAGES_TO_PROCESS
             _common_kwargs = dict(
+                pages=list(range(_max_pages)),  # only first N pages
                 page_chunks=True,
                 write_images=True,
                 image_path=paper_image_dir,
@@ -206,17 +210,43 @@ class PDFProcessingHandler:
                 {"table_strategy": "text"},
                 {"ignore_graphics": True},
             ]
+            _md_timeout = self.MARKDOWN_TIMEOUT
+            _md_timed_out = False
             for attempt, extra in enumerate(_strategies):
-                try:
-                    page_data = _to_markdown(pdf_path, **{**_common_kwargs, **extra})
+                if _timed_out() or _md_timed_out:
                     break
+                try:
+                    # Run _to_markdown in a daemon thread with a hard timeout
+                    # so it can never block forever on pathological PDFs.
+                    md_pool = ThreadPoolExecutor(max_workers=1)
+                    fut = md_pool.submit(
+                        _to_markdown, pdf_path, **{**_common_kwargs, **extra}
+                    )
+                    try:
+                        page_data = fut.result(timeout=_md_timeout)
+                    except (FuturesTimeoutError, TimeoutError):
+                        self.logger.warning(
+                            f"pymupdf4llm attempt {attempt + 1} timed out "
+                            f"after {_md_timeout}s for {paper_id} – "
+                            f"aborting all strategies (PDF is pathological)"
+                        )
+                        md_pool.shutdown(wait=False)
+                        _md_timed_out = True
+                        break
+                    else:
+                        md_pool.shutdown(wait=False)
+                        break
                 except (ValueError, TypeError, AttributeError) as e:
                     self.logger.warning(
                         f"pymupdf4llm attempt {attempt + 1} failed for {paper_id}: {e}"
                     )
+                    try:
+                        md_pool.shutdown(wait=False)
+                    except Exception:
+                        pass
 
             if page_data is None:
-                self.logger.error(f"All pymupdf4llm attempts failed for {paper_id}")
+                self.logger.error(f"All pymupdf4llm attempts failed/timed-out for {paper_id}")
                 return figures, tables
 
             if _timed_out():
@@ -401,8 +431,9 @@ class PDFProcessingHandler:
             if len(raw_figures) < _max_figs and not _timed_out():
                 try:
                     full_text_by_page: Dict[int, str] = {}
+                    _fallback_page_limit = min(doc.page_count, _max_pages)
 
-                    for page_idx in range(doc.page_count):
+                    for page_idx in range(_fallback_page_limit):
                         if len(raw_figures) >= _max_figs:
                             break
 
