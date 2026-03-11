@@ -468,12 +468,12 @@ class PDFProcessingHandler:
                     self.logger.warning(f"PyMuPDF native figure fallback failed: {e}")
 
             # ── Phase 1b: Remove sub-images contained in larger figures ─
-            if not _timed_out():
-                raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
-                _skipped_dupes += containment_removed
-            else:
-                containment_removed = 0
-                self.logger.warning(f"Timeout before dedup for {paper_id} – skipping sub-image removal")
+            # if not _timed_out():
+            #     raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
+            #     _skipped_dupes += containment_removed
+            # else:
+            #     containment_removed = 0
+            #     self.logger.warning(f"Timeout before dedup for {paper_id} – skipping sub-image removal")
 
             if _skipped_dupes > 0:
                 self.logger.info(
