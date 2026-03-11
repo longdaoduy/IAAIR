@@ -171,7 +171,16 @@ class PDFProcessingHandler:
         paper_image_dir = os.path.join(self.figures_dir, paper_id)
         os.makedirs(paper_image_dir, exist_ok=True)
 
-        _max_pages = self.MAX_PAGES_TO_PROCESS
+        # Determine actual page count so we never request out-of-range pages
+        try:
+            doc = fitz.open(pdf_path)
+            actual_pages = doc.page_count
+            doc.close()
+        except Exception as e:
+            self.logger.error(f"Cannot open PDF {pdf_path}: {e}")
+            return None
+
+        _max_pages = min(self.MAX_PAGES_TO_PROCESS, actual_pages)
         _common_kwargs = dict(
             pages=list(range(_max_pages)),
             page_chunks=True,
@@ -216,7 +225,7 @@ class PDFProcessingHandler:
                         f"({len(page_data)} page chunks)"
                     )
                     return (page_data, paper_image_dir)
-            except (ValueError, TypeError, AttributeError) as e:
+            except (ValueError, TypeError, AttributeError, IndexError, RuntimeError) as e:
                 self.logger.warning(
                     f"pymupdf4llm attempt {attempt + 1} failed for {paper_id}: {e}"
                 )
@@ -1613,7 +1622,14 @@ class PDFProcessingHandler:
             if not pdf_path:
                 continue
 
-            md_result = self.convert_pdf_to_markdown(pdf_path, paper.id)
+            try:
+                md_result = self.convert_pdf_to_markdown(pdf_path, paper.id)
+            except Exception as e:
+                self.logger.error(
+                    f"[{idx+1}/{n}] {paper.id}: convert_pdf_to_markdown crashed: {e}"
+                )
+                md_result = None
+
             if md_result is None:
                 self.logger.warning(
                     f"[{idx+1}/{n}] {paper.id}: markdown conversion failed – skipping"
