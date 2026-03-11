@@ -152,32 +152,114 @@ class PDFProcessingHandler:
         except Exception:
             return None
 
-    def extract_figures_and_tables(self, pdf_path: str, paper_id: str,
-                                    _deadline: Optional[float] = None) -> Tuple[List[Figure], List[Table]]:
+    # ─── Phase 1: PDF → Markdown conversion (can hang on bad PDFs) ─────
+
+    def convert_pdf_to_markdown(
+        self, pdf_path: str, paper_id: str,
+    ) -> Optional[Tuple[List[dict], str]]:
         """
-        Extract figures and tables from a PDF using pymupdf4llm.
+        Convert a PDF to markdown page chunks using pymupdf4llm.
 
-        pymupdf4llm's ``to_markdown`` with ``page_chunks=True`` and
-        ``write_images=True`` gives us:
-          • Per-page markdown text (tables rendered as GFM markdown tables)
-          • Image files saved to disk with references in the markdown
-          • Structured metadata per page (images list, tables list)
+        This is the *only* step that can hang on pathological PDFs.
+        It is separated so callers can batch-convert many papers first,
+        then extract figures/tables from the results.
 
-        All CLIP/SciBERT embeddings are generated in batches at the end
-        for maximum throughput.
+        Returns:
+            ``(page_data, paper_image_dir)`` on success, or ``None``
+            if all strategies failed / timed-out.
+        """
+        paper_image_dir = os.path.join(self.figures_dir, paper_id)
+        os.makedirs(paper_image_dir, exist_ok=True)
+
+        _max_pages = self.MAX_PAGES_TO_PROCESS
+        _common_kwargs = dict(
+            pages=list(range(_max_pages)),
+            page_chunks=True,
+            write_images=True,
+            image_path=paper_image_dir,
+            image_format="png",
+            dpi=150,
+            image_size_limit=0.01,
+            force_text=True,
+            show_progress=False,
+        )
+
+        page_data = None
+        _strategies = [
+            {},
+            {"table_strategy": "lines"},
+            {"table_strategy": "text"},
+            {"ignore_graphics": True},
+        ]
+        _md_timeout = self.MARKDOWN_TIMEOUT
+
+        for attempt, extra in enumerate(_strategies):
+            try:
+                md_pool = ThreadPoolExecutor(max_workers=1)
+                fut = md_pool.submit(
+                    _to_markdown, pdf_path, **{**_common_kwargs, **extra}
+                )
+                try:
+                    page_data = fut.result(timeout=_md_timeout)
+                except (FuturesTimeoutError, TimeoutError):
+                    self.logger.warning(
+                        f"pymupdf4llm attempt {attempt + 1} timed out "
+                        f"after {_md_timeout}s for {paper_id} – "
+                        f"aborting all strategies (PDF is pathological)"
+                    )
+                    md_pool.shutdown(wait=False)
+                    return None        # bail out immediately
+                else:
+                    md_pool.shutdown(wait=False)
+                    self.logger.info(
+                        f"pymupdf4llm converted {paper_id} "
+                        f"({len(page_data)} page chunks)"
+                    )
+                    return (page_data, paper_image_dir)
+            except (ValueError, TypeError, AttributeError) as e:
+                self.logger.warning(
+                    f"pymupdf4llm attempt {attempt + 1} failed for {paper_id}: {e}"
+                )
+                try:
+                    md_pool.shutdown(wait=False)
+                except Exception:
+                    pass
+
+        self.logger.error(
+            f"All pymupdf4llm attempts failed for {paper_id}"
+        )
+        return None
+
+    # ─── Phase 2: Extract figures & tables from pre-converted data ─────
+
+    def extract_figures_and_tables(
+        self, pdf_path: str, paper_id: str,
+        page_data: Optional[List[dict]] = None,
+        paper_image_dir: Optional[str] = None,
+        _deadline: Optional[float] = None,
+    ) -> Tuple[List[Figure], List[Table]]:
+        """
+        Extract figures and tables from a PDF.
+
+        If *page_data* and *paper_image_dir* are supplied (from a prior
+        ``convert_pdf_to_markdown`` call), the expensive markdown
+        conversion is skipped entirely.  Otherwise the method falls
+        back to calling ``convert_pdf_to_markdown`` internally for
+        backward compatibility.
 
         Args:
             pdf_path: Path to the local PDF file.
             paper_id: Unique paper identifier.
-            _deadline: Absolute ``time.monotonic()`` deadline.  If the
-                wall-clock time exceeds this value at any phase boundary
-                the method returns whatever it has collected so far.
-                Set to ``None`` (default) to disable the timeout.
+            page_data: Pre-computed page chunks from
+                ``convert_pdf_to_markdown``.  ``None`` means
+                "convert now".
+            paper_image_dir: Directory where pymupdf4llm saved the
+                extracted images.  Required when *page_data* is given.
+            _deadline: Absolute ``time.monotonic()`` deadline.
         """
         figures: List[Figure] = []
         tables: List[Table] = []
 
-        # Timeout helper – checked between phases
         if _deadline is None:
             _deadline = time.monotonic() + self.EXTRACTION_TIMEOUT
 
@@ -185,72 +267,20 @@ class PDFProcessingHandler:
             return time.monotonic() >= _deadline
 
         try:
-            # Use a paper-specific subfolder so images don't collide
-            paper_image_dir = os.path.join(self.figures_dir, paper_id)
-            os.makedirs(paper_image_dir, exist_ok=True)
-
-            # ── Run pymupdf4llm ──────────────────────────────────────────
-            _max_pages = self.MAX_PAGES_TO_PROCESS
-            _common_kwargs = dict(
-                pages=list(range(_max_pages)),  # only first N pages
-                page_chunks=True,
-                write_images=True,
-                image_path=paper_image_dir,
-                image_format="png",
-                dpi=150,
-                image_size_limit=0.01,
-                force_text=True,
-                show_progress=False,
-            )
-
-            page_data = None
-            _strategies = [
-                {},
-                {"table_strategy": "lines"},
-                {"table_strategy": "text"},
-                {"ignore_graphics": True},
-            ]
-            _md_timeout = self.MARKDOWN_TIMEOUT
-            _md_timed_out = False
-            for attempt, extra in enumerate(_strategies):
-                if _timed_out() or _md_timed_out:
-                    break
-                try:
-                    # Run _to_markdown in a daemon thread with a hard timeout
-                    # so it can never block forever on pathological PDFs.
-                    md_pool = ThreadPoolExecutor(max_workers=1)
-                    fut = md_pool.submit(
-                        _to_markdown, pdf_path, **{**_common_kwargs, **extra}
-                    )
-                    try:
-                        page_data = fut.result(timeout=_md_timeout)
-                    except (FuturesTimeoutError, TimeoutError):
-                        self.logger.warning(
-                            f"pymupdf4llm attempt {attempt + 1} timed out "
-                            f"after {_md_timeout}s for {paper_id} – "
-                            f"aborting all strategies (PDF is pathological)"
-                        )
-                        md_pool.shutdown(wait=False)
-                        _md_timed_out = True
-                        break
-                    else:
-                        md_pool.shutdown(wait=False)
-                        break
-                except (ValueError, TypeError, AttributeError) as e:
-                    self.logger.warning(
-                        f"pymupdf4llm attempt {attempt + 1} failed for {paper_id}: {e}"
-                    )
-                    try:
-                        md_pool.shutdown(wait=False)
-                    except Exception:
-                        pass
-
+            # ── If page_data was not pre-computed, convert now ────────
             if page_data is None:
-                self.logger.error(f"All pymupdf4llm attempts failed/timed-out for {paper_id}")
-                return figures, tables
+                result = self.convert_pdf_to_markdown(pdf_path, paper_id)
+                if result is None:
+                    return figures, tables
+                page_data, paper_image_dir = result
+            elif paper_image_dir is None:
+                paper_image_dir = os.path.join(self.figures_dir, paper_id)
+                os.makedirs(paper_image_dir, exist_ok=True)
 
             if _timed_out():
-                self.logger.warning(f"Timeout after markdown conversion for {paper_id} – skipping")
+                self.logger.warning(
+                    f"Timeout after markdown conversion for {paper_id} – skipping"
+                )
                 return figures, tables
 
             # ── Phase 1: Collect raw figure/table data (no embeddings yet) ──
@@ -271,6 +301,7 @@ class PDFProcessingHandler:
             # Local references for hot-loop speed (avoid repeated attribute lookups)
             _max_figs = self.MAX_FIGURES_PER_PAPER
             _max_tabs = self.MAX_TABLES_PER_PAPER
+            _max_pages = self.MAX_PAGES_TO_PROCESS
             _img_re = _RE_IMAGE_TAG
             _has_fig_re = _RE_HAS_FIGURE_WORD
             _has_tab_re = _RE_HAS_TABLE_WORD
@@ -1449,22 +1480,16 @@ class PDFProcessingHandler:
             self.logger.error(f"Error saving tables to Milvus: {e}")
             return False
 
+    # ─── Single-paper convenience (backward-compatible) ─────────────
+
     def process_paper_pdf(self, paper: Paper,
                           timeout: Optional[float] = None) -> Tuple[List[Figure], List[Table]]:
         """
-        Complete pipeline to process a paper's PDF and extract visual content.
+        Complete pipeline to process a *single* paper's PDF.
 
-        If the total processing time exceeds *timeout* seconds (default:
-        ``EXTRACTION_TIMEOUT``), the paper is skipped and an empty result
-        is returned.
-
-        Args:
-            paper: Paper entity with pdf_url
-            timeout: Max wall-clock seconds for the entire pipeline.
-                     Defaults to ``self.EXTRACTION_TIMEOUT``.
-
-        Returns:
-            Tuple of (figures, tables) extracted from the PDF
+        For batch processing prefer ``process_papers_batch`` which
+        separates the risky markdown-conversion step from the
+        extraction + upload step.
         """
         if not paper.pdf_url:
             self.logger.warning(f"No PDF URL provided for paper {paper.id}")
@@ -1493,9 +1518,24 @@ class PDFProcessingHandler:
                 pass
             return [], []
 
-        # Extract figures and tables with embeddings (deadline-aware)
+        # Phase 1 – convert to markdown (with hard per-strategy timeout)
+        md_result = self.convert_pdf_to_markdown(pdf_path, paper.id)
+
+        if md_result is None:
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
+            return [], []
+
+        page_data, paper_image_dir = md_result
+
+        # Phase 2 – extract figures/tables + embeddings
         figures, tables = self.extract_figures_and_tables(
-            pdf_path, paper.id, _deadline=deadline
+            pdf_path, paper.id,
+            page_data=page_data,
+            paper_image_dir=paper_image_dir,
+            _deadline=deadline,
         )
 
         elapsed_extract = time.monotonic() - t_start
@@ -1510,33 +1550,151 @@ class PDFProcessingHandler:
                 pass
             return figures, tables
 
-        # Save embeddings to Milvus using dedicated collections
-        try:
-            self.logger.info(f"Saving {len(figures)} figures and {len(tables)} tables to Milvus...")
-
-            # Save figures to dedicated figures collection
-            figures_success = self._save_figures_to_milvus(figures)
-            if not figures_success:
-                self.logger.warning("Failed to save some figures to dedicated Milvus figures collection")
-
-            # Save tables to dedicated tables collection
-            tables_success = self._save_tables_to_milvus(tables)
-            if not tables_success:
-                self.logger.warning("Failed to save some tables to dedicated Milvus tables collection")
-
-            if figures_success and tables_success:
-                self.logger.info("Successfully saved all figures and tables to their dedicated Milvus collections")
-
-        except Exception as e:
-            self.logger.error(f"Error saving to Milvus: {e}")
+        # Phase 3 – upload to Zilliz/Milvus
+        self._upload_to_milvus(figures, tables)
 
         elapsed_total = time.monotonic() - t_start
         self.logger.info(f"Paper {paper.id}: total processing time {elapsed_total:.1f}s")
 
-        # Clean up PDF file (optional)
         try:
             os.remove(pdf_path)
-        except:
+        except OSError:
             pass
 
         return figures, tables
+
+    # ─── Batch processing (Phase 1 → Phase 2 for all papers) ──────────
+
+    def process_papers_batch(
+        self, papers: List[Paper],
+        timeout_per_paper: Optional[float] = None,
+    ) -> List[Tuple[List[Figure], List[Table]]]:
+        """
+        Two-phase batch pipeline:
+
+        **Phase 1 – Download + Markdown** (for *all* papers):  
+        Download each PDF and run ``convert_pdf_to_markdown``.  
+        Papers whose conversion times out or fails are skipped
+        gracefully — they never block the rest of the batch.
+
+        **Phase 2 – Extract + Embed + Upload** (for *all* successful papers):  
+        For every paper that produced valid ``page_data``, extract
+        figures/tables, generate CLIP + SciBERT embeddings, and
+        upload to Zilliz/Milvus.
+
+        Args:
+            papers: List of ``Paper`` entities with ``pdf_url``.
+            timeout_per_paper: Max seconds for extraction per paper.
+                Defaults to ``EXTRACTION_TIMEOUT``.
+
+        Returns:
+            List of ``(figures, tables)`` tuples, one per input paper
+            (empty lists for papers that were skipped).
+        """
+        if timeout_per_paper is None:
+            timeout_per_paper = self.EXTRACTION_TIMEOUT
+
+        n = len(papers)
+        results: List[Tuple[List[Figure], List[Table]]] = [([], [])] * n
+
+        # ── Phase 1: Download + convert all papers ───────────────────
+        # Stores (pdf_path, page_data, paper_image_dir) per paper index
+        converted: Dict[int, Tuple[str, List[dict], str]] = {}
+
+        self.logger.info(f"Phase 1: Converting {n} PDFs to markdown...")
+        for idx, paper in enumerate(papers):
+            if not paper.pdf_url:
+                self.logger.warning(
+                    f"[{idx+1}/{n}] {paper.id}: no PDF URL – skipping"
+                )
+                continue
+
+            pdf_path = self.download_pdf(paper.pdf_url, paper.id)
+            if not pdf_path:
+                continue
+
+            md_result = self.convert_pdf_to_markdown(pdf_path, paper.id)
+            if md_result is None:
+                self.logger.warning(
+                    f"[{idx+1}/{n}] {paper.id}: markdown conversion failed – skipping"
+                )
+                try:
+                    os.remove(pdf_path)
+                except OSError:
+                    pass
+                continue
+
+            page_data, paper_image_dir = md_result
+            converted[idx] = (pdf_path, page_data, paper_image_dir)
+            self.logger.info(
+                f"[{idx+1}/{n}] {paper.id}: converted "
+                f"({len(page_data)} page chunks)"
+            )
+
+        self.logger.info(
+            f"Phase 1 complete: {len(converted)}/{n} papers converted successfully"
+        )
+
+        # ── Phase 2: Extract figures/tables + embed + upload ─────────
+        self.logger.info(
+            f"Phase 2: Extracting figures/tables from {len(converted)} papers..."
+        )
+        total_figures = 0
+        total_tables = 0
+
+        for idx, (pdf_path, page_data, paper_image_dir) in converted.items():
+            paper = papers[idx]
+            deadline = time.monotonic() + timeout_per_paper
+
+            try:
+                figures, tables = self.extract_figures_and_tables(
+                    pdf_path, paper.id,
+                    page_data=page_data,
+                    paper_image_dir=paper_image_dir,
+                    _deadline=deadline,
+                )
+
+                # Upload to Zilliz/Milvus
+                self._upload_to_milvus(figures, tables)
+
+                results[idx] = (figures, tables)
+                total_figures += len(figures)
+                total_tables += len(tables)
+
+                self.logger.info(
+                    f"[{idx+1}/{n}] {paper.id}: "
+                    f"{len(figures)} figures, {len(tables)} tables"
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"[{idx+1}/{n}] {paper.id}: extraction failed: {e}"
+                )
+            finally:
+                try:
+                    os.remove(pdf_path)
+                except OSError:
+                    pass
+
+        self.logger.info(
+            f"Phase 2 complete: {total_figures} figures, "
+            f"{total_tables} tables from {len(converted)} papers"
+        )
+        return results
+
+    def _upload_to_milvus(self, figures: List[Figure], tables: List[Table]) -> None:
+        """Upload figures and tables to Zilliz/Milvus (best-effort)."""
+        try:
+            if figures:
+                figures_success = self._save_figures_to_milvus(figures)
+                if not figures_success:
+                    self.logger.warning(
+                        "Failed to save some figures to Milvus"
+                    )
+            if tables:
+                tables_success = self._save_tables_to_milvus(tables)
+                if not tables_success:
+                    self.logger.warning(
+                        "Failed to save some tables to Milvus"
+                    )
+        except Exception as e:
+            self.logger.error(f"Error saving to Milvus: {e}")

@@ -197,38 +197,42 @@ class IngestionHandler():
         """
         print(f"Starting PDF processing and content extraction for {len(papers_data)} papers...")
 
+        # Collect papers that have PDF URLs
+        papers_with_pdf = []
+        papers_indices = []
+        for i, paper_data in enumerate(papers_data):
+            paper = paper_data["paper"]
+            if hasattr(paper, 'pdf_url') and paper.pdf_url:
+                papers_with_pdf.append(paper)
+                papers_indices.append(i)
+
+        # Use batch processing: Phase 1 (convert all) then Phase 2 (extract + upload all)
+        batch_results = []
+        if papers_with_pdf:
+            print(f"Batch processing {len(papers_with_pdf)} papers with PDFs...")
+            batch_results = self.pdf_handler.process_papers_batch(papers_with_pdf)
+
+        # Build results for all papers
         processed_papers = []
         total_figures = 0
         total_tables = 0
 
+        # Map batch results back to paper indices
+        result_map = {}
+        for batch_idx, orig_idx in enumerate(papers_indices):
+            if batch_idx < len(batch_results):
+                result_map[orig_idx] = batch_results[batch_idx]
+
         for i, paper_data in enumerate(papers_data):
-            print(f"Processing paper {i + 1}/{len(papers_data)}: {paper_data['paper'].id}")
-
             try:
-                paper = paper_data["paper"]
+                institutions = paper_data.get("institutions", [])
+                figures, tables = result_map.get(i, ([], []))
 
-                # Initialize empty lists for new content (keep existing institutions from OpenAlex)
-                figures = []
-                tables = []
-                institutions = paper_data.get("institutions", [])  # Use institutions from OpenAlex
-
-                # Process PDF if URL is available
-                if hasattr(paper, 'pdf_url') and paper.pdf_url:
-                    try:
-                        # Extract figures and tables from PDF
-                        pdf_figures, pdf_tables = self.pdf_handler.process_paper_pdf(paper)
-                        figures.extend(pdf_figures)
-                        tables.extend(pdf_tables)
-
-                    except Exception as e:
-                        print(f"Error processing PDF for paper {paper.id}: {e}")
-
-                # Create enhanced paper data
                 enhanced_paper_data = {
                     **paper_data,
-                    "institutions": institutions,  # Keep existing institutions from OpenAlex
-                    "figures": figures,
-                    "tables": tables
+                    "institutions": institutions,
+                    "figures": list(figures),
+                    "tables": list(tables)
                 }
 
                 processed_papers.append(enhanced_paper_data)
@@ -237,10 +241,9 @@ class IngestionHandler():
 
             except Exception as e:
                 print(f"Error processing paper {paper_data['paper'].id}: {e}")
-                # Still add the paper without extracted content
                 processed_papers.append({
                     **paper_data,
-                    "institutions": paper_data.get("institutions", []),  # Keep existing institutions
+                    "institutions": paper_data.get("institutions", []),
                     "figures": [],
                     "tables": []
                 })
@@ -263,38 +266,44 @@ class IngestionHandler():
 
     def _process_papers_with_pdfs(self, papers_data: List[Dict]) -> List[Dict]:
         """Helper method to process papers with PDF content extraction."""
+        # Collect papers that have PDF URLs
+        papers_with_pdf = []
+        papers_indices = []
+        for i, paper_data in enumerate(papers_data):
+            paper = paper_data["paper"]
+            if hasattr(paper, 'pdf_url') and paper.pdf_url:
+                papers_with_pdf.append(paper)
+                papers_indices.append(i)
+
+        # Use batch processing: Phase 1 (convert all) then Phase 2 (extract + upload all)
+        batch_results = []
+        if papers_with_pdf:
+            print(f"Batch processing {len(papers_with_pdf)} papers with PDFs...")
+            batch_results = self.pdf_handler.process_papers_batch(papers_with_pdf)
+
+        # Build results for all papers
         processed_papers = []
         total_figures = 0
         total_tables = 0
+
+        # Map batch results back to paper indices
+        result_map = {}
+        for batch_idx, orig_idx in enumerate(papers_indices):
+            if batch_idx < len(batch_results):
+                result_map[orig_idx] = batch_results[batch_idx]
 
         for i, paper_data in enumerate(papers_data):
             print(f"Processing paper {i + 1}/{len(papers_data)}: {paper_data['paper'].id}")
 
             try:
-                paper = paper_data["paper"]
+                institutions = paper_data.get("institutions", [])
+                figures, tables = result_map.get(i, ([], []))
 
-                # Initialize empty lists for new content (keep existing institutions from OpenAlex)
-                figures = []
-                tables = []
-                institutions = paper_data.get("institutions", [])  # Use institutions from OpenAlex
-
-                # Process PDF if URL is available
-                if hasattr(paper, 'pdf_url') and paper.pdf_url:
-                    try:
-                        # Extract figures and tables from PDF
-                        pdf_figures, pdf_tables = self.pdf_handler.process_paper_pdf(paper)
-                        figures.extend(pdf_figures)
-                        tables.extend(pdf_tables)
-
-                    except Exception as e:
-                        print(f"Error processing PDF for paper {paper.id}: {e}")
-
-                # Create enhanced paper data
                 enhanced_paper_data = {
                     **paper_data,
-                    "institutions": institutions,  # Keep existing institutions from OpenAlex
-                    "figures": figures,
-                    "tables": tables
+                    "institutions": institutions,
+                    "figures": list(figures),
+                    "tables": list(tables)
                 }
 
                 processed_papers.append(enhanced_paper_data)
@@ -303,10 +312,9 @@ class IngestionHandler():
 
             except Exception as e:
                 print(f"Error processing paper {paper_data['paper'].id}: {e}")
-                # Still add the paper without extracted content
                 processed_papers.append({
                     **paper_data,
-                    "institutions": paper_data.get("institutions", []),  # Keep existing institutions
+                    "institutions": paper_data.get("institutions", []),
                     "figures": [],
                     "tables": []
                 })
