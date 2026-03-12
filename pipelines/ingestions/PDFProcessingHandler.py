@@ -46,39 +46,6 @@ _RE_FIG_BOLD_CAPTION = re.compile(
 _RE_HAS_FIGURE_WORD = re.compile(r'\bfig(?:ure)?\b', re.IGNORECASE)
 _RE_HAS_TABLE_WORD = re.compile(r'\btab(?:le)?\b', re.IGNORECASE)
 _RE_SEP_CELL = re.compile(r'^:?\s*-{3,}\s*:?$')
-_RE_EXTRA_SEP_ROW = re.compile(r'^[\s|:-]+$')
-
-# ─── Pre-compiled caption patterns (were re.compile'd per-call!) ─────
-# Figure caption: "Figure 1: …" / "Fig. 2. …" / "Figure S3a …"
-_RE_FIG_CAP_STD = re.compile(
-    r'((?:fig(?:ure|\.)?\s*\.?\s*(?:S?\d+[a-z]?(?:\([a-z]\))?))[.:—\-]?\s*.+?)'
-    r'(?:\n\n|\n(?=#{1,3}\s)|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?|\|)\s*\.?\s*\d)|$)',
-    re.IGNORECASE | re.DOTALL,
-)
-# Bold/italic figure caption: "**Figure 1.** description"
-_RE_FIG_CAP_BOLD = re.compile(
-    r'(\*{1,2}(?:fig(?:ure|\.)?\s*\.?\s*S?\d+[a-z]?)\*{1,2}[.:—\-]?\s*.+?)'
-    r'(?:\n\n|\n(?=#{1,3}\s)|$)',
-    re.IGNORECASE | re.DOTALL,
-)
-# Table caption: "Table 1: …" / "Tab. 2. …"
-_RE_TBL_CAP_STD = re.compile(
-    r'((?:tab(?:le|\.)?\s*\.?\s*(?:S?\d+[a-z]?))[.:—\-]?\s*.+?)'
-    r'(?:\n\n|\n(?=\|)|\n(?=#{1,3}\s)|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?)\.?\s*\d)|$)',
-    re.IGNORECASE | re.DOTALL,
-)
-# Bold/italic table caption
-_RE_TBL_CAP_BOLD = re.compile(
-    r'(\*{1,2}(?:tab(?:le|\.)?\s*\.?\s*S?\d+[a-z]?)\*{1,2}[.:—\-]?\s*.+?)'
-    r'(?:\n\n|\n(?=\|)|$)',
-    re.IGNORECASE | re.DOTALL,
-)
-# Caption in raw page text (native fallback)
-_RE_PAGE_CAP_FIG = re.compile(
-    r'((?:fig(?:ure|\.)?\s*\.?\s*(?:S?\d+[a-z]?(?:\([a-z]\))?))[.:—\-]?\s*.+?)'
-    r'(?:\n\n|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?)\.?\s*\d)|$)',
-    re.IGNORECASE | re.DOTALL,
-)
 
 
 class PDFProcessingHandler:
@@ -86,10 +53,8 @@ class PDFProcessingHandler:
 
     MAX_FIGURES_PER_PAPER = 10   # cap extracted figures per PDF
     MAX_TABLES_PER_PAPER  = 10   # cap extracted tables per PDF
-    MAX_PAGES_TO_PROCESS  = 30   # only scan the first N pages for figures/tables
     EXTRACTION_TIMEOUT    = 120  # seconds – skip paper if extraction exceeds this
     DOWNLOAD_TIMEOUT      = 60   # seconds – skip paper if PDF download exceeds this
-    MARKDOWN_TIMEOUT      = 10   # seconds – hard cap per _to_markdown() attempt
 
     def __init__(self, clip_client: Optional[CLIPClient] = None, scibert_client: Optional[SciBERTClient] = None,
                  milvus_client: Optional[MilvusClient] = None):
@@ -152,123 +117,32 @@ class PDFProcessingHandler:
         except Exception:
             return None
 
-    # ─── Phase 1: PDF → Markdown conversion (can hang on bad PDFs) ─────
-
-    def convert_pdf_to_markdown(
-        self, pdf_path: str, paper_id: str,
-    ) -> Optional[Tuple[List[dict], str]]:
+    def extract_figures_and_tables(self, pdf_path: str, paper_id: str,
+                                    _deadline: Optional[float] = None) -> Tuple[List[Figure], List[Table]]:
         """
-        Convert a PDF to markdown page chunks using pymupdf4llm.
+        Extract figures and tables from a PDF using pymupdf4llm.
 
-        This is the *only* step that can hang on pathological PDFs.
-        It is separated so callers can batch-convert many papers first,
-        then extract figures/tables from the results.
+        pymupdf4llm's ``to_markdown`` with ``page_chunks=True`` and
+        ``write_images=True`` gives us:
+          • Per-page markdown text (tables rendered as GFM markdown tables)
+          • Image files saved to disk with references in the markdown
+          • Structured metadata per page (images list, tables list)
 
-        Returns:
-            ``(page_data, paper_image_dir)`` on success, or ``None``
-            if all strategies failed / timed-out.
-        """
-        paper_image_dir = os.path.join(self.figures_dir, paper_id)
-        os.makedirs(paper_image_dir, exist_ok=True)
-
-        # Determine actual page count so we never request out-of-range pages
-        try:
-            doc = fitz.open(pdf_path)
-            actual_pages = doc.page_count
-            doc.close()
-        except Exception as e:
-            self.logger.error(f"Cannot open PDF {pdf_path}: {e}")
-            return None
-
-        _max_pages = min(self.MAX_PAGES_TO_PROCESS, actual_pages)
-        _common_kwargs = dict(
-            pages=list(range(_max_pages)),
-            page_chunks=True,
-            write_images=True,
-            image_path=paper_image_dir,
-            image_format="png",
-            dpi=150,
-            image_size_limit=0.01,
-            force_text=True,
-            show_progress=False,
-        )
-
-        page_data = None
-        _strategies = [
-            {},
-            {"table_strategy": "lines"},
-            {"table_strategy": "text"},
-            {"ignore_graphics": True},
-        ]
-        _md_timeout = self.MARKDOWN_TIMEOUT
-
-        for attempt, extra in enumerate(_strategies):
-            try:
-                md_pool = ThreadPoolExecutor(max_workers=1)
-                fut = md_pool.submit(
-                    _to_markdown, pdf_path, **{**_common_kwargs, **extra}
-                )
-                try:
-                    page_data = fut.result(timeout=_md_timeout)
-                except (FuturesTimeoutError, TimeoutError):
-                    self.logger.warning(
-                        f"pymupdf4llm attempt {attempt + 1} timed out "
-                        f"after {_md_timeout}s for {paper_id} – "
-                        f"aborting all strategies (PDF is pathological)"
-                    )
-                    md_pool.shutdown(wait=False)
-                    return None        # bail out immediately
-                else:
-                    md_pool.shutdown(wait=False)
-                    self.logger.info(
-                        f"pymupdf4llm converted {paper_id} "
-                        f"({len(page_data)} page chunks)"
-                    )
-                    return (page_data, paper_image_dir)
-            except (ValueError, TypeError, AttributeError, IndexError, RuntimeError) as e:
-                self.logger.warning(
-                    f"pymupdf4llm attempt {attempt + 1} failed for {paper_id}: {e}"
-                )
-                try:
-                    md_pool.shutdown(wait=False)
-                except Exception:
-                    pass
-
-        self.logger.error(
-            f"All pymupdf4llm attempts failed for {paper_id}"
-        )
-        return None
-
-    # ─── Phase 2: Extract figures & tables from pre-converted data ─────
-
-    def extract_figures_and_tables(
-        self, pdf_path: str, paper_id: str,
-        page_data: Optional[List[dict]] = None,
-        paper_image_dir: Optional[str] = None,
-        _deadline: Optional[float] = None,
-    ) -> Tuple[List[Figure], List[Table]]:
-        """
-        Extract figures and tables from a PDF.
-
-        If *page_data* and *paper_image_dir* are supplied (from a prior
-        ``convert_pdf_to_markdown`` call), the expensive markdown
-        conversion is skipped entirely.  Otherwise the method falls
-        back to calling ``convert_pdf_to_markdown`` internally for
-        backward compatibility.
+        All CLIP/SciBERT embeddings are generated in batches at the end
+        for maximum throughput.
 
         Args:
             pdf_path: Path to the local PDF file.
             paper_id: Unique paper identifier.
-            page_data: Pre-computed page chunks from
-                ``convert_pdf_to_markdown``.  ``None`` means
-                "convert now".
-            paper_image_dir: Directory where pymupdf4llm saved the
-                extracted images.  Required when *page_data* is given.
-            _deadline: Absolute ``time.monotonic()`` deadline.
+            _deadline: Absolute ``time.monotonic()`` deadline.  If the
+                wall-clock time exceeds this value at any phase boundary
+                the method returns whatever it has collected so far.
+                Set to ``None`` (default) to disable the timeout.
         """
         figures: List[Figure] = []
         tables: List[Table] = []
 
+        # Timeout helper – checked between phases
         if _deadline is None:
             _deadline = time.monotonic() + self.EXTRACTION_TIMEOUT
 
@@ -276,20 +150,44 @@ class PDFProcessingHandler:
             return time.monotonic() >= _deadline
 
         try:
-            # ── If page_data was not pre-computed, convert now ────────
+            # Use a paper-specific subfolder so images don't collide
+            paper_image_dir = os.path.join(self.figures_dir, paper_id)
+            os.makedirs(paper_image_dir, exist_ok=True)
+
+            # ── Run pymupdf4llm ──────────────────────────────────────────
+            _common_kwargs = dict(
+                page_chunks=True,
+                write_images=True,
+                image_path=paper_image_dir,
+                image_format="png",
+                dpi=150,
+                image_size_limit=0.01,
+                force_text=True,
+                show_progress=False,
+            )
+
+            page_data = None
+            _strategies = [
+                {},
+                {"table_strategy": "lines"},
+                {"table_strategy": "text"},
+                {"ignore_graphics": True},
+            ]
+            for attempt, extra in enumerate(_strategies):
+                try:
+                    page_data = _to_markdown(pdf_path, **{**_common_kwargs, **extra})
+                    break
+                except (ValueError, TypeError, AttributeError) as e:
+                    self.logger.warning(
+                        f"pymupdf4llm attempt {attempt + 1} failed for {paper_id}: {e}"
+                    )
+
             if page_data is None:
-                result = self.convert_pdf_to_markdown(pdf_path, paper_id)
-                if result is None:
-                    return figures, tables
-                page_data, paper_image_dir = result
-            elif paper_image_dir is None:
-                paper_image_dir = os.path.join(self.figures_dir, paper_id)
-                os.makedirs(paper_image_dir, exist_ok=True)
+                self.logger.error(f"All pymupdf4llm attempts failed for {paper_id}")
+                return figures, tables
 
             if _timed_out():
-                self.logger.warning(
-                    f"Timeout after markdown conversion for {paper_id} – skipping"
-                )
+                self.logger.warning(f"Timeout after markdown conversion for {paper_id} – skipping")
                 return figures, tables
 
             # ── Phase 1: Collect raw figure/table data (no embeddings yet) ──
@@ -310,7 +208,6 @@ class PDFProcessingHandler:
             # Local references for hot-loop speed (avoid repeated attribute lookups)
             _max_figs = self.MAX_FIGURES_PER_PAPER
             _max_tabs = self.MAX_TABLES_PER_PAPER
-            _max_pages = self.MAX_PAGES_TO_PROCESS
             _img_re = _RE_IMAGE_TAG
             _has_fig_re = _RE_HAS_FIGURE_WORD
             _has_tab_re = _RE_HAS_TABLE_WORD
@@ -342,31 +239,16 @@ class PDFProcessingHandler:
 
                 # ── 1. FIGURES ───────────────────────────────────────────
                 if len(raw_figures) < _max_figs:
-                    img_matches = list(_img_re.finditer(md_text))
-                    if img_matches:
-                        self.logger.debug(
-                            f"Page {page_num}: found {len(img_matches)} image tag(s) in markdown"
-                        )
-                    for match in img_matches:
+                    for match in _img_re.finditer(md_text):
                         img_rel_path = match.group(2).strip()
 
-                        # Resolve to absolute path to avoid CWD-dependent failures
-                        if not os.path.isabs(img_rel_path):
-                            img_rel_path = os.path.abspath(img_rel_path)
-
                         if not _path_exists(img_rel_path):
-                            self.logger.debug(
-                                f"Page {page_num}: image path does not exist: {img_rel_path}"
-                            )
                             continue
 
-                        # ── Fast file-size pre-check (skip tiny files < 512 B) ──
+                        # ── Fast file-size pre-check (skip tiny files < 2 KB) ──
                         try:
                             fsize = os.path.getsize(img_rel_path)
-                            if fsize < 512:
-                                self.logger.debug(
-                                    f"Page {page_num}: skipping tiny image ({fsize} bytes): {img_rel_path}"
-                                )
+                            if fsize < 2048:
                                 continue
                         except OSError:
                             continue
@@ -388,16 +270,10 @@ class PDFProcessingHandler:
                             pil_image = Image.open(img_rel_path)
                             w, h = pil_image.size
                             if w < 100 or h < 100:
-                                self.logger.debug(
-                                    f"Page {page_num}: skipping small image ({w}x{h}): {img_rel_path}"
-                                )
                                 pil_image.close()
                                 continue
                             pil_image = pil_image.convert("RGB")
-                        except Exception as img_err:
-                            self.logger.debug(
-                                f"Page {page_num}: failed to open image: {img_rel_path}: {img_err}"
-                            )
+                        except Exception:
                             continue
 
                         # ── Perceptual-hash dedup ──
@@ -416,31 +292,16 @@ class PDFProcessingHandler:
                         description = _find_cap_img(
                             md_text, match.start(),
                             prefix_pattern=r'(?:fig(?:ure|\.)?)\s*\.?\s*(?:S?\d+[a-z]?(?:\([a-z]\))?)',
-                            window=2000,
+                            window=800,
                         )
 
                         if not description or not _has_fig_re.search(description):
-                            # Try a broader search across the entire page text
-                            page_level_caption = None
-                            if _has_fig_re.search(md_text):
-                                page_level_caption = _find_cap_img(
-                                    md_text, match.start(),
-                                    prefix_pattern=r'(?:fig(?:ure|\.)?)\s*\.?\s*(?:S?\d+[a-z]?(?:\([a-z]\))?)',
-                                    window=len(md_text),
-                                )
-                            if page_level_caption and _has_fig_re.search(page_level_caption):
-                                description = page_level_caption
-                                self.logger.debug(
-                                    f"Page {page_num}: found caption via full-page search: "
-                                    f"{description[:80]}..."
-                                )
-                            else:
-                                # Keep the image with a generic description
-                                description = f"Figure from page {page_num} of paper {paper_id}"
-                                self.logger.info(
-                                    f"Page {page_num}: no formal caption found for image "
-                                    f"{img_rel_path}, keeping with generic description"
-                                )
+                            pil_image.close()
+                            try:
+                                os.remove(img_rel_path)
+                            except OSError:
+                                pass
+                            continue
 
                         figure_id = f"{paper_id}#figure_{figure_counter}"
                         canonical_path = _path_join(_figures_dir, f"{figure_id}.png")
@@ -469,50 +330,22 @@ class PDFProcessingHandler:
                     continue
 
                 table_blocks = _extract_md_tables(md_text)
-                if table_blocks:
-                    self.logger.debug(
-                        f"Page {page_num}: found {len(table_blocks)} markdown table block(s)"
-                    )
                 for table_md in table_blocks:
                     table_caption = _find_cap_tbl(
                         md_text, table_md,
                         prefix_pattern=r'(?:tab(?:le|\.)?)\s*\.?\s*(?:S?\d+[a-z]?)',
-                        window=1200,
+                        window=600,
                     )
 
                     headers, rows = _parse_md_tbl(table_md)
                     if not headers and not rows:
-                        self.logger.debug(
-                            f"Page {page_num}: table block failed parsing (no headers/rows)"
-                        )
                         continue
 
                     table_id = f"{paper_id}#table_{table_counter}"
                     description = table_caption or None
 
                     if not description or not _has_tab_re.search(description):
-                        # Try broader search across full page text
-                        if _has_tab_re.search(md_text):
-                            page_level_caption = _find_cap_tbl(
-                                md_text, table_md,
-                                prefix_pattern=r'(?:tab(?:le|\.)?)\s*\.?\s*(?:S?\d+[a-z]?)',
-                                window=len(md_text),
-                            )
-                            if page_level_caption and _has_tab_re.search(page_level_caption):
-                                description = page_level_caption
-                                self.logger.debug(
-                                    f"Page {page_num}: found table caption via full-page search"
-                                )
-                        if not description or not _has_tab_re.search(description):
-                            # Keep table with a generic description
-                            description = (
-                                f"Table from page {page_num} of paper {paper_id} "
-                                f"({len(headers or [])} columns, {len(rows or [])} rows)"
-                            )
-                            self.logger.info(
-                                f"Page {page_num}: no formal caption for table, "
-                                f"keeping with generic description"
-                            )
+                        continue
 
                     rt = _TableRaw()
                     rt.table_id = table_id
@@ -528,13 +361,6 @@ class PDFProcessingHandler:
                     if len(raw_tables) >= _max_tabs:
                         break
 
-            self.logger.info(
-                f"Phase 1 collection for {paper_id}: "
-                f"{len(raw_figures)} figures, {len(raw_tables)} tables "
-                f"from {len(page_data)} page chunks "
-                f"(dupes skipped: {_skipped_dupes})"
-            )
-
             # ── Open PDF once — reused for native fallback + table rendering ──
             doc = fitz.open(pdf_path)
 
@@ -542,9 +368,8 @@ class PDFProcessingHandler:
             if len(raw_figures) < _max_figs and not _timed_out():
                 try:
                     full_text_by_page: Dict[int, str] = {}
-                    _fallback_page_limit = min(doc.page_count, _max_pages)
 
-                    for page_idx in range(_fallback_page_limit):
+                    for page_idx in range(doc.page_count):
                         if len(raw_figures) >= _max_figs:
                             break
 
@@ -643,12 +468,12 @@ class PDFProcessingHandler:
                     self.logger.warning(f"PyMuPDF native figure fallback failed: {e}")
 
             # ── Phase 1b: Remove sub-images contained in larger figures ─
-            if not _timed_out():
-                raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
-                _skipped_dupes += containment_removed
-            else:
-                containment_removed = 0
-                self.logger.warning(f"Timeout before dedup for {paper_id} – skipping sub-image removal")
+            # if not _timed_out():
+            #     raw_figures, containment_removed = self._remove_contained_sub_images(raw_figures)
+            #     _skipped_dupes += containment_removed
+            # else:
+            #     containment_removed = 0
+            #     self.logger.warning(f"Timeout before dedup for {paper_id} – skipping sub-image removal")
 
             if _skipped_dupes > 0:
                 self.logger.info(
@@ -814,23 +639,17 @@ class PDFProcessingHandler:
                 rf.pil_image = None
 
             # Clean up leftover pymupdf4llm temp images in background thread
-            # Only remove files that were NOT moved to the canonical figures_dir
-            extracted_paths = {fig.image_path for fig in figures}
-            def _cleanup_temp_dir(d: str, keep_paths: Set[str]):
+            def _cleanup_temp_dir(d: str):
                 try:
                     for leftover in os.listdir(d):
                         p = os.path.join(d, leftover)
-                        if os.path.isfile(p) and p not in keep_paths:
+                        if os.path.isfile(p):
                             os.remove(p)
-                    # Only remove dir if empty
-                    if not os.listdir(d):
-                        os.rmdir(d)
+                    os.rmdir(d)
                 except OSError:
                     pass
 
-            ThreadPoolExecutor(max_workers=1).submit(
-                _cleanup_temp_dir, paper_image_dir, extracted_paths
-            )
+            ThreadPoolExecutor(max_workers=1).submit(_cleanup_temp_dir, paper_image_dir)
 
             self.logger.info(
                 f"Extracted {len(figures)} figures and {len(tables)} tables "
@@ -862,22 +681,25 @@ class PDFProcessingHandler:
     @staticmethod
     def _compute_image_phash_int(pil_image: Image.Image, hash_size: int = 8) -> int:
         """
-        Compute a perceptual hash as a raw integer.
+        Compute a perceptual hash as a raw integer (no string round-trip).
 
-        Uses BILINEAR resize and ``int.from_bytes`` on a pre-built
-        bytearray — avoids the slow Python ``for b in raw`` loop
-        over 1024 bytes entirely.
+        Uses BILINEAR resize (≈3× faster than LANCZOS for 32×32) and
+        byte-level comparison via ``bytes`` — avoids building a Python
+        list of 1024 ints and a 1024-char '0'/'1' string.
 
         Raises on error (caller should catch).
         """
         dim = hash_size * 4  # 32 for default hash_size=8
+        # BILINEAR is ~3× faster than LANCZOS and perfectly adequate
+        # for a 32×32 perceptual hash thumbnail.
         raw = pil_image.resize((dim, dim), Image.BILINEAR).convert("L").tobytes()
-        n = len(raw)
-        avg = sum(raw) / n
-        # Build a bytes object where each byte is 0 or 1, then convert
-        # to int in one shot — ~50× faster than a Python for-loop.
-        bits = bytes(1 if b > avg else 0 for b in raw)
-        return int.from_bytes(bits, 'big')  # wrong magnitude but consistent
+        avg = sum(raw) / len(raw)
+        # Build the hash integer directly from bytes — no intermediate
+        # string of '0'/'1' characters.
+        h = 0
+        for b in raw:
+            h = (h << 1) | (1 if b > avg else 0)
+        return h
 
     @staticmethod
     def _phash_distance(h1: str, h2: str) -> int:
@@ -1045,27 +867,44 @@ class PDFProcessingHandler:
 
     @staticmethod
     def _find_caption_near_image(md_text: str, img_pos: int,
-                                 prefix_pattern: str = '', window: int = 800) -> Optional[str]:
+                                 prefix_pattern: str, window: int = 800) -> Optional[str]:
         """
-        Search for a figure caption near the image reference.
+        Search for a caption (e.g. "Figure 1: …") in the markdown text
+        within *window* characters before/after the image reference.
 
-        Uses pre-compiled module-level regexes (_RE_FIG_CAP_STD,
-        _RE_FIG_CAP_BOLD) — zero per-call compilation cost.
+        Uses multiple strategies:
+        1. Standard prefix match ("Figure 1: description…")
+        2. Bold/italic caption ("**Figure 1.** description…")
+        3. Parenthetical label ((a) description) near the image
         """
         start = max(0, img_pos - window)
         end = min(len(md_text), img_pos + window)
         neighbourhood = md_text[start:end]
 
-        # Strategy 1: Standard caption
-        m = _RE_FIG_CAP_STD.search(neighbourhood)
+        # Strategy 1: Standard caption – "Figure 1: …" or "Fig. 2. …"
+        # Terminate at double-newline or a line that starts a new section
+        # (heading, another figure/table, or a pipe-table row).
+        pattern = re.compile(
+            rf'({prefix_pattern}[.:\-—]?\s*.+?)'
+            r'(?:\n\n|\n(?=#{1,3}\s)|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?|\|)\s*\.?\s*\d)|$)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m = pattern.search(neighbourhood)
         if m:
             caption = m.group(1).strip()
+            # Trim excessively long captions (> 1000 chars) – likely runaway match
             if len(caption) > 1000:
                 caption = caption[:1000].rsplit('.', 1)[0] + '.'
             return caption
 
-        # Strategy 2: Bold/italic caption
-        m2 = _RE_FIG_CAP_BOLD.search(neighbourhood)
+        # Strategy 2: Bold / italic markdown caption
+        # e.g. "**Figure 1.** Some description here"
+        bold_pattern = re.compile(
+            r'(\*{1,2}(?:fig(?:ure|\.)?\s*\.?\s*S?\d+[a-z]?)\*{1,2}[.:\-—]?\s*.+?)'
+            r'(?:\n\n|\n(?=#{1,3}\s)|$)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m2 = bold_pattern.search(neighbourhood)
         if m2:
             caption = m2.group(1).strip().strip('*').strip()
             if len(caption) > 1000:
@@ -1076,16 +915,24 @@ class PDFProcessingHandler:
 
     @staticmethod
     def _find_caption_in_page_text(page_text: str,
-                                   prefix_pattern: str = '') -> Optional[str]:
+                                   prefix_pattern: str) -> Optional[str]:
         """
-        Search raw page text for a figure caption.
+        Search raw page text (from PyMuPDF ``page.get_text("text")``) for
+        a figure/table caption.  Used by the native-extraction fallback
+        where we don't have a specific image position in the markdown.
 
-        Uses pre-compiled _RE_PAGE_CAP_FIG — zero per-call cost.
+        Returns the first matching caption, or None.
         """
         if not page_text:
             return None
 
-        m = _RE_PAGE_CAP_FIG.search(page_text)
+        # Standard caption line(s)
+        pattern = re.compile(
+            rf'({prefix_pattern}[.:\-—]?\s*.+?)'
+            r'(?:\n\n|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?)\s*\.?\s*\d)|$)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m = pattern.search(page_text)
         if m:
             caption = m.group(1).strip()
             if len(caption) > 1000:
@@ -1187,12 +1034,12 @@ class PDFProcessingHandler:
 
     @staticmethod
     def _find_caption_near_table(md_text: str, table_md: str,
-                                 prefix_pattern: str = '', window: int = 600) -> Optional[str]:
+                                 prefix_pattern: str, window: int = 600) -> Optional[str]:
         """
-        Find a table caption near the table block.
+        Find a table caption in the neighbourhood of the table block.
 
-        Uses pre-compiled _RE_TBL_CAP_STD / _RE_TBL_CAP_BOLD —
-        zero per-call compilation cost.
+        Searches both above and below the table for lines starting
+        with "Table N" / "Tab. N" etc.
         """
         pos = md_text.find(table_md)
         if pos == -1:
@@ -1201,16 +1048,26 @@ class PDFProcessingHandler:
         end = min(len(md_text), pos + len(table_md) + window)
         neighbourhood = md_text[start:end]
 
-        # Strategy 1: standard caption
-        m = _RE_TBL_CAP_STD.search(neighbourhood)
+        # Strategy 1: standard caption line
+        pattern = re.compile(
+            rf'({prefix_pattern}[.:\-—]?\s*.+?)'
+            r'(?:\n\n|\n(?=\|)|\n(?=#{1,3}\s)|\n(?=(?:fig(?:ure|\.)?|tab(?:le|\.)?)\.?\s*\d)|$)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m = pattern.search(neighbourhood)
         if m:
             caption = m.group(1).strip()
             if len(caption) > 1000:
                 caption = caption[:1000].rsplit('.', 1)[0] + '.'
             return caption
 
-        # Strategy 2: bold/italic caption
-        m2 = _RE_TBL_CAP_BOLD.search(neighbourhood)
+        # Strategy 2: bold/italic table caption
+        bold_pattern = re.compile(
+            r'(\*{1,2}(?:tab(?:le|\.)?\s*\.?\s*S?\d+[a-z]?)\*{1,2}[.:\-—]?\s*.+?)'
+            r'(?:\n\n|\n(?=\|)|$)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m2 = bold_pattern.search(neighbourhood)
         if m2:
             caption = m2.group(1).strip().strip('*').strip()
             if len(caption) > 1000:
@@ -1244,7 +1101,7 @@ class PDFProcessingHandler:
 
         rows = []
         for line in lines[2:]:            # skip header (0) and separator (1)
-            if _RE_EXTRA_SEP_ROW.match(line):
+            if re.match(r'^[\s|:-]+$', line):
                 continue                  # extra separator row
             rows.append(_split_row(line))
 
@@ -1515,7 +1372,6 @@ class PDFProcessingHandler:
             return True
 
         try:
-            # Fit TF-IDF vectorizer once for all descriptions and table texts
             if not self.milvus_client.is_tfidf_fitted:
                 all_texts = []
                 for table in tables:
@@ -1566,16 +1422,22 @@ class PDFProcessingHandler:
             self.logger.error(f"Error saving tables to Milvus: {e}")
             return False
 
-    # ─── Single-paper convenience (backward-compatible) ─────────────
-
     def process_paper_pdf(self, paper: Paper,
                           timeout: Optional[float] = None) -> Tuple[List[Figure], List[Table]]:
         """
-        Complete pipeline to process a *single* paper's PDF.
+        Complete pipeline to process a paper's PDF and extract visual content.
 
-        For batch processing prefer ``process_papers_batch`` which
-        separates the risky markdown-conversion step from the
-        extraction + upload step.
+        If the total processing time exceeds *timeout* seconds (default:
+        ``EXTRACTION_TIMEOUT``), the paper is skipped and an empty result
+        is returned.
+
+        Args:
+            paper: Paper entity with pdf_url
+            timeout: Max wall-clock seconds for the entire pipeline.
+                     Defaults to ``self.EXTRACTION_TIMEOUT``.
+
+        Returns:
+            Tuple of (figures, tables) extracted from the PDF
         """
         if not paper.pdf_url:
             self.logger.warning(f"No PDF URL provided for paper {paper.id}")
@@ -1604,24 +1466,9 @@ class PDFProcessingHandler:
                 pass
             return [], []
 
-        # Phase 1 – convert to markdown (with hard per-strategy timeout)
-        md_result = self.convert_pdf_to_markdown(pdf_path, paper.id)
-
-        if md_result is None:
-            try:
-                os.remove(pdf_path)
-            except OSError:
-                pass
-            return [], []
-
-        page_data, paper_image_dir = md_result
-
-        # Phase 2 – extract figures/tables + embeddings
+        # Extract figures and tables with embeddings (deadline-aware)
         figures, tables = self.extract_figures_and_tables(
-            pdf_path, paper.id,
-            page_data=page_data,
-            paper_image_dir=paper_image_dir,
-            _deadline=deadline,
+            pdf_path, paper.id, _deadline=deadline
         )
 
         elapsed_extract = time.monotonic() - t_start
@@ -1636,158 +1483,33 @@ class PDFProcessingHandler:
                 pass
             return figures, tables
 
-        # Phase 3 – upload to Zilliz/Milvus
-        self._upload_to_milvus(figures, tables)
+        # Save embeddings to Milvus using dedicated collections
+        try:
+            self.logger.info(f"Saving {len(figures)} figures and {len(tables)} tables to Milvus...")
+
+            # Save figures to dedicated figures collection
+            figures_success = self._save_figures_to_milvus(figures)
+            if not figures_success:
+                self.logger.warning("Failed to save some figures to dedicated Milvus figures collection")
+
+            # Save tables to dedicated tables collection
+            tables_success = self._save_tables_to_milvus(tables)
+            if not tables_success:
+                self.logger.warning("Failed to save some tables to dedicated Milvus tables collection")
+
+            if figures_success and tables_success:
+                self.logger.info("Successfully saved all figures and tables to their dedicated Milvus collections")
+
+        except Exception as e:
+            self.logger.error(f"Error saving to Milvus: {e}")
 
         elapsed_total = time.monotonic() - t_start
         self.logger.info(f"Paper {paper.id}: total processing time {elapsed_total:.1f}s")
 
+        # Clean up PDF file (optional)
         try:
             os.remove(pdf_path)
-        except OSError:
+        except:
             pass
 
         return figures, tables
-
-    # ─── Batch processing (Phase 1 → Phase 2 for all papers) ──────────
-
-    def process_papers_batch(
-        self, papers: List[Paper],
-        timeout_per_paper: Optional[float] = None,
-    ) -> List[Tuple[List[Figure], List[Table]]]:
-        """
-        Two-phase batch pipeline:
-
-        **Phase 1 – Download + Markdown** (for *all* papers):  
-        Download each PDF and run ``convert_pdf_to_markdown``.  
-        Papers whose conversion times out or fails are skipped
-        gracefully — they never block the rest of the batch.
-
-        **Phase 2 – Extract + Embed + Upload** (for *all* successful papers):  
-        For every paper that produced valid ``page_data``, extract
-        figures/tables, generate CLIP + SciBERT embeddings, and
-        upload to Zilliz/Milvus.
-
-        Args:
-            papers: List of ``Paper`` entities with ``pdf_url``.
-            timeout_per_paper: Max seconds for extraction per paper.
-                Defaults to ``EXTRACTION_TIMEOUT``.
-
-        Returns:
-            List of ``(figures, tables)`` tuples, one per input paper
-            (empty lists for papers that were skipped).
-        """
-        if timeout_per_paper is None:
-            timeout_per_paper = self.EXTRACTION_TIMEOUT
-
-        n = len(papers)
-        results: List[Tuple[List[Figure], List[Table]]] = [([], [])] * n
-
-        # ── Phase 1: Download + convert all papers ───────────────────
-        # Stores (pdf_path, page_data, paper_image_dir) per paper index
-        converted: Dict[int, Tuple[str, List[dict], str]] = {}
-
-        self.logger.info(f"Phase 1: Converting {n} PDFs to markdown...")
-        for idx, paper in enumerate(papers):
-            if not paper.pdf_url:
-                self.logger.warning(
-                    f"[{idx+1}/{n}] {paper.id}: no PDF URL – skipping"
-                )
-                continue
-
-            pdf_path = self.download_pdf(paper.pdf_url, paper.id)
-            if not pdf_path:
-                continue
-
-            try:
-                md_result = self.convert_pdf_to_markdown(pdf_path, paper.id)
-            except Exception as e:
-                self.logger.error(
-                    f"[{idx+1}/{n}] {paper.id}: convert_pdf_to_markdown crashed: {e}"
-                )
-                md_result = None
-
-            if md_result is None:
-                self.logger.warning(
-                    f"[{idx+1}/{n}] {paper.id}: markdown conversion failed – skipping"
-                )
-                try:
-                    os.remove(pdf_path)
-                except OSError:
-                    pass
-                continue
-
-            page_data, paper_image_dir = md_result
-            converted[idx] = (pdf_path, page_data, paper_image_dir)
-            self.logger.info(
-                f"[{idx+1}/{n}] {paper.id}: converted "
-                f"({len(page_data)} page chunks)"
-            )
-
-        self.logger.info(
-            f"Phase 1 complete: {len(converted)}/{n} papers converted successfully"
-        )
-
-        # ── Phase 2: Extract figures/tables + embed + upload ─────────
-        self.logger.info(
-            f"Phase 2: Extracting figures/tables from {len(converted)} papers..."
-        )
-        total_figures = 0
-        total_tables = 0
-
-        for idx, (pdf_path, page_data, paper_image_dir) in converted.items():
-            paper = papers[idx]
-            deadline = time.monotonic() + timeout_per_paper
-
-            try:
-                figures, tables = self.extract_figures_and_tables(
-                    pdf_path, paper.id,
-                    page_data=page_data,
-                    paper_image_dir=paper_image_dir,
-                    _deadline=deadline,
-                )
-
-                # Upload to Zilliz/Milvus
-                self._upload_to_milvus(figures, tables)
-
-                results[idx] = (figures, tables)
-                total_figures += len(figures)
-                total_tables += len(tables)
-
-                self.logger.info(
-                    f"[{idx+1}/{n}] {paper.id}: "
-                    f"{len(figures)} figures, {len(tables)} tables"
-                )
-            except Exception as e:
-                self.logger.error(
-                    f"[{idx+1}/{n}] {paper.id}: extraction failed: {e}"
-                )
-            finally:
-                try:
-                    os.remove(pdf_path)
-                except OSError:
-                    pass
-
-        self.logger.info(
-            f"Phase 2 complete: {total_figures} figures, "
-            f"{total_tables} tables from {len(converted)} papers"
-        )
-        return results
-
-    def _upload_to_milvus(self, figures: List[Figure], tables: List[Table]) -> None:
-        """Upload figures and tables to Zilliz/Milvus (best-effort)."""
-        try:
-            if figures:
-                figures_success = self._save_figures_to_milvus(figures)
-                if not figures_success:
-                    self.logger.warning(
-                        "Failed to save some figures to Milvus"
-                    )
-            if tables:
-                tables_success = self._save_tables_to_milvus(tables)
-                if not tables_success:
-                    self.logger.warning(
-                        "Failed to save some tables to Milvus"
-                    )
-        except Exception as e:
-            self.logger.error(f"Error saving to Milvus: {e}")
