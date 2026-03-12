@@ -90,28 +90,7 @@ class MilvusClient:
 
         return schema
 
-    def create_figures_collection_schema(self) -> CollectionSchema:
-        """Create collection schema for figures with specific fields.
-        
-        Returns:
-            Collection schema for figures
-        """
-        fields = [
-            FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=200, is_primary=True),
-            FieldSchema(name="paper_id", dtype=DataType.VARCHAR, max_length=100),
-            FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=8000),
-            FieldSchema(name="description_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),  # SciBERT dimension
-            FieldSchema(name="image_embedding", dtype=DataType.FLOAT_VECTOR, dim=768),  # CLIP dimension
-        ]
-
-        schema = CollectionSchema(
-            fields=fields,
-            description="Figures collection with description and image embeddings"
-        )
-
-        return schema
-
-    def create_tables_collection_schema(self) -> CollectionSchema:
+    def create_tables_or_figures_collection_schema(self) -> CollectionSchema:
         """Create collection schema for tables with specific fields.
 
         Returns:
@@ -252,7 +231,7 @@ class MilvusClient:
 
             # Create new figures collection
             print(f"🏗️ Creating new figures collection: {collection_name}")
-            schema = self.create_figures_collection_schema()
+            schema = self.create_tables_or_figures_collection_schema()
 
             figures_collection = Collection(
                 name=collection_name,
@@ -342,7 +321,7 @@ class MilvusClient:
 
             # Create new tables collection
             print(f"🏗️ Creating new tables collection: {collection_name}")
-            schema = self.create_tables_collection_schema()
+            schema = self.create_tables_or_figures_collection_schema()
 
             tables_collection = Collection(
                 name=collection_name,
