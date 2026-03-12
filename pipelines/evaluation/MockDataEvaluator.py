@@ -106,16 +106,10 @@ class MockDataEvaluator:
             expected_papers = expected_evidence.get('paper_ids', [])
 
             # Use semantic search to find similar papers
-            if question_data['type'] == 'graph':
-                search_results = await self.service_factory.retrieval_handler.execute_graph_search(
-                    query=question,
-                    top_k=10,
-                )
-            else:
-                search_results = await self.service_factory.retrieval_handler.execute_vector_search(
-                    query=question,
-                    top_k=10,
-                )
+            search_results = await self.service_factory.retrieval_handler.execute_graph_search(
+                query=question,
+                top_k=10,
+            )
 
             # Extract paper IDs from search results
             retrieved_papers = []

@@ -38,7 +38,7 @@
   "search_citations": {
     "description": "Find papers that cited by a specific paper",
     "triggers": ["citations"],
-    "cypher": "MATCH (p:Paper)-[:CITES]->(cited:Paper)\nWHERE p.id IN cited.id IN $paper_ids\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (a2:Author)-[:AUTHORED]->(cited)\nRETURN DISTINCT cited.id as paper_id, p.title as title,\n       collect(DISTINCT a.name) as authors,\n        as cited_paper_id, cited.title as cited_title,\n       collect(DISTINCT a2.name) as cited_authors\nLIMIT $limit",
+    "cypher": "MATCH (p:Paper)-[:CITES]->(cited:Paper)\nWHERE cited.id IN $paper_ids\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (a2:Author)-[:AUTHORED]->(cited)\nRETURN DISTINCT cited.id as paper_id, p.title as title,\n       collect(DISTINCT a.name) as authors,\n        as cited_paper_id, cited.title as cited_title,\n       collect(DISTINCT a2.name) as cited_authors\nLIMIT $limit",
     "param_builder": "_params_citations"
   },
   "search_author_by_keywords": {
