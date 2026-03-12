@@ -2,73 +2,73 @@
   "search_by_paper_ids": {
     "description": "Look up specific papers by their IDs (e.g. W12345)",
     "triggers": ["paper_ids"],
-    "cypher": "MATCH (p:Paper)\nWHERE p.id IN $paper_ids\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC",
+    "cypher": "MATCH (p:Paper)\nWHERE p.id IN $paper_ids\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC",
     "param_builder": "_params_paper_ids"
   },
   "search_by_author": {
     "description": "Find papers written by specific author(s)",
     "triggers": ["author_names"],
-    "cypher": "MATCH (a:Author)-[:AUTHORED]->(p:Paper)\nWHERE any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nOPTIONAL MATCH (all_authors:Author)-[:AUTHORED]->(p)\nRETURN p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT all_authors.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
+    "cypher": "MATCH (a:Author)-[:AUTHORED]->(p:Paper)\nWHERE any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nOPTIONAL MATCH (all_authors:Author)-[:AUTHORED]->(p)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT all_authors.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
     "param_builder": "_params_author"
   },
   "search_by_keywords": {
     "description": "Search papers by keywords in title or abstract",
     "triggers": ["keywords"],
-    "cypher": "MATCH (p:Paper)\nWHERE any(keyword IN $keywords WHERE\n          toLower(p.title) CONTAINS toLower(keyword) OR\n          toLower(p.abstract) CONTAINS toLower(keyword))\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
+    "cypher": "MATCH (p:Paper)\nWHERE any(keyword IN $keywords WHERE\n          toLower(p.title) CONTAINS toLower(keyword) OR\n          toLower(p.abstract) CONTAINS toLower(keyword))\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
     "param_builder": "_params_keywords"
   },
   "search_by_venue": {
     "description": "Find papers published in a specific journal/conference/venue",
     "triggers": ["venue"],
-    "cypher": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue)\nWHERE toLower(v.name) CONTAINS toLower($venue_name)\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nRETURN p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
+    "cypher": "MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue)\nWHERE toLower(v.name) CONTAINS toLower($venue_name)\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
     "param_builder": "_params_venue"
   },
   "search_by_institution": {
     "description": "Find papers from a specific university/institution/organization",
     "triggers": ["institution"],
-    "cypher": "MATCH (p:Paper)-[:ASSOCIATED_WITH]->(inst:Institution)\nWHERE toLower(inst.name) CONTAINS toLower($institution_name)\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue,\n       inst.name as institution\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
+    "cypher": "MATCH (p:Paper)-[:ASSOCIATED_WITH]->(inst:Institution)\nWHERE toLower(inst.name) CONTAINS toLower($institution_name)\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue,\n       inst.name as institution\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
     "param_builder": "_params_institution"
   },
   "search_by_year": {
     "description": "Find papers published in a specific year or date range",
     "triggers": ["year"],
-    "cypher": "MATCH (p:Paper)\nWHERE p.publication_date STARTS WITH $year\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
+    "cypher": "MATCH (p:Paper)\nWHERE p.publication_date STARTS WITH $year\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
     "param_builder": "_params_year"
   },
   "search_citations": {
-    "description": "Find papers that cite or are cited by a specific paper",
+    "description": "Find papers that cited by a specific paper",
     "triggers": ["citations"],
-    "cypher": "MATCH (p:Paper)-[:CITES]->(cited:Paper)\nWHERE p.id IN $paper_ids OR cited.id IN $paper_ids\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (a2:Author)-[:AUTHORED]->(cited)\nRETURN p.id as paper_id, p.title as title,\n       collect(DISTINCT a.name) as authors,\n       cited.id as cited_paper_id, cited.title as cited_title,\n       collect(DISTINCT a2.name) as cited_authors\nLIMIT $limit",
+    "cypher": "MATCH (p:Paper)-[:CITES]->(cited:Paper)\nWHERE p.id IN cited.id IN $paper_ids\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (a2:Author)-[:AUTHORED]->(cited)\nRETURN DISTINCT cited.id as paper_id, p.title as title,\n       collect(DISTINCT a.name) as authors,\n        as cited_paper_id, cited.title as cited_title,\n       collect(DISTINCT a2.name) as cited_authors\nLIMIT $limit",
     "param_builder": "_params_citations"
   },
   "search_author_by_keywords": {
     "description": "Find papers by a specific author about a specific topic/keywords",
     "triggers": ["author_names", "keywords"],
-    "cypher": "MATCH (a:Author)-[:AUTHORED]->(p:Paper)\nWHERE any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))\n  AND any(keyword IN $keywords WHERE\n          toLower(p.title) CONTAINS toLower(keyword) OR\n          toLower(p.abstract) CONTAINS toLower(keyword))\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nOPTIONAL MATCH (all_authors:Author)-[:AUTHORED]->(p)\nRETURN p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT all_authors.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
+    "cypher": "MATCH (a:Author)-[:AUTHORED]->(p:Paper)\nWHERE any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))\n  AND any(keyword IN $keywords WHERE\n          toLower(p.title) CONTAINS toLower(keyword) OR\n          toLower(p.abstract) CONTAINS toLower(keyword))\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nOPTIONAL MATCH (all_authors:Author)-[:AUTHORED]->(p)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT all_authors.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
     "param_builder": "_params_author_keywords"
   },
   "search_by_year_range": {
     "description": "Find papers published within a date range (since/after/before year)",
     "triggers": ["year_range"],
-    "cypher": "MATCH (p:Paper)\nWHERE p.publication_date >= $year_from AND p.publication_date < $year_to\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.publication_date DESC\nLIMIT $limit",
+    "cypher": "MATCH (p:Paper)\nWHERE p.publication_date >= $year_from AND p.publication_date < $year_to\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.publication_date DESC\nLIMIT $limit",
     "param_builder": "_params_year_range"
   },
   "top_cited_papers": {
     "description": "Find most cited papers, optionally filtered by keywords",
     "triggers": ["top_cited"],
-    "cypher": "MATCH (p:Paper)\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
+    "cypher": "MATCH (p:Paper)\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
     "param_builder": "_params_top_cited"
   },
   "coauthor_network": {
     "description": "Find co-authors who published together with a specific author",
     "triggers": ["coauthor"],
-    "cypher": "MATCH (a1:Author)-[:AUTHORED]->(p:Paper)<-[:AUTHORED]-(a2:Author)\nWHERE any(name IN $author_names WHERE toLower(a1.name) CONTAINS toLower(name))\n  AND a1 <> a2\nRETURN a1.name as author, a2.name as coauthor,\n       count(p) as shared_papers,\n       collect(DISTINCT p.title)[..5] as sample_titles\nORDER BY shared_papers DESC\nLIMIT $limit",
+    "cypher": "MATCH (a1:Author)-[:AUTHORED]->(p:Paper)<-[:AUTHORED]-(a2:Author)\nWHERE any(name IN $author_names WHERE toLower(a1.name) CONTAINS toLower(name))\n  AND a1 <> a2\nRETURN DISTINCT a1.name as author, a2.name as coauthor,\n       count(p) as shared_papers,\n       collect(DISTINCT p.title)[..5] as sample_titles\nORDER BY shared_papers DESC\nLIMIT $limit",
     "param_builder": "_params_coauthor"
   },
   "author_venue_stats": {
     "description": "Find which venues/journals an author publishes in most",
     "triggers": ["author_venues"],
-    "cypher": "MATCH (a:Author)-[:AUTHORED]->(p:Paper)-[:PUBLISHED_IN]->(v:Venue)\nWHERE any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))\nRETURN a.name as author, v.name as venue, count(p) as paper_count,\n       collect(DISTINCT p.title)[..3] as sample_titles\nORDER BY paper_count DESC\nLIMIT $limit",
+    "cypher": "MATCH (a:Author)-[:AUTHORED]->(p:Paper)-[:PUBLISHED_IN]->(v:Venue)\nWHERE any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))\nRETURN DISTINCT a.name as author, v.name as venue, count(p) as paper_count,\n       collect(DISTINCT p.title)[..3] as sample_titles\nORDER BY paper_count DESC\nLIMIT $limit",
     "param_builder": "_params_author"
   }
 }

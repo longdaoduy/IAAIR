@@ -55,7 +55,8 @@ class MilvusClient:
             connections.connect(
                 alias="default",
                 uri=uri,
-                token=token
+                token=token,
+                secure=True
             )
 
             self.is_connected = True

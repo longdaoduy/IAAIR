@@ -607,8 +607,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
                 graph_task = factory.retrieval_handler.execute_graph_search_with_template(
                     query=request.query,
                     template_cypher=request.graph_template,
-                    top_k=request.top_k,
-                    paper_ids=request.paper_ids
+                    top_k=request.top_k
                 )
             else:
                 graph_task = factory.retrieval_handler.execute_graph_search(request.query, request.top_k)

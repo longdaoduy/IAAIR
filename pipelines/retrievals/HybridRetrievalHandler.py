@@ -137,8 +137,7 @@ class HybridRetrievalHandler:
         else:
             return await self._execute_graph_search_internal(query, top_k)
 
-    async def execute_graph_search_with_template(self, query: str, template_cypher: str, top_k: int,
-                                                   paper_ids: Optional[List[str]] = None) -> List[Dict]:
+    async def execute_graph_search_with_template(self, query: str, template_cypher: str, top_k: int) -> List[Dict]:
         """Execute graph search using a user-selected Cypher template with AI-extracted conditions.
 
         The AI agent analyzes the user's natural language query and the template to produce
@@ -155,62 +154,24 @@ class HybridRetrievalHandler:
         """
         if self.performance_monitor:
             with self.performance_monitor.track_operation('graph_search_template'):
-                return await self._execute_graph_search_with_template_internal(query, template_cypher, top_k, paper_ids)
+                return await self._execute_graph_search_with_template_internal(query, template_cypher, top_k)
         else:
-            return await self._execute_graph_search_with_template_internal(query, template_cypher, top_k, paper_ids)
+            return await self._execute_graph_search_with_template_internal(query, template_cypher, top_k)
 
     async def _execute_graph_search_with_template_internal(
-            self, query: str, template_cypher: str, top_k: int,
-            paper_ids: Optional[List[str]] = None) -> List[Dict]:
+            self, query: str, template_cypher: str, top_k: int) -> List[Dict]:
         """Internal implementation of template-based graph search.
 
-        If the template is keyword/topic-based (search_by_keywords or top_cited_papers),
-        applies vector-first strategy: run vector search to find semantically similar
-        papers, then use search_by_paper_ids for rich graph metadata.
+        If the query is about a keyword or topic (detected automatically),
+        applies vector-first strategy: run vector search to find semantically
+        similar papers, then inject their IDs as a WHERE condition into
+        whatever template was selected — scoping graph results to the most
+        relevant papers.
         """
-        try:
-            if not self.graph_handler:
-                logger.error("Graph handler not initialized")
-                return []
-
-            # Detect keyword/topic-based templates → apply vector-first strategy
-            actual_cypher = template_cypher
-            # Refine template with logic-based condition injection
-            refined_cypher, parameters = self._refine_template_with_conditions(
-                query, actual_cypher, top_k, paper_ids
-            )
-
-            logger.info(f"Template-based graph search - original template:\n{template_cypher}")
-            logger.info(f"Refined Cypher:\n{refined_cypher}")
-            logger.info(f"Parameters: {parameters}")
-
-            # Execute the refined query
-            results = self.graph_handler.execute_query(refined_cypher, parameters)
-            logger.info(f"Template-based graph search returned {len(results)} results")
-
-            # Add relevance scores (higher for vector-first results)
-            score = 0.9 if actual_cypher != template_cypher else 0.85
-            for result in results:
-                result['relevance_score'] = score
-
-            return results
-
-        except Exception as e:
-            logger.error(f"Template-based graph search error: {e}")
-            # Fallback: try executing the original template as-is with a LIMIT
-            try:
-                fallback = self._inject_limit(template_cypher, top_k)
-                logger.info(f"Falling back to original template with LIMIT: {fallback}")
-                results = self.graph_handler.execute_query(fallback, {})
-                for r in results:
-                    r['relevance_score'] = 0.6
-                return results
-            except Exception as e2:
-                logger.error(f"Fallback template execution also failed: {e2}")
-                return []
+        await self._build_intelligent_cypher_query(query, top_k, template_cypher)
 
     def _refine_template_with_conditions(self, query: str, template_cypher: str, top_k: int,
-                                          paper_ids: Optional[List[str]] = None) -> tuple:
+                                         paper_ids: Optional[List[str]] = None) -> tuple:
         """Refine Cypher template by programmatically injecting conditions from the query.
 
         Extracts entities (paper IDs, author names, years, keywords) from the user's
@@ -242,17 +203,36 @@ class HybridRetrievalHandler:
         # 3. Extract author names from query
         author_names = self._extract_author_names(query)
         if author_names:
-            # Only add author condition if template involves Author node
-            if ':Author' in template_cypher or 'a.name' in template_cypher:
-                conditions.append(
-                    'any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))'
-                )
+            # Check if the template already filters by author name in its WHERE clause
+            # (e.g. coauthor_network uses a1.name, search_by_author uses a.name)
+            template_already_filters_author = bool(
+                re.search(r'toLower\(\s*\w+\.name\s*\)\s*CONTAINS', template_cypher)
+                and '$author_names' in template_cypher
+            )
+
+            if not template_already_filters_author:
+                # Detect the Author variable alias used in this template
+                # e.g. "a:Author", "a1:Author", "auth:Author"
+                author_var_match = re.search(r'\((\w+):Author\)', template_cypher)
+                if author_var_match:
+                    author_var = author_var_match.group(1)
+                    conditions.append(
+                        f'any(name IN $author_names WHERE toLower({author_var}.name) CONTAINS toLower(name))'
+                    )
+                    parameters['author_names'] = author_names
+                elif ':Author' not in template_cypher:
+                    # Template has no Author node at all — skip author condition
+                    # (injecting a.name without a MATCH on Author would also fail)
+                    logger.info("Template has no Author node, skipping author name condition")
+                else:
+                    # Fallback: use 'a' as the default alias
+                    conditions.append(
+                        'any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))'
+                    )
+                    parameters['author_names'] = author_names
             else:
-                # Template doesn't have Author — add MATCH for it
-                conditions.append(
-                    'any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))'
-                )
-            parameters['author_names'] = author_names
+                # Template already has author filtering — just ensure the parameter is set
+                parameters['author_names'] = author_names
 
         # 4. Extract year from query (e.g. "2023", "since 2020", "before 2024")
         year_match = re.search(r'\b(since|after|from)\s+(\d{4})\b', query, re.IGNORECASE)
@@ -306,6 +286,16 @@ class HybridRetrievalHandler:
         refined_cypher = self._inject_where_conditions(template_cypher, conditions)
         refined_cypher = self._inject_limit(refined_cypher, top_k)
 
+        # Ensure all $param references in the template have values in the parameters dict.
+        # Templates like coauthor_network have $author_names baked into their Cypher, but
+        # _refine_template_with_conditions may not have extracted them from the query
+        # (e.g. when the query is purely keyword/topic-based and vector-first injected paper_ids).
+        default_params = self._build_default_params(refined_cypher, top_k)
+        for param, default_val in default_params.items():
+            if param not in parameters:
+                parameters[param] = default_val
+                logger.info(f"Auto-filled missing template parameter ${param} with default: {default_val}")
+
         logger.info(f"Extracted conditions from query: {conditions}")
         return refined_cypher, parameters
 
@@ -336,7 +326,8 @@ class HybridRetrievalHandler:
                 continue
 
             # Case 2: First non-OPTIONAL MATCH
-            if not injected and not found_first_match and stripped.startswith('MATCH') and not stripped.startswith('OPTIONAL'):
+            if not injected and not found_first_match and stripped.startswith('MATCH') and not stripped.startswith(
+                    'OPTIONAL'):
                 found_first_match = True
                 new_lines.append(line)
                 # Look ahead: if next non-empty line is WHERE, let that handle it
@@ -376,6 +367,30 @@ class HybridRetrievalHandler:
             return _re.sub(r'LIMIT\s+\$\w+', f'LIMIT {top_k}', cypher, flags=_re.IGNORECASE)
         # No LIMIT found — add at the end
         return cypher.rstrip().rstrip(';') + f"\nLIMIT {top_k}"
+
+    def _build_default_params(self, cypher: str, top_k: int) -> Dict:
+        """Scan a Cypher query for $param references and return a dict with safe defaults.
+
+        This prevents Neo4j ParameterMissing errors when executing templates that
+        reference parameters not extracted from the user's query.
+        """
+        param_defaults = {
+            'author_names': [],
+            'paper_ids': [],
+            'keywords': [],
+            'venue_name': '',
+            'institution_name': '',
+            'year': '',
+            'year_from': '1900',
+            'year_to': '2099',
+            'limit': top_k,
+        }
+        params = {}
+        referenced = re.findall(r'\$(\w+)', cypher)
+        for param in referenced:
+            if param in param_defaults:
+                params[param] = param_defaults[param]
+        return params
 
     async def _execute_graph_search_internal(self, query: str, top_k: int) -> List[Dict]:
         """Internal graph search implementation with caching."""
@@ -440,6 +455,146 @@ class HybridRetrievalHandler:
 
         return (paper_id_pattern.search(query) or
                 any(pattern.search(query) for pattern in author_patterns))
+
+    def _is_keyword_or_topic_query(self, query: str) -> bool:
+        """Detect if the query is asking about a keyword, topic, or subject area.
+
+        Uses the AI agent with few-shot examples to classify the query.
+        Falls back to regex-based heuristics if the AI agent is unavailable.
+
+        Returns True when the query is about a research topic, keyword, or subject
+        area — meaning vector-first paper ID scoping should be applied.
+        """
+        # Fast exit: explicit paper IDs are never keyword/topic queries
+        if re.search(r'\b(W\d+)\b', query):
+            return False
+
+        # Try AI-based detection first
+        if self.ai_agent:
+            try:
+                result = self._detect_keyword_topic_with_ai(query)
+                if result is not None:
+                    return result
+            except Exception as e:
+                logger.warning(f"AI keyword/topic detection failed: {e}")
+
+        # Fallback: regex-based heuristics
+        return self._detect_keyword_topic_by_rules(query)
+
+    def _detect_keyword_topic_with_ai(self, query: str) -> Optional[bool]:
+        """Use AI agent with few-shot examples to classify whether a query is keyword/topic-based.
+
+        Returns:
+            True if keyword/topic query, False if not, None if AI response is unparseable.
+        """
+        prompt = """You are a query classifier for an academic paper search system.
+
+Classify whether the user's query is about a KEYWORD or TOPIC (a research subject, field, or concept) 
+versus a STRUCTURED query (asking about a specific author, paper ID, venue, citation, or co-author).
+
+If the query is about a keyword/topic, we will use vector search to find semantically relevant papers 
+first, then enrich them with graph metadata. If it's structured, we skip vector search.
+
+Here are examples:
+
+Query: "papers about machine learning"
+Answer: YES
+
+Query: "deep learning for medical imaging"
+Answer: YES
+
+Query: "natural language processing since 2020"
+Answer: YES
+
+Query: "transformer models in NLP"
+Answer: YES
+
+Query: "what research exists on graph neural networks"
+Answer: YES
+
+Query: "recent advances in protein folding"
+Answer: YES
+
+Query: "top cited papers on attention mechanisms"
+Answer: YES
+
+Query: "knowledge graph embedding methods"
+Answer: YES
+
+Query: "papers by John Smith"
+Answer: NO
+
+Query: "paper W12345"
+Answer: NO
+
+Query: "who authored this paper"
+Answer: NO
+
+Query: "co-authors of Alice Johnson"
+Answer: NO
+
+Query: "papers published in Nature"
+Answer: NO
+
+Query: "citations of W98765"
+Answer: NO
+
+Query: "papers from Stanford University"
+Answer: NO
+
+Query: "which journals does Bob Lee publish in"
+Answer: NO
+
+Now classify this query:
+Query: "{query}"
+Answer:""".format(query=query)
+
+        response = self.ai_agent.generate_content(
+            prompt=prompt,
+            system_prompt="You are a query classifier. Respond with only YES or NO.",
+            purpose='keyword_topic_detection'
+        )
+
+        if response:
+            answer = response.strip().upper().strip('"\'., ')
+            if answer in ('YES', 'Y', 'TRUE'):
+                logger.info(f"AI classified query as keyword/topic: '{query[:60]}'")
+                return True
+            elif answer in ('NO', 'N', 'FALSE'):
+                logger.info(f"AI classified query as structured (not keyword/topic): '{query[:60]}'")
+                return False
+            else:
+                logger.warning(f"AI returned unparseable answer for keyword/topic detection: '{response}'")
+
+        return None
+
+    def _detect_keyword_topic_by_rules(self, query: str) -> bool:
+        """Regex-based fallback for keyword/topic detection when AI is unavailable."""
+        query_lower = query.lower()
+
+        # If query mentions specific authors, it's not purely keyword-based
+        author_names = self._extract_author_names(query)
+        if author_names:
+            return False
+
+        # Check for topic/keyword indicator phrases
+        topic_indicators = [
+            r'\b(?:about|on|regarding|concerning|related\s+to|topic|field|area|domain)\b',
+            r'\b(?:papers?|research|studies|work)\s+(?:on|about|in|regarding)\b',
+            r'\b(?:find|search|look\s+for|show)\s+(?:papers?|research|studies|articles?)\b',
+        ]
+
+        for pattern in topic_indicators:
+            if re.search(pattern, query_lower):
+                return True
+
+        # If no structured identifiers are found and keywords can be extracted,
+        # treat it as a keyword/topic query
+        keywords = self._extract_keywords(query)
+        if keywords and len(keywords) >= 1:
+            return True
+
+        return False
 
     def _extract_author_names(self, query: str) -> List[str]:
         """Fallback regex-based author name extraction."""
@@ -692,7 +847,7 @@ Respond with ONLY the template name, nothing else. Example: search_by_author"""
             extracted['paper_ids'] = paper_ids
 
         # 2. Author names
-        author_names = self._regex_extract_author_names(query)
+        author_names = self._extract_author_names(query)
         if author_names:
             extracted['author_names'] = author_names
 
@@ -774,13 +929,15 @@ Respond with ONLY the template name, nothing else. Example: search_by_author"""
         return {"year": extracted.get('year', ''), "limit": top_k}
 
     def _params_year_range(self, extracted: Dict, top_k: int) -> Dict:
-        return {"year_from": extracted.get('year_from', '1900'), "year_to": extracted.get('year_to', '2099'), "limit": top_k}
+        return {"year_from": extracted.get('year_from', '1900'), "year_to": extracted.get('year_to', '2099'),
+                "limit": top_k}
 
     def _params_citations(self, extracted: Dict, top_k: int) -> Dict:
         return {"paper_ids": extracted.get('paper_ids', []), "limit": top_k}
 
     def _params_author_keywords(self, extracted: Dict, top_k: int) -> Dict:
-        return {"author_names": extracted.get('author_names', []), "keywords": extracted.get('keywords', []), "limit": top_k}
+        return {"author_names": extracted.get('author_names', []), "keywords": extracted.get('keywords', []),
+                "limit": top_k}
 
     def _params_top_cited(self, extracted: Dict, top_k: int) -> Dict:
         return {"limit": top_k}
@@ -792,7 +949,7 @@ Respond with ONLY the template name, nothing else. Example: search_by_author"""
     # BUILD INTELLIGENT CYPHER — Main entry point for graph search
     # =========================================================================
 
-    async def _build_intelligent_cypher_query(self, query: str, top_k: int) -> tuple:
+    async def _build_intelligent_cypher_query(self, query: str, top_k: int, template_cypher: str = None) -> tuple:
         """Build Cypher query by selecting the best template and filling parameters.
 
         Flow:
@@ -821,27 +978,35 @@ Respond with ONLY the template name, nothing else. Example: search_by_author"""
             logger.info(f"Extracted entities: {extracted}")
 
             # Step 2: AI agent selects the best template
-            template_key = self._select_template_with_ai(query, extracted)
+            if template_cypher:
+                template_key = template_cypher
+            else:
+                template_key = self._select_template_with_ai(query, extracted)
             logger.info(f"AI selected template: {template_key}")
 
             # Step 3: Vector-first for keyword queries
             # When the query is keyword-based (no specific IDs, authors, etc.),
             # use vector search to find semantically relevant papers first,
             # then fetch their full graph metadata via search_by_paper_ids.
-            if template_key == 'search_by_keywords' and self.milvus_client:
-                paper_ids = self._vector_first_paper_ids(query, top_k)
-                if paper_ids:
-                    logger.info(f"Vector-first: found {len(paper_ids)} paper IDs, switching to search_by_paper_ids")
-                    template_key = 'search_by_paper_ids'
-                    extracted['paper_ids'] = paper_ids
+            # Use .get() with an empty list default to simplify the loop
+            keywords = extracted.get('keywords', [])
 
-            # Similarly for top_cited with keywords — vector can find more relevant papers
-            elif template_key == 'top_cited_papers' and self.milvus_client:
-                paper_ids = self._vector_first_paper_ids(query, top_k)  # wider net
-                if paper_ids:
-                    logger.info(f"Vector-first for top_cited: found {len(paper_ids)} paper IDs")
-                    template_key = 'search_by_paper_ids'
-                    extracted['paper_ids'] = paper_ids
+            all_results = {}
+
+            for keyword in keywords:
+                results = await self._execute_vector_search_internal(keyword, top_k)
+
+                for paper in results:
+                    p_id = paper.get('paper_id')
+                    dist = paper.get('distance', 0.0)
+                    if p_id not in all_results or dist < all_results[p_id]:
+                        all_results[p_id] = dist
+
+            # Sort by distance (ascending) and take the top_k
+            sorted_ids = sorted(all_results, key=all_results.get)[:top_k]
+
+            # Extend the extracted list
+            extracted.setdefault('paper_ids', []).extend(sorted_ids)
 
             template = self.GRAPH_TEMPLATES[template_key]
             logger.info(f"Final template: {template_key} — {template['description']}")
@@ -864,10 +1029,10 @@ Respond with ONLY the template name, nothing else. Example: search_by_author"""
             paper_ids = self._vector_first_paper_ids(query, top_k) if self.milvus_client else None
             if paper_ids:
                 return self.GRAPH_TEMPLATES['search_by_paper_ids']['cypher'].strip(), \
-                       {"paper_ids": paper_ids, "limit": top_k}
+                    {"paper_ids": paper_ids, "limit": top_k}
             keywords = self._extract_keywords(query)
             return self.GRAPH_TEMPLATES['search_by_keywords']['cypher'].strip(), \
-                   {"keywords": keywords or [query], "limit": top_k}
+                {"keywords": keywords or [query], "limit": top_k}
 
     def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
         """Run vector search to extract relevant paper IDs for graph enrichment.
@@ -937,26 +1102,6 @@ Respond with ONLY the template name, nothing else. Example: search_by_author"""
             return results
         except Exception as e:
             logger.error(f"Graph refinement error: {e}")
-            return []
-
-    async def _execute_vector_refinement(self, paper_ids: List[str], query: str) -> List[Dict]:
-        """Refine graph results using vector similarity."""
-        try:
-
-            # Use paper IDs to find similar papers in vector space
-            # This would require additional implementation in MilvusClient
-            # For now, fall back to regular vector search
-            results = self.search_similar_papers(
-                query_text=query,
-                top_k=20,
-                use_hybrid=True
-            )
-
-            # Filter to only include results related to the paper_ids
-            # This would need more sophisticated implementation
-            return results or []
-        except Exception as e:
-            logger.error(f"Vector refinement error: {e}")
             return []
 
     async def generate_ai_response(
@@ -1318,8 +1463,8 @@ Answer:"""
             if key in merged:
                 merged[key]["text_score"] = r.get("similarity_score", 0)
                 merged[key]["combined_score"] = (
-                    merged[key]["image_score"] * image_weight +
-                    r.get("similarity_score", 0) * text_weight
+                        merged[key]["image_score"] * image_weight +
+                        r.get("similarity_score", 0) * text_weight
                 )
                 merged[key]["search_type"] = "hybrid_visual"
             else:
