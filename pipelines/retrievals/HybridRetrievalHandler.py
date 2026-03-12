@@ -392,6 +392,10 @@ class HybridRetrievalHandler:
             results = self.graph_handler.execute_query(cypher_query, parameters)
             logger.info(f"Graph search returned {len(results)} results")
 
+            # Add basic relevance scores based on query type
+            for result in results:
+                result['relevance_score'] = 0.8 if self._is_structured_query(query) else 0.5
+
             # Cache results
             if self.cache_manager and results:
                 self.cache_manager.cache_search_results(
@@ -405,6 +409,159 @@ class HybridRetrievalHandler:
         except Exception as e:
             logger.error(f"Graph search error: {e}")
             return []
+
+    def _is_structured_query(self, query: str) -> bool:
+        """Check if this is a structured query (ID-based, author lookup, etc.)"""
+        paper_id_pattern = re.compile(r'\b(W\d+|DOI:|doi:|pmid:|arxiv:)', re.IGNORECASE)
+        author_patterns = [
+            re.compile(r'who\s+is\s+the\s+author', re.IGNORECASE),
+            re.compile(r'authors?\s+of\s+paper', re.IGNORECASE),
+            re.compile(r'who\s+wrote', re.IGNORECASE),
+            re.compile(r'who\s+authored', re.IGNORECASE)
+        ]
+
+        return (paper_id_pattern.search(query) or
+                any(pattern.search(query) for pattern in author_patterns))
+
+    def _is_keyword_or_topic_query(self, query: str) -> bool:
+        """Detect if the query is asking about a keyword, topic, or subject area.
+
+        Uses the AI agent with few-shot examples to classify the query.
+        Falls back to regex-based heuristics if the AI agent is unavailable.
+
+        Returns True when the query is about a research topic, keyword, or subject
+        area — meaning vector-first paper ID scoping should be applied.
+        """
+        # Fast exit: explicit paper IDs are never keyword/topic queries
+        if re.search(r'\b(W\d+)\b', query):
+            return False
+
+        # Try AI-based detection first
+        if self.ai_agent:
+            try:
+                result = self._detect_keyword_topic_with_ai(query)
+                if result is not None:
+                    return result
+            except Exception as e:
+                logger.warning(f"AI keyword/topic detection failed: {e}")
+
+        # Fallback: regex-based heuristics
+        return self._detect_keyword_topic_by_rules(query)
+
+    def _detect_keyword_topic_with_ai(self, query: str) -> Optional[bool]:
+        """Use AI agent with few-shot examples to classify whether a query is keyword/topic-based.
+
+        Returns:
+            True if keyword/topic query, False if not, None if AI response is unparseable.
+        """
+        prompt = """You are a query classifier for an academic paper search system.
+
+Classify whether the user's query is about a KEYWORD or TOPIC (a research subject, field, or concept) 
+versus a STRUCTURED query (asking about a specific author, paper ID, venue, citation, or co-author).
+
+If the query is about a keyword/topic, we will use vector search to find semantically relevant papers 
+first, then enrich them with graph metadata. If it's structured, we skip vector search.
+
+Here are examples:
+
+Query: "papers about machine learning"
+Answer: YES
+
+Query: "deep learning for medical imaging"
+Answer: YES
+
+Query: "natural language processing since 2020"
+Answer: YES
+
+Query: "transformer models in NLP"
+Answer: YES
+
+Query: "what research exists on graph neural networks"
+Answer: YES
+
+Query: "recent advances in protein folding"
+Answer: YES
+
+Query: "top cited papers on attention mechanisms"
+Answer: YES
+
+Query: "knowledge graph embedding methods"
+Answer: YES
+
+Query: "papers by John Smith"
+Answer: NO
+
+Query: "paper W12345"
+Answer: NO
+
+Query: "who authored this paper"
+Answer: NO
+
+Query: "co-authors of Alice Johnson"
+Answer: NO
+
+Query: "papers published in Nature"
+Answer: NO
+
+Query: "citations of W98765"
+Answer: NO
+
+Query: "papers from Stanford University"
+Answer: NO
+
+Query: "which journals does Bob Lee publish in"
+Answer: NO
+
+Now classify this query:
+Query: "{query}"
+Answer:""".format(query=query)
+
+        response = self.ai_agent.generate_content(
+            prompt=prompt,
+            system_prompt="You are a query classifier. Respond with only YES or NO.",
+            purpose='keyword_topic_detection'
+        )
+
+        if response:
+            answer = response.strip().upper().strip('"\'., ')
+            if answer in ('YES', 'Y', 'TRUE'):
+                logger.info(f"AI classified query as keyword/topic: '{query[:60]}'")
+                return True
+            elif answer in ('NO', 'N', 'FALSE'):
+                logger.info(f"AI classified query as structured (not keyword/topic): '{query[:60]}'")
+                return False
+            else:
+                logger.warning(f"AI returned unparseable answer for keyword/topic detection: '{response}'")
+
+        return None
+
+    def _detect_keyword_topic_by_rules(self, query: str) -> bool:
+        """Regex-based fallback for keyword/topic detection when AI is unavailable."""
+        query_lower = query.lower()
+
+        # If query mentions specific authors, it's not purely keyword-based
+        author_names = self._extract_author_names(query)
+        if author_names:
+            return False
+
+        # Check for topic/keyword indicator phrases
+        topic_indicators = [
+            r'\b(?:about|on|regarding|concerning|related\s+to|topic|field|area|domain)\b',
+            r'\b(?:papers?|research|studies|work)\s+(?:on|about|in|regarding)\b',
+            r'\b(?:find|search|look\s+for|show)\s+(?:papers?|research|studies|articles?)\b',
+        ]
+
+        for pattern in topic_indicators:
+            if re.search(pattern, query_lower):
+                return True
+
+        # If no structured identifiers are found and keywords can be extracted,
+        # treat it as a keyword/topic query
+        keywords = self._extract_keywords(query)
+        if keywords and len(keywords) >= 1:
+            return True
+
+        return False
 
     def _extract_author_names(self, query: str) -> List[str]:
         """Fallback regex-based author name extraction."""
