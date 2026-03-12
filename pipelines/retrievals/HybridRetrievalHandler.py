@@ -1041,7 +1041,7 @@ Respond with ONLY the template name, nothing else."""
             needs_paper_ids = '$paper_ids' in template_cypher_text
             has_paper_ids = bool(extracted.get('paper_ids'))
 
-            if needs_paper_ids and not has_paper_ids:
+            if (needs_paper_ids and not has_paper_ids) or template_key == 'search_by_keywords':
                 keywords = extracted.get('keywords', [])
 
                 all_results = {}
@@ -1061,6 +1061,8 @@ Respond with ONLY the template name, nothing else."""
                 # Extend the extracted list
                 extracted.setdefault('paper_ids', []).extend(sorted_ids)
                 logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for template '{template_key}'")
+                if template_key == 'search_by_keywords':
+                    template_key = 'search_by_paper_ids'
             else:
                 if has_paper_ids:
                     logger.info(f"Skipping keyword vector search — paper IDs already extracted from query")
