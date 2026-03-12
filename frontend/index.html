@@ -305,6 +305,49 @@
         .visual-result-desc { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
         .visual-result-meta { display: flex; gap: 12px; margin-top: 8px; font-size: 12px; color: var(--text-dim); }
 
+        /* ── Image Search Description & Query ── */
+        .image-search-fields {
+            max-width: 720px; margin: 0 auto 20px;
+            display: flex; flex-direction: column; gap: 16px;
+        }
+        .image-field-group {
+            display: flex; flex-direction: column; gap: 6px;
+        }
+        .image-field-group .field-label {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 13px; font-weight: 600; color: var(--text-muted);
+        }
+        .image-field-group .field-label .field-icon { font-size: 16px; }
+        .image-field-group .field-hint {
+            font-size: 11px; color: var(--text-dim); font-weight: 400;
+            margin-left: 24px;
+        }
+        .image-field-group textarea {
+            width: 100%; padding: 12px 16px; border-radius: var(--radius);
+            background: var(--bg-input); border: 1px solid var(--border);
+            color: var(--text); font-size: 14px; line-height: 1.5;
+            font-family: inherit; resize: vertical; outline: none;
+            transition: var(--transition); min-height: 48px;
+        }
+        .image-field-group textarea:focus {
+            border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+        .image-field-group textarea::placeholder { color: var(--text-dim); }
+        .image-search-actions {
+            max-width: 720px; margin: 0 auto 20px;
+            display: flex; justify-content: flex-end; gap: 12px; align-items: center;
+        }
+
+        /* ── Image AI Response ── */
+        .image-ai-response {
+            max-width: 720px; margin: 0 auto 20px;
+            background: linear-gradient(135deg, rgba(6,182,212,0.08), rgba(99,102,241,0.05));
+            border: 1px solid rgba(6,182,212,0.25); border-radius: var(--radius);
+            padding: 20px 24px;
+        }
+        .image-ai-response .ai-response-header h4 { color: var(--cyan); }
+        .image-ai-response .ai-response-body { font-size: 14px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
+
         /* ── Image Search Result Tabs ── */
         .img-result-tabs {
             max-width: 720px; margin: 0 auto 16px;
@@ -324,6 +367,43 @@
         .img-result-tab.active .tab-count { background: var(--accent-glow); color: var(--accent-light); }
         .img-tab-content { display: none; }
         .img-tab-content.active { display: block; }
+
+        /* ── Graph Template Selector for Hybrid Search ── */
+        .graph-template-section {
+            max-width: 720px; margin: 0 auto 16px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 16px 20px;
+        }
+        .graph-template-section h4 {
+            font-size: 13px; color: var(--text-muted); margin-bottom: 10px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .graph-template-section h4 .hint {
+            font-size: 11px; color: var(--text-dim); font-weight: 400;
+        }
+        .graph-template-chips {
+            display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;
+        }
+        .graph-template-chips .chip {
+            padding: 6px 14px; border-radius: 20px; font-size: 12px;
+            background: var(--bg-input); border: 1px solid var(--border);
+            color: var(--text-muted); cursor: pointer; transition: var(--transition);
+        }
+        .graph-template-chips .chip:hover {
+            border-color: var(--accent); color: var(--text);
+        }
+        .graph-template-chips .chip.selected {
+            background: var(--accent-glow); border-color: var(--accent);
+            color: var(--accent-light); font-weight: 600;
+        }
+        .graph-template-preview {
+            display: none; margin-top: 10px;
+            font-size: 12px; font-family: 'JetBrains Mono', monospace;
+            background: var(--bg-input); border-radius: var(--radius-sm);
+            padding: 10px 14px; color: var(--text-dim); white-space: pre-wrap;
+            border: 1px solid var(--border); max-height: 120px; overflow: auto;
+        }
+        .graph-template-preview.visible { display: block; }
 
         /* ── Responsive ── */
         @media (max-width: 768px) {
@@ -448,6 +528,20 @@
                     </div>
                 </div>
 
+                <!-- Graph Template Selector (optional, works with any strategy) -->
+                <div class="graph-template-section" id="graphTemplateSection">
+                    <h4>🕸️ Graph Template <span class="hint">— Optional: select a template to guide graph filtering. AI extracts conditions from your query automatically.</span></h4>
+                    <div class="graph-template-chips" id="graphTemplateChips">
+                        <span style="font-size:12px;color:var(--text-dim)">Loading templates...</span>
+                    </div>
+                    <div class="graph-template-preview" id="graphTemplatePreview"></div>
+                    <div style="margin-top:10px">
+                        <label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:4px">📄 Paper IDs <span style="font-weight:400;color:var(--text-dim)">(optional — comma-separated, e.g. W123456, W789012)</span></label>
+                        <input type="text" id="graphTemplatePaperIds" placeholder="W123456, W789012, ..."
+                            style="width:100%;padding:8px 14px;border-radius:var(--radius-sm);background:var(--bg-input);border:1px solid var(--border);color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;outline:none">
+                    </div>
+                </div>
+
                 <div id="searchLoading" class="loading" style="display:none">
                     <div class="spinner"></div>
                     <div class="loading-text">Searching across vector and graph databases...</div>
@@ -484,43 +578,54 @@
                     <button class="image-preview-remove" onclick="clearImageUpload()">✕ Remove</button>
                 </div>
 
-                <div class="search-box">
-                    <input type="text" id="imageTextQuery" placeholder="Optional: add text query for hybrid image+text search...">
+                <div class="image-search-fields">
+                    <div class="image-field-group">
+                        <div class="field-label"><span class="field-icon">📝</span> Description</div>
+                        <div class="field-hint">Describe what's in the image for hybrid image+text search. Leave empty for image-only search.</div>
+                        <textarea id="imageDescription" rows="2" placeholder="e.g. A bar chart comparing model accuracy across different datasets..."></textarea>
+                    </div>
+                    <div class="image-field-group">
+                        <div class="field-label"><span class="field-icon">❓</span> Query</div>
+                        <div class="field-hint">Ask a question about the image — the AI agent will analyze the search results and answer.</div>
+                        <textarea id="imageQuery" rows="2" placeholder="e.g. What methods achieve the best performance in this comparison?"></textarea>
+                    </div>
+                </div>
+
+                <div class="image-search-actions">
+                    <div class="search-options" style="margin:0;flex:1">
+                        <div class="option-group">
+                            <label>Top K</label>
+                            <select id="imageTopK">
+                                <option value="5">5</option>
+                                <option value="10" selected>10</option>
+                                <option value="20">20</option>
+                            </select>
+                        </div>
+                        <div class="option-group">
+                            <label>Papers</label>
+                            <label class="toggle">
+                                <input type="checkbox" id="showPapers" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="option-group">
+                            <label>Figures</label>
+                            <label class="toggle">
+                                <input type="checkbox" id="searchFigures" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="option-group">
+                            <label>Tables</label>
+                            <label class="toggle">
+                                <input type="checkbox" id="searchTables" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
                     <button class="btn btn-primary" id="imageSearchBtn" onclick="doImageSearch()" disabled>
                         🖼️ Search
                     </button>
-                </div>
-
-                <div class="search-options">
-                    <div class="option-group">
-                        <label>Top K</label>
-                        <select id="imageTopK">
-                            <option value="5">5</option>
-                            <option value="10" selected>10</option>
-                            <option value="20">20</option>
-                        </select>
-                    </div>
-                    <div class="option-group">
-                        <label>Papers</label>
-                        <label class="toggle">
-                            <input type="checkbox" id="showPapers" checked>
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="option-group">
-                        <label>Figures</label>
-                        <label class="toggle">
-                            <input type="checkbox" id="searchFigures" checked>
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="option-group">
-                        <label>Tables</label>
-                        <label class="toggle">
-                            <input type="checkbox" id="searchTables" checked>
-                            <span class="slider"></span>
-                        </label>
-                    </div>
                 </div>
 
                 <div id="imageSearchLoading" class="loading" style="display:none">
@@ -540,6 +645,9 @@
             <div class="panel" id="panel-graph">
                 <h2 style="margin-bottom:20px">Graph Query (Cypher)</h2>
 
+                <div style="margin-bottom:12px">
+                    <span style="font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px">Built-in Templates</span>
+                </div>
                 <div class="query-templates">
                     <button class="btn btn-sm btn-secondary" onclick="setTemplate('papers')">📄 All Papers</button>
                     <button class="btn btn-sm btn-secondary" onclick="setTemplate('authors')">👤 Top Authors</button>
@@ -548,13 +656,53 @@
                     <button class="btn btn-sm btn-secondary" onclick="setTemplate('stats')">📊 DB Stats</button>
                 </div>
 
+                <div style="margin-bottom:12px">
+                    <div style="display:flex;align-items:center;justify-content:space-between">
+                        <span style="font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px">Saved Templates</span>
+                        <button class="btn btn-sm btn-secondary" onclick="loadSavedTemplates()" style="padding:4px 10px;font-size:11px">🔄 Refresh</button>
+                    </div>
+                </div>
+                <div class="query-templates" id="savedTemplatesContainer">
+                    <span style="font-size:13px;color:var(--text-dim)">Loading...</span>
+                </div>
+
                 <div class="query-editor">
                     <textarea id="cypherInput" placeholder="MATCH (p:Paper) RETURN p.title, p.doi LIMIT 10"></textarea>
                 </div>
 
-                <div style="display:flex; gap:8px; margin-bottom:24px;">
+                <div style="display:flex; gap:8px; margin-bottom:24px; flex-wrap:wrap">
                     <button class="btn btn-primary" onclick="runCypher()">▶ Run Query</button>
                     <button class="btn btn-secondary" onclick="document.getElementById('cypherInput').value=''">Clear</button>
+                    <button class="btn btn-secondary" onclick="openSaveTemplateModal()" style="margin-left:auto">💾 Save as Template</button>
+                </div>
+
+                <!-- Save Template Modal -->
+                <div id="saveTemplateModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center">
+                    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:420px;max-width:90vw">
+                        <h3 style="margin-bottom:16px;font-size:16px">💾 Save Query Template</h3>
+                        <div style="display:flex;flex-direction:column;gap:12px">
+                            <div>
+                                <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Name *</label>
+                                <input type="text" id="templateNameInput" placeholder="e.g. Papers by Year"
+                                    style="width:100%;padding:10px 14px;border-radius:var(--radius-sm);background:var(--bg-input);border:1px solid var(--border);color:var(--text);font-size:14px;outline:none">
+                            </div>
+                            <div>
+                                <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Icon (emoji)</label>
+                                <input type="text" id="templateIconInput" value="📋" maxlength="4"
+                                    style="width:60px;padding:10px 14px;border-radius:var(--radius-sm);background:var(--bg-input);border:1px solid var(--border);color:var(--text);font-size:18px;text-align:center;outline:none">
+                            </div>
+                            <div>
+                                <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Description (optional)</label>
+                                <input type="text" id="templateDescInput" placeholder="Short description of this query"
+                                    style="width:100%;padding:10px 14px;border-radius:var(--radius-sm);background:var(--bg-input);border:1px solid var(--border);color:var(--text);font-size:14px;outline:none">
+                            </div>
+                            <div style="font-size:12px;color:var(--text-dim);background:var(--bg-input);border-radius:var(--radius-sm);padding:10px;max-height:80px;overflow:auto;font-family:monospace;white-space:pre-wrap" id="templateQueryPreview"></div>
+                            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+                                <button class="btn btn-secondary btn-sm" onclick="closeSaveTemplateModal()">Cancel</button>
+                                <button class="btn btn-primary btn-sm" onclick="saveTemplate()">💾 Save</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <div id="graphLoading" class="loading" style="display:none">
@@ -656,6 +804,7 @@ function showPanel(name) {
     if (name === 'performance') loadPerformance();
     if (name === 'cache') loadCache();
     if (name === 'models') loadModels();
+    if (name === 'graph') loadSavedTemplates();
 }
 
 // ── Health Check ──
@@ -682,6 +831,73 @@ async function checkHealth() {
     }
 }
 
+// ── Graph Template for Hybrid Search ──
+let selectedGraphTemplate = null;
+let graphSearchTemplates = []; // combined built-in + saved
+
+// Built-in templates (defined early so loadGraphSearchTemplates can reference them)
+const BUILTIN_TEMPLATES = {
+    papers: `MATCH (p:Paper)\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nRETURN p.title AS title, p.doi AS doi, collect(DISTINCT a.name) AS authors\nLIMIT 20`,
+    authors: `MATCH (a:Author)-[:AUTHORED]->(p:Paper)\nRETURN a.name AS author, count(p) AS paper_count\nORDER BY paper_count DESC\nLIMIT 20`,
+    citations: `MATCH (p1:Paper)-[:CITES]->(p2:Paper)\nRETURN p1.title AS citing, p2.title AS cited\nLIMIT 20`,
+    venues: `MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue)\nRETURN v.name AS venue, count(p) AS papers\nORDER BY papers DESC\nLIMIT 20`,
+    stats: `MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count ORDER BY count DESC`
+};
+
+async function loadGraphSearchTemplates() {
+    const container = document.getElementById('graphTemplateChips');
+    // Built-in templates
+    const builtIns = [
+        { name: 'All Papers', icon: '📄', query: BUILTIN_TEMPLATES.papers, description: 'List all papers with authors' },
+        { name: 'Top Authors', icon: '👤', query: BUILTIN_TEMPLATES.authors, description: 'Authors ranked by paper count' },
+        { name: 'Citations', icon: '🔗', query: BUILTIN_TEMPLATES.citations, description: 'Citation relationships' },
+        { name: 'Venues', icon: '🏛️', query: BUILTIN_TEMPLATES.venues, description: 'Publication venues ranked by paper count' },
+        { name: 'DB Stats', icon: '📊', query: BUILTIN_TEMPLATES.stats, description: 'Database node counts' }
+    ];
+
+    // Fetch saved templates
+    let saved = [];
+    try {
+        const r = await fetch(API + '/graph/templates');
+        const d = await r.json();
+        saved = d.templates || [];
+    } catch (e) { /* ignore */ }
+
+    graphSearchTemplates = [...builtIns, ...saved];
+    renderGraphTemplateChips();
+}
+
+function renderGraphTemplateChips() {
+    const container = document.getElementById('graphTemplateChips');
+    if (!graphSearchTemplates.length) {
+        container.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">No templates available</span>';
+        return;
+    }
+    let html = '<span class="chip ' + (!selectedGraphTemplate ? 'selected' : '') + '" onclick="selectGraphTemplate(null)">None</span>';
+    for (const t of graphSearchTemplates) {
+        const sel = selectedGraphTemplate === t.name ? 'selected' : '';
+        html += `<span class="chip ${sel}" onclick="selectGraphTemplate('${escHtml(t.name)}')" title="${escHtml(t.description || t.query)}">${t.icon || '📋'} ${escHtml(t.name)}</span>`;
+    }
+    container.innerHTML = html;
+}
+
+function selectGraphTemplate(name) {
+    selectedGraphTemplate = name;
+    renderGraphTemplateChips();
+    const preview = document.getElementById('graphTemplatePreview');
+    if (name) {
+        const t = graphSearchTemplates.find(x => x.name === name);
+        if (t) {
+            preview.textContent = t.query;
+            preview.classList.add('visible');
+        }
+    } else {
+        preview.classList.remove('visible');
+    }
+}
+
+// loadGraphSearchTemplates is called in Init section at bottom (after escHtml is defined)
+
 // ── Hybrid Search ──
 async function doSearch() {
     const query = document.getElementById('searchInput').value.trim();
@@ -697,14 +913,27 @@ async function doSearch() {
     document.getElementById('searchBtn').disabled = true;
 
     try {
+        const strategy = document.getElementById('routingStrategy').value;
         const body = {
             query,
             top_k: parseInt(document.getElementById('topK').value),
-            routing_strategy: document.getElementById('routingStrategy').value,
+            routing_strategy: strategy,
             enable_ai_response: document.getElementById('enableAI').checked,
             enable_reranking: document.getElementById('enableRerank').checked,
             enable_attribution: true
         };
+
+        // Attach graph template if a template is selected (works with any strategy)
+        if (selectedGraphTemplate) {
+            const t = graphSearchTemplates.find(x => x.name === selectedGraphTemplate);
+            if (t) body.graph_template = t.query;
+        }
+
+        // Attach paper IDs if provided
+        const paperIdsRaw = document.getElementById('graphTemplatePaperIds').value.trim();
+        if (paperIdsRaw) {
+            body.paper_ids = paperIdsRaw.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+        }
 
         const r = await fetch(API + '/hybrid-search', {
             method: 'POST',
@@ -736,6 +965,7 @@ function renderSearchResults(d) {
         <div class="results-meta">
             <span class="meta-pill">${d.routing_used || d.routing_strategy || ''}</span>
             <span class="meta-pill">${d.query_type || ''}</span>
+            ${d.graph_template_used ? `<span class="meta-pill">🕸️ Template</span>` : ''}
             <span class="meta-pill green">⏱ ${d.search_time_seconds?.toFixed(2) || '?'}s</span>
             ${d.response_generation_time_seconds ? `<span class="meta-pill amber">🤖 AI: ${d.response_generation_time_seconds.toFixed(2)}s</span>` : ''}
         </div>
@@ -833,6 +1063,9 @@ async function doImageSearch() {
     const empty       = document.getElementById('imageSearchEmpty');
     const btn         = document.getElementById('imageSearchBtn');
 
+    const description = document.getElementById('imageDescription').value.trim();
+    const query       = document.getElementById('imageQuery').value.trim();
+
     empty.style.display = 'none';
     resultsDiv.innerHTML = '';
     loading.style.display = 'block';
@@ -841,7 +1074,8 @@ async function doImageSearch() {
     try {
         const body = {
             image_base64: selectedImageBase64,
-            text_query: document.getElementById('imageTextQuery').value.trim() || null,
+            text_query: description || null,
+            query: query || null,
             top_k: parseInt(document.getElementById('imageTopK').value),
             search_figures: document.getElementById('searchFigures').checked,
             search_tables: document.getElementById('searchTables').checked
@@ -880,7 +1114,16 @@ function renderImageResults(d) {
         <span>\ud83d\udcdd ${papers.length} papers</span>
         <span>\ud83d\uddbc\ufe0f ${figures.length} figures</span>
         <span>\ud83d\udcca ${tables.length} tables</span>
+        ${d.response_generation_time_seconds ? `<span>\ud83e\udd16 AI: ${d.response_generation_time_seconds.toFixed(2)}s</span>` : ''}
     </div>`;
+
+    // ── AI Agent Response ──
+    if (d.ai_response) {
+        html += `<div class="image-ai-response">
+            <div class="ai-response-header"><span class="icon">\ud83e\udd16</span><h4>AI Agent Answer</h4></div>
+            <div class="ai-response-body">${escHtml(d.ai_response)}</div>
+        </div>`;
+    }
 
     // ── Tabs ──
     html += `<div class="img-result-tabs" id="imgResultTabs">
@@ -978,16 +1221,102 @@ function visualCard(item, type) {
 }
 
 // ── Graph Query ──
-const TEMPLATES = {
-    papers: `MATCH (p:Paper)\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nRETURN p.title AS title, p.doi AS doi, collect(DISTINCT a.name) AS authors\nLIMIT 20`,
-    authors: `MATCH (a:Author)-[:AUTHORED]->(p:Paper)\nRETURN a.name AS author, count(p) AS paper_count\nORDER BY paper_count DESC\nLIMIT 20`,
-    citations: `MATCH (p1:Paper)-[:CITES]->(p2:Paper)\nRETURN p1.title AS citing, p2.title AS cited\nLIMIT 20`,
-    venues: `MATCH (p:Paper)-[:PUBLISHED_IN]->(v:Venue)\nRETURN v.name AS venue, count(p) AS papers\nORDER BY papers DESC\nLIMIT 20`,
-    stats: `MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count ORDER BY count DESC`
-};
-
 function setTemplate(name) {
-    document.getElementById('cypherInput').value = TEMPLATES[name] || '';
+    document.getElementById('cypherInput').value = BUILTIN_TEMPLATES[name] || '';
+}
+
+// ── Saved Templates ──
+let savedTemplates = [];
+
+async function loadSavedTemplates() {
+    const container = document.getElementById('savedTemplatesContainer');
+    try {
+        const r = await fetch(API + '/graph/templates');
+        const d = await r.json();
+        savedTemplates = d.templates || [];
+        renderSavedTemplates();
+    } catch (e) {
+        container.innerHTML = `<span style="font-size:12px;color:var(--text-dim)">Could not load saved templates</span>`;
+    }
+}
+
+function renderSavedTemplates() {
+    const container = document.getElementById('savedTemplatesContainer');
+    if (!savedTemplates.length) {
+        container.innerHTML = `<span style="font-size:13px;color:var(--text-dim)">No saved templates yet — use "Save as Template" to add one.</span>`;
+        return;
+    }
+    let html = '';
+    for (const t of savedTemplates) {
+        html += `<span style="display:inline-flex;align-items:center;gap:2px">`;
+        html += `<button class="btn btn-sm btn-secondary" onclick="applySavedTemplate('${escHtml(t.name)}')"
+            title="${escHtml(t.description || t.query)}">${t.icon || '📋'} ${escHtml(t.name)}</button>`;
+        html += `<button class="btn btn-sm btn-icon" onclick="deleteSavedTemplate('${escHtml(t.name)}')"
+            title="Delete template" style="padding:4px 6px;font-size:11px;color:var(--red);border:none">✕</button>`;
+        html += `</span>`;
+    }
+    container.innerHTML = html;
+}
+
+function applySavedTemplate(name) {
+    const t = savedTemplates.find(x => x.name === name);
+    if (t) document.getElementById('cypherInput').value = t.query;
+}
+
+async function deleteSavedTemplate(name) {
+    if (!confirm(`Delete template "${name}"?`)) return;
+    try {
+        const r = await fetch(API + `/graph/templates/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const d = await r.json();
+        if (d.success) {
+            await loadSavedTemplates();
+        } else {
+            alert(d.detail || 'Failed to delete');
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+function openSaveTemplateModal() {
+    const query = document.getElementById('cypherInput').value.trim();
+    if (!query) { alert('Write a query first before saving as template.'); return; }
+    document.getElementById('templateQueryPreview').textContent = query;
+    document.getElementById('templateNameInput').value = '';
+    document.getElementById('templateIconInput').value = '📋';
+    document.getElementById('templateDescInput').value = '';
+    document.getElementById('saveTemplateModal').style.display = 'flex';
+}
+
+function closeSaveTemplateModal() {
+    document.getElementById('saveTemplateModal').style.display = 'none';
+}
+
+async function saveTemplate() {
+    const name = document.getElementById('templateNameInput').value.trim();
+    const icon = document.getElementById('templateIconInput').value.trim() || '📋';
+    const description = document.getElementById('templateDescInput').value.trim();
+    const query = document.getElementById('cypherInput').value.trim();
+
+    if (!name) { alert('Please enter a template name.'); return; }
+    if (!query) { alert('Query is empty.'); return; }
+
+    try {
+        const r = await fetch(API + '/graph/templates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, query, icon, description })
+        });
+        const d = await r.json();
+        if (d.success) {
+            closeSaveTemplateModal();
+            await loadSavedTemplates();
+        } else {
+            alert(d.detail || 'Failed to save template');
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
 }
 
 async function runCypher() {
@@ -1227,6 +1556,8 @@ function escHtml(s) {
 // ── Init ──
 checkHealth();
 setInterval(checkHealth, 30000);
+loadSavedTemplates();
+loadGraphSearchTemplates();
 </script>
 </body>
 </html>

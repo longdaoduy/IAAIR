@@ -8,6 +8,7 @@ from clients.vector.MilvusClient import MilvusClient
 from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.huggingface.DeepseekClient import DeepseekClient
 from clients.huggingface.CLIPClient import CLIPClient
+from clients.mongo.MongoClient import MongoClient
 from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
 from pipelines.retrievals.HybridRetrievalHandler import HybridRetrievalHandler
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
@@ -34,7 +35,8 @@ class ServiceFactory:
         self.neo4j_handler = GraphNeo4jHandler()
         self.milvus_client = MilvusClient()
         self.scibert_client = SciBERTClient()
-        self.clip_client = CLIPClient()
+        self.clip_client = None
+        self.mongo_client = MongoClient()
         self.deepseek_client = DeepseekClient()
 
         # Performance & Caching
@@ -49,7 +51,7 @@ class ServiceFactory:
         self.query_handler = GraphQueryHandler(neo4j_client=self.neo4j_client)
         self.routing_engine = RoutingDecisionEngine(self.deepseek_client)
         self.result_fusion = ResultFusion()
-        self.scientific_reranker = ScientificReranker()
+        self.scientific_reranker = None
         self.attribution_tracker = None
 
         # Complex Handlers
@@ -112,9 +114,14 @@ class ServiceFactory:
     async def connect_all(self):
         """Standardize startup for all database clients"""
         self.milvus_client.connect()
-        self.clip_client.initialize()
-        # await self.neo4j_handler.connect() if async
+        # self.clip_client.initialize()
+        # try:
+        #     self.mongo_client.connect()
+        # except Exception as e:
+        #     logger.warning(f"MongoDB connection failed (templates will auto-connect on first use): {e}")
+        # # await self.neo4j_handler.connect() if async
 
     async def disconnect_all(self):
         """Cleanup connections on shutdown"""
         self.milvus_client.disconnect()
+        # self.mongo_client.disconnect()

@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 from models.entities.retrieval.RoutingStrategy import RoutingStrategy
 
@@ -13,3 +13,5 @@ class HybridSearchRequest(BaseModel):
     enable_ai_response: bool = Field(True, description="Generate AI response using Gemini")
     fusion_weights: Optional[Dict[str, float]] = Field(None, description="Custom fusion weights")
     include_provenance: bool = Field(False, description="Include detailed provenance")
+    graph_template: Optional[str] = Field(None, description="Cypher template for graph search. AI will extract filter conditions from the query and inject them.")
+    paper_ids: Optional[List[str]] = Field(None, description="Optional paper IDs to filter graph template results. Added as WHERE p.id IN ... clause.")

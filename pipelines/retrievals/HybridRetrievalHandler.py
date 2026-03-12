@@ -136,6 +136,278 @@ class HybridRetrievalHandler:
         else:
             return await self._execute_graph_search_internal(query, top_k)
 
+    async def execute_graph_search_with_template(self, query: str, template_cypher: str, top_k: int,
+                                                   paper_ids: Optional[List[str]] = None) -> List[Dict]:
+        """Execute graph search using a user-selected Cypher template with AI-extracted conditions.
+
+        The AI agent analyzes the user's natural language query and the template to produce
+        a refined Cypher query with proper WHERE clauses, ORDER BY, and LIMIT injected.
+
+        Args:
+            query: The user's natural language search query
+            template_cypher: The Cypher template selected by the user
+            top_k: Maximum number of results to return
+            paper_ids: Optional list of paper IDs to filter results (added as WHERE clause)
+
+        Returns:
+            List of matching records from Neo4j
+        """
+        if self.performance_monitor:
+            with self.performance_monitor.track_operation('graph_search_template'):
+                return await self._execute_graph_search_with_template_internal(query, template_cypher, top_k, paper_ids)
+        else:
+            return await self._execute_graph_search_with_template_internal(query, template_cypher, top_k, paper_ids)
+
+    async def _execute_graph_search_with_template_internal(
+            self, query: str, template_cypher: str, top_k: int,
+            paper_ids: Optional[List[str]] = None) -> List[Dict]:
+        """Internal implementation of template-based graph search."""
+        try:
+            if not self.graph_handler:
+                logger.error("Graph handler not initialized")
+                return []
+
+            # Step 1: Use AI to refine the Cypher template based on the user query
+            refined_cypher, parameters = self._refine_template_with_ai(query, template_cypher, top_k, paper_ids)
+
+            logger.info(f"Template-based graph search - original template:\n{template_cypher}")
+            logger.info(f"Refined Cypher:\n{refined_cypher}")
+            logger.info(f"Parameters: {parameters}")
+
+            # Step 2: Execute the refined query
+            results = self.graph_handler.execute_query(refined_cypher, parameters)
+            logger.info(f"Template-based graph search returned {len(results)} results")
+
+            # Add relevance scores
+            for result in results:
+                result['relevance_score'] = 0.85  # Template-based searches are usually well-targeted
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Template-based graph search error: {e}")
+            # Fallback: try executing the original template as-is with a LIMIT
+            try:
+                fallback = self._inject_limit(template_cypher, top_k)
+                logger.info(f"Falling back to original template with LIMIT: {fallback}")
+                results = self.graph_handler.execute_query(fallback, {})
+                for r in results:
+                    r['relevance_score'] = 0.6
+                return results
+            except Exception as e2:
+                logger.error(f"Fallback template execution also failed: {e2}")
+                return []
+
+    def _refine_template_with_ai(self, query: str, template_cypher: str, top_k: int,
+                                   paper_ids: Optional[List[str]] = None) -> tuple:
+        """Use AI agent to analyze the user's query and refine the Cypher template.
+
+        The AI extracts filter conditions (author names, keywords, date ranges, venues, etc.)
+        from the natural language query and injects proper WHERE clauses into the template.
+
+        Args:
+            query: The user's natural language search query
+            template_cypher: The Cypher template
+            top_k: Maximum results
+            paper_ids: Optional paper IDs to scope results to specific papers
+
+        Returns:
+            (refined_cypher, parameters) tuple
+        """
+        if not self.ai_agent:
+            logger.warning("AI agent not available for template refinement, using template as-is")
+            cypher = self._inject_limit(template_cypher, top_k)
+            params = {}
+            if paper_ids:
+                cypher, params = self._inject_paper_ids_filter(cypher, paper_ids)
+            return cypher, params
+
+        # Build paper IDs instruction for the prompt
+        paper_ids_instruction = ""
+        if paper_ids:
+            ids_str = json.dumps(paper_ids)
+            paper_ids_instruction = f"""\n\nIMPORTANT: The user has specified these paper IDs to filter on: {ids_str}
+You MUST add a WHERE clause: WHERE p.id IN $paper_ids (or combine with AND if WHERE already exists).
+Include "paper_ids": {ids_str} in the parameters object."""
+
+        prompt = f"""You are a Neo4j Cypher query expert. A user wants to search academic papers using a graph database.
+
+They selected this Cypher template:
+```cypher
+{template_cypher}
+```
+
+Their search query is: "{query}"{paper_ids_instruction}
+
+Your task: Modify the Cypher template to add proper filter conditions based on the user's query.
+
+Neo4j Schema for reference:
+- Paper: {{id, title, abstract, publication_date, doi, cited_by_count, pdf_url}}
+- Author: {{id, name, orcid}}
+- Venue: {{id, name, type, impact_factor}}
+- Institution: {{id, name, country, city}}
+- Relations: (Author)-[:AUTHORED]->(Paper), (Paper)-[:PUBLISHED_IN]->(Venue), (Paper)-[:CITES]->(Paper), (Paper)-[:ASSOCIATED_WITH]->(Institution)
+
+Rules:
+1. Keep the template's MATCH pattern and RETURN clause structure intact
+2. Add WHERE clauses to filter based on the user's query (keywords in title/abstract, author names, venue names, date ranges, etc.)
+3. Use case-insensitive matching with toLower() for text searches
+4. Use CONTAINS for keyword matching in titles and abstracts
+5. If the query mentions a date/year, use publication_date filtering
+6. If the query mentions an author, match on author name
+7. Always include LIMIT {top_k} at the end
+8. Use $param_name syntax for parameters and provide their values
+9. If the query is too vague to extract specific filters, just add a LIMIT and return the template as-is
+10. If paper_ids are provided, always add WHERE p.id IN $paper_ids (use AND to combine with other conditions)
+
+Respond in EXACTLY this JSON format (no markdown, no extra text):
+{{
+  "cypher": "YOUR REFINED CYPHER QUERY HERE",
+  "parameters": {{"param_name": "param_value"}},
+  "explanation": "Brief explanation of what conditions were added"
+}}
+"""
+
+        try:
+            response = self.ai_agent.generate_content(
+                prompt=prompt,
+                system_prompt="You are a Cypher query expert. Always respond with valid JSON only.",
+                purpose='cypher_template_refinement'
+            )
+
+            if not response:
+                logger.warning("Empty AI response for template refinement")
+                return self._inject_limit(template_cypher, top_k), {}
+
+            # Parse the JSON response
+            refined_cypher, parameters = self._parse_template_refinement_response(response, template_cypher, top_k)
+
+            # Safety net: ensure paper_ids are included if AI missed them
+            if paper_ids:
+                if 'paper_ids' not in parameters:
+                    parameters['paper_ids'] = paper_ids
+                if '$paper_ids' not in refined_cypher and 'paper_ids' not in refined_cypher:
+                    refined_cypher, parameters = self._inject_paper_ids_filter(refined_cypher, paper_ids, parameters)
+
+            return refined_cypher, parameters
+
+        except Exception as e:
+            logger.error(f"Error in AI template refinement: {e}")
+            cypher = self._inject_limit(template_cypher, top_k)
+            params = {}
+            if paper_ids:
+                cypher, params = self._inject_paper_ids_filter(cypher, paper_ids)
+            return cypher, params
+
+    def _parse_template_refinement_response(self, response: str, template_cypher: str, top_k: int) -> tuple:
+        """Parse the AI's JSON response for template refinement."""
+        try:
+            # Try to extract JSON from the response (handle markdown code blocks)
+            clean = response.strip()
+            if clean.startswith("```"):
+                lines = clean.split("\n")
+                # Remove first and last lines (code block markers)
+                clean = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+                clean = clean.strip()
+
+            parsed = json.loads(clean)
+            cypher = parsed.get("cypher", "").strip()
+            parameters = parsed.get("parameters", {})
+            explanation = parsed.get("explanation", "")
+
+            if explanation:
+                logger.info(f"AI template refinement: {explanation}")
+
+            if not cypher:
+                logger.warning("AI returned empty Cypher, using original template")
+                return self._inject_limit(template_cypher, top_k), {}
+
+            # Basic validation
+            cypher_upper = cypher.upper()
+            if "MATCH" not in cypher_upper or "RETURN" not in cypher_upper:
+                logger.warning("AI-refined Cypher missing MATCH/RETURN, using original template")
+                return self._inject_limit(template_cypher, top_k), {}
+
+            # Ensure LIMIT is present
+            if "LIMIT" not in cypher_upper:
+                cypher = cypher.rstrip().rstrip(';') + f"\nLIMIT {top_k}"
+
+            return cypher, parameters
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Could not parse AI template refinement JSON: {e}")
+            # Try to extract just the Cypher from a non-JSON response
+            return self._inject_limit(template_cypher, top_k), {}
+
+    def _inject_limit(self, cypher: str, top_k: int) -> str:
+        """Inject or replace LIMIT clause in a Cypher query."""
+        import re as _re
+        # Replace existing LIMIT
+        if _re.search(r'LIMIT\s+\d+', cypher, _re.IGNORECASE):
+            return _re.sub(r'LIMIT\s+\d+', f'LIMIT {top_k}', cypher, flags=_re.IGNORECASE)
+        # Add LIMIT at the end
+        return cypher.rstrip().rstrip(';') + f"\nLIMIT {top_k}"
+
+    def _inject_paper_ids_filter(self, cypher: str, paper_ids: List[str],
+                                  existing_params: Optional[Dict] = None) -> tuple:
+        """Inject a WHERE p.id IN $paper_ids clause into a Cypher query.
+
+        Handles three cases:
+        1. Query already has WHERE → append AND p.id IN $paper_ids
+        2. Query has no WHERE → insert WHERE p.id IN $paper_ids after the first MATCH line
+        3. Query already references $paper_ids → just ensure params are set
+
+        Returns:
+            (modified_cypher, parameters) tuple
+        """
+        params = dict(existing_params) if existing_params else {}
+        params['paper_ids'] = paper_ids
+
+        # Already has paper_ids filter
+        if '$paper_ids' in cypher:
+            return cypher, params
+
+        lines = cypher.strip().split('\n')
+        new_lines = []
+        injected = False
+
+        for i, line in enumerate(lines):
+            stripped = line.strip().upper()
+            new_lines.append(line)
+
+            if injected:
+                continue
+
+            # If we see a WHERE clause, append AND condition on the next WHERE-bearing line
+            if stripped.startswith('WHERE'):
+                # Append to existing WHERE
+                new_lines[-1] = line.rstrip() + ' AND p.id IN $paper_ids'
+                injected = True
+            # After a MATCH line (but before OPTIONAL MATCH / WHERE / RETURN), insert WHERE
+            elif stripped.startswith('MATCH') and not stripped.startswith('MATCH (P1') and not stripped.startswith('MATCH (P2'):
+                # Look ahead: if next non-empty line is not WHERE, insert WHERE
+                next_idx = i + 1
+                while next_idx < len(lines) and not lines[next_idx].strip():
+                    next_idx += 1
+                if next_idx < len(lines) and lines[next_idx].strip().upper().startswith('WHERE'):
+                    continue  # WHERE follows, will be handled in next iteration
+                elif next_idx < len(lines) and not lines[next_idx].strip().upper().startswith('OPTIONAL'):
+                    # Insert WHERE before the next line
+                    new_lines.append('WHERE p.id IN $paper_ids')
+                    injected = True
+
+        # If still not injected (e.g. simple one-line query), add before RETURN
+        if not injected:
+            final_lines = []
+            for line in new_lines:
+                if line.strip().upper().startswith('RETURN') and not injected:
+                    final_lines.append('WHERE p.id IN $paper_ids')
+                    injected = True
+                final_lines.append(line)
+            new_lines = final_lines
+
+        return '\n'.join(new_lines), params
+
     async def _execute_graph_search_internal(self, query: str, top_k: int) -> List[Dict]:
         """Internal graph search implementation with caching."""
         try:

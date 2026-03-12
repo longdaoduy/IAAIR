@@ -574,23 +574,44 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         if routing_strategy == RoutingStrategy.VECTOR_FIRST:
             # Vector search first, then optional graph refinement
             vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k * 2)
-            # if vector_results and request.top_k > 10:  # Only do graph refinement for larger result sets
-            #     # Use top vector results to inform graph search
-            #     paper_ids = [r.get('paper_id') for r in vector_results[:request.top_k]]
-            #     graph_results = await factory.retrieval_handler._execute_graph_refinement(paper_ids,request.top_k)
-            # else:
-            #     graph_results = []
+            # If a graph template is provided, also run template-based graph search for fusion
+            if request.graph_template:
+                logger.info(f"Vector-first + graph template: running template-based graph search")
+                graph_results = await factory.retrieval_handler.execute_graph_search_with_template(
+                    query=request.query,
+                    template_cypher=request.graph_template,
+                    top_k=request.top_k,
+                    paper_ids=request.paper_ids
+                )
 
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
-            # Graph search first - skip vector entirely for pure structural queries
-            graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k * 2)
+            # Graph search first - use template if provided, otherwise standard graph search
+            if request.graph_template:
+                logger.info(f"Using graph template with AI condition extraction for query: {request.query}")
+                graph_results = await factory.retrieval_handler.execute_graph_search_with_template(
+                    query=request.query,
+                    template_cypher=request.graph_template,
+                    top_k=request.top_k * 2,
+                    paper_ids=request.paper_ids
+                )
+            else:
+                graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k * 2)
             logger.info("Using graph-only search - vector search skipped for performance")
             vector_results = []
 
         elif routing_strategy == RoutingStrategy.PARALLEL:
-            # Execute both searches in parallel only when necessary
+            # Execute both searches in parallel
             vector_task = factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
-            graph_task = factory.retrieval_handler.execute_graph_search(request.query, request.top_k)
+            # Use template-based graph search if a template is provided
+            if request.graph_template:
+                graph_task = factory.retrieval_handler.execute_graph_search_with_template(
+                    query=request.query,
+                    template_cypher=request.graph_template,
+                    top_k=request.top_k,
+                    paper_ids=request.paper_ids
+                )
+            else:
+                graph_task = factory.retrieval_handler.execute_graph_search(request.query, request.top_k)
 
             results = await asyncio.gather(vector_task, graph_task)
             # Safely unpack results with fallbacks
@@ -706,6 +727,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             response_generation_time_seconds=response_generation_time,
             results=fused_results,
             ai_response=ai_response,
+            graph_template_used=request.graph_template if request.graph_template else None,
             fusion_stats=fusion_stats,
             attribution_stats=attribution_stats
         )
@@ -825,6 +847,7 @@ async def image_search(
 class ImageSearchBase64Request(BaseModel):
     image_base64: str
     text_query: Optional[str] = None
+    query: Optional[str] = None
     top_k: int = 10
     search_figures: bool = True
     search_tables: bool = True
@@ -898,11 +921,71 @@ async def image_search_base64(
         table_results = results.get("table_results", [])
         related_papers = results.get("related_papers", [])
 
+        # Generate AI response if query is provided
+        ai_response = None
+        response_generation_time = None
+        if request.query and request.query.strip() and related_papers:
+            response_start = datetime.now()
+            try:
+                if factory.retrieval_handler and hasattr(factory.retrieval_handler, 'ai_agent') and factory.retrieval_handler.ai_agent:
+                    # Build context from image search results
+                    context_parts = []
+                    # Add figure descriptions
+                    for i, fig in enumerate(figure_results[:5]):
+                        desc = fig.get('description', 'No description')
+                        score = fig.get('similarity_score', 0)
+                        context_parts.append(f"Figure {i+1} (similarity: {score:.2f}): {desc}")
+                    # Add table descriptions
+                    for i, tbl in enumerate(table_results[:5]):
+                        desc = tbl.get('description', 'No description')
+                        score = tbl.get('similarity_score', 0)
+                        context_parts.append(f"Table {i+1} (similarity: {score:.2f}): {desc}")
+                    # Add paper info
+                    for i, p in enumerate(related_papers[:5]):
+                        title = p.get('title', 'Untitled')
+                        abstract = (p.get('abstract', '') or '')[:300]
+                        context_parts.append(f"Paper {i+1}: {title}\nAbstract: {abstract}")
+
+                    visual_context = "\n\n".join(context_parts)
+                    description_note = f"\nImage description provided by user: {text_query}" if text_query else ""
+
+                    prompt = f"""Based on the visual search results from academic papers, answer this question: \"{request.query}\"
+{description_note}
+
+Search Results (figures, tables, and related papers):
+{visual_context}
+
+Instructions:
+- Answer the question based on the search results above
+- Reference specific figures, tables, or papers when relevant
+- Be concise and informative (3-5 sentences)
+- If the results don't contain enough information to answer, say so
+
+Answer:"""
+
+                    system_prompt = "You are a research assistant analyzing visual search results from academic papers. Be factual, concise, and reference specific results."
+                    ai_response = factory.retrieval_handler.ai_agent.generate_content(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        purpose='image_search_answer'
+                    )
+                else:
+                    logger.info("AI Agent not available for image search query response")
+            except Exception as ai_err:
+                logger.warning(f"AI response generation failed for image search: {ai_err}")
+                ai_response = None
+            response_generation_time = (datetime.now() - response_start).total_seconds()
+
+        search_time = (datetime.now() - start_time).total_seconds()
+
         return {
             "success": True,
             "message": f"Found {len(figure_results)} figures and {len(table_results)} tables from {len(related_papers)} papers",
             "search_time_seconds": search_time,
             "text_query": text_query,
+            "query": request.query,
+            "ai_response": ai_response,
+            "response_generation_time_seconds": response_generation_time,
             "results_found": len(related_papers),
             "results": related_papers,
             "totals": {
@@ -957,6 +1040,76 @@ async def execute_custom_query(request: GraphQueryRequest, factory: ServiceFacto
     except Exception as e:
         logger.error(f"Query execution error: {e}")
         raise HTTPException(status_code=400, detail=f"Query execution failed: {str(e)}")
+
+
+@app.get("/graph/templates")
+async def list_cypher_templates(factory: ServiceFactory = Depends(get_services)):
+    """List all saved Cypher query templates."""
+    try:
+        templates = factory.mongo_client.get_cypher_templates()
+        # Serialize datetime fields
+        for t in templates:
+            for key in ("created_at", "updated_at"):
+                if key in t and hasattr(t[key], "isoformat"):
+                    t[key] = t[key].isoformat()
+        return {"success": True, "templates": templates}
+    except Exception as e:
+        logger.error(f"Failed to list Cypher templates: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CypherTemplateSaveRequest(BaseModel):
+    name: str
+    query: str
+    icon: str = "📋"
+    description: str = ""
+
+
+@app.post("/graph/templates")
+async def save_cypher_template(request: CypherTemplateSaveRequest,
+                               factory: ServiceFactory = Depends(get_services)):
+    """Save a custom Cypher query template."""
+    try:
+        if not request.name.strip():
+            raise HTTPException(status_code=400, detail="Template name is required")
+        if not request.query.strip():
+            raise HTTPException(status_code=400, detail="Query is required")
+
+        result = factory.mongo_client.save_cypher_template(
+            name=request.name,
+            query=request.query,
+            icon=request.icon,
+            description=request.description
+        )
+        if result:
+            if "created_at" in result and hasattr(result["created_at"], "isoformat"):
+                result["created_at"] = result["created_at"].isoformat()
+            if "updated_at" in result and hasattr(result["updated_at"], "isoformat"):
+                result["updated_at"] = result["updated_at"].isoformat()
+            return {"success": True, "message": f"Template '{request.name}' saved", "template": result}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save template")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to save Cypher template: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/graph/templates/{name}")
+async def delete_cypher_template(name: str, factory: ServiceFactory = Depends(get_services)):
+    """Delete a saved Cypher query template."""
+    try:
+        deleted = factory.mongo_client.delete_cypher_template(name)
+        if deleted:
+            return {"success": True, "message": f"Template '{name}' deleted"}
+        else:
+            raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete Cypher template: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ===============================================================================

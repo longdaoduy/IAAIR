@@ -18,5 +18,6 @@ class HybridSearchResponse(BaseModel):
     response_generation_time_seconds: Optional[float] = None
     results: List[SearchResult]
     ai_response: Optional[str] = None
+    graph_template_used: Optional[str] = None
     fusion_stats: Dict[str, Any] = {}
     attribution_stats: Dict[str, Any] = {}
