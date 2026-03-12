@@ -1372,7 +1372,6 @@ class PDFProcessingHandler:
             return True
 
         try:
-            # Fit TF-IDF vectorizer once for all descriptions and table texts
             if not self.milvus_client.is_tfidf_fitted:
                 all_texts = []
                 for table in tables:
