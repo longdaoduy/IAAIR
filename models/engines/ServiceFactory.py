@@ -36,8 +36,8 @@ class ServiceFactory:
         self.milvus_client = MilvusClient()
         self.scibert_client = SciBERTClient()
         self.clip_client = None
-        self.mongo_client = MongoClient()
-        self.deepseek_client = DeepseekClient()
+        self.mongo_client = None
+        self.deepseek_client = None
 
         # Performance & Caching
         self.cache_manager = CacheManager(
@@ -49,7 +49,7 @@ class ServiceFactory:
 
         # Pipelines & Engines
         self.query_handler = GraphQueryHandler(neo4j_client=self.neo4j_client)
-        self.routing_engine = RoutingDecisionEngine(self.deepseek_client)
+        self.routing_engine = RoutingDecisionEngine()
         self.result_fusion = ResultFusion()
         self.scientific_reranker = None
         self.attribution_tracker = None

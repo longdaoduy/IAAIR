@@ -48,6 +48,7 @@ import uvicorn
 import time
 import base64
 import io
+import json
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -67,6 +68,7 @@ from typing import Callable
 
 # Global factory container
 services = ServiceFactory()
+
 
 class RequestCounterMiddleware(BaseHTTPMiddleware):
     """Middleware to count and track all API requests."""
@@ -170,9 +172,11 @@ app.add_middleware(RequestCounterMiddleware)
 
 # Serve frontend static files
 import os
+
 _frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
 if os.path.isdir(_frontend_dir):
     app.mount("/static", StaticFiles(directory=_frontend_dir), name="frontend")
+
 
 # Dependency to inject services into routes
 def get_services() -> ServiceFactory:
@@ -531,18 +535,15 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
     7. Comprehensive performance monitoring and caching
     """
     start_time = datetime.now()
-
-    # Start performance tracking
-    breakdown = factory.performance_monitor.start_query_tracking(request.query, "hybrid-search")
-
     try:
         logger.info(f"Starting hybrid search for query: '{request.query}'")
 
         # Step 1: Query classification and intelligent routing decision
-        query_type, confidence = factory.routing_engine.query_classifier.classify_query(request.query)
+        query_type, confidence = (factory.routing_engine.query_classifier.classify_query(request.query))
 
         # Record query type
-        factory.performance_monitor.record_query_type(query_type.value if hasattr(query_type, 'value') else str(query_type))
+        factory.performance_monitor.record_query_type(
+            query_type.value if hasattr(query_type, 'value') else str(query_type))
 
         # Check if user specified a routing strategy explicitly
         if request.routing_strategy != RoutingStrategy.ADAPTIVE:
@@ -573,29 +574,28 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         if routing_strategy == RoutingStrategy.VECTOR_FIRST:
             # Vector search first, then optional graph refinement
-            vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k * 2)
             # If a graph template is provided, also run template-based graph search for fusion
-            if request.graph_template:
-                logger.info(f"Vector-first + graph template: running template-based graph search")
-                graph_results = await factory.retrieval_handler.execute_graph_search_with_template(
-                    query=request.query,
-                    template_cypher=request.graph_template,
-                    top_k=request.top_k,
-                    paper_ids=request.paper_ids
-                )
+            # if request.graph_template:
+            #     logger.info(f"Vector-first + graph template: running template-based graph search")
+            #     graph_results = await factory.retrieval_handler.execute_graph_search_with_template(
+            #         query=request.query,
+            #         template_cypher=request.graph_template,
+            #         top_k=request.top_k,
+            #         paper_ids=request.paper_ids
+            #     )
+            vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
 
         elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
             # Graph search first - use template if provided, otherwise standard graph search
-            if request.graph_template:
-                logger.info(f"Using graph template with AI condition extraction for query: {request.query}")
-                graph_results = await factory.retrieval_handler.execute_graph_search_with_template(
-                    query=request.query,
-                    template_cypher=request.graph_template,
-                    top_k=request.top_k * 2,
-                    paper_ids=request.paper_ids
-                )
-            else:
-                graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k * 2)
+            # if request.graph_template:
+            #     logger.info(f"Using graph template with AI condition extraction for query: {request.query}")
+            #     graph_results = await factory.retrieval_handler.execute_graph_search_with_template(
+            #         query=request.query,
+            #         template_cypher=request.graph_template,
+            #         top_k=request.top_k * 2,
+            #         paper_ids=request.paper_ids
+            #     )
+            graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k)
             logger.info("Using graph-only search - vector search skipped for performance")
             vector_results = []
 
@@ -688,24 +688,23 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
                     ai_response = await factory.retrieval_handler.generate_ai_response(request.query, fused_results,
                                                                                        query_type)
 
-                    if ai_response:
-                    # 2. PERFORM SCIFACT VERIFICATION FIRST (Week 5/7 requirement)
-                    # This reduces the 10-30% hallucination rate cited in the proposal
-                    # Convert SearchResult objects to dictionaries for verification
-                        papers_for_verification = [result.dict() for result in fused_results]
-                        verification_results = await factory.retrieval_handler.verify_claims_scifact(ai_response,
-                                                                                                    papers_for_verification)                        # 3. Check for CONTRADICTED labels (The Error Taxonomy pass)
-                        is_valid = all(v['label'] != 'CONTRADICTED' for v in verification_results)
-
-                        if is_valid:
-                            # 4. Only cache if the answer is grounded in evidence
-                            factory.cache_manager.cache_ai_response(request.query, results_hash, ai_response)
-                            # Log to Provenance Ledger (Week 6)
-                            # factory.retrieval_handler.record_verified_response(ai_response, verification_results)
-                        else:
-                            # Handle hallucination (Red-team mitigation)
-                            ai_response = "The retrieved evidence contradicts the potential answer. Refining search..."
-
+                    # if ai_response:
+                    # # 2. PERFORM SCIFACT VERIFICATION FIRST (Week 5/7 requirement)
+                    # # This reduces the 10-30% hallucination rate cited in the proposal
+                    # # Convert SearchResult objects to dictionaries for verification
+                    #     papers_for_verification = [result.dict() for result in fused_results]
+                    #     verification_results = await factory.retrieval_handler.verify_claims_scifact(ai_response,
+                    #                                                                                 papers_for_verification)                        # 3. Check for CONTRADICTED labels (The Error Taxonomy pass)
+                    #     is_valid = all(v['label'] != 'CONTRADICTED' for v in verification_results)
+                    #
+                    #     if is_valid:
+                    #         # 4. Only cache if the answer is grounded in evidence
+                    #         factory.cache_manager.cache_ai_response(request.query, results_hash, ai_response)
+                    #         # Log to Provenance Ledger (Week 6)
+                    #         # factory.retrieval_handler.record_verified_response(ai_response, verification_results)
+                    #     else:
+                    #         # Handle hallucination (Red-team mitigation)
+                    #         ai_response = "The retrieved evidence contradicts the potential answer. Refining search..."
 
             response_generation_time = (datetime.now() - response_start).total_seconds()
 
@@ -745,12 +744,12 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
 @app.post("/image-search")
 async def image_search(
-    file: UploadFile = File(...),
-    text_query: str = Form(None),
-    top_k: int = Form(10),
-    search_figures: bool = Form(True),
-    search_tables: bool = Form(True),
-    factory: ServiceFactory = Depends(get_services)
+        file: UploadFile = File(...),
+        text_query: str = Form(None),
+        top_k: int = Form(10),
+        search_figures: bool = Form(True),
+        search_tables: bool = Form(True),
+        factory: ServiceFactory = Depends(get_services)
 ):
     """
     Search for similar figures and tables using an uploaded image.
@@ -855,8 +854,8 @@ class ImageSearchBase64Request(BaseModel):
 
 @app.post("/image-search/base64")
 async def image_search_base64(
-    request: ImageSearchBase64Request,
-    factory: ServiceFactory = Depends(get_services)
+        request: ImageSearchBase64Request,
+        factory: ServiceFactory = Depends(get_services)
 ):
     """
     Search for similar figures and tables using a base64-encoded image.
@@ -927,24 +926,25 @@ async def image_search_base64(
         if request.query and request.query.strip() and related_papers:
             response_start = datetime.now()
             try:
-                if factory.retrieval_handler and hasattr(factory.retrieval_handler, 'ai_agent') and factory.retrieval_handler.ai_agent:
+                if factory.retrieval_handler and hasattr(factory.retrieval_handler,
+                                                         'ai_agent') and factory.retrieval_handler.ai_agent:
                     # Build context from image search results
                     context_parts = []
                     # Add figure descriptions
                     for i, fig in enumerate(figure_results[:5]):
                         desc = fig.get('description', 'No description')
                         score = fig.get('similarity_score', 0)
-                        context_parts.append(f"Figure {i+1} (similarity: {score:.2f}): {desc}")
+                        context_parts.append(f"Figure {i + 1} (similarity: {score:.2f}): {desc}")
                     # Add table descriptions
                     for i, tbl in enumerate(table_results[:5]):
                         desc = tbl.get('description', 'No description')
                         score = tbl.get('similarity_score', 0)
-                        context_parts.append(f"Table {i+1} (similarity: {score:.2f}): {desc}")
+                        context_parts.append(f"Table {i + 1} (similarity: {score:.2f}): {desc}")
                     # Add paper info
                     for i, p in enumerate(related_papers[:5]):
                         title = p.get('title', 'Untitled')
                         abstract = (p.get('abstract', '') or '')[:300]
-                        context_parts.append(f"Paper {i+1}: {title}\nAbstract: {abstract}")
+                        context_parts.append(f"Paper {i + 1}: {title}\nAbstract: {abstract}")
 
                     visual_context = "\n\n".join(context_parts)
                     description_note = f"\nImage description provided by user: {text_query}" if text_query else ""
@@ -1042,17 +1042,53 @@ async def execute_custom_query(request: GraphQueryRequest, factory: ServiceFacto
         raise HTTPException(status_code=400, detail=f"Query execution failed: {str(e)}")
 
 
+@app.get("/graph/ai-templates")
+async def list_graph_ai_templates():
+    """List AI graph query templates from data/graph_templates.json."""
+    try:
+        templates_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'graph_templates.json')
+        with open(templates_path, 'r', encoding='utf-8') as f:
+            templates_dict = json.load(f)
+
+        # Map of template keys to icons
+        icon_map = {
+            'search_by_paper_ids': '🆔', 'search_by_author': '👤',
+            'search_by_keywords': '🔑', 'search_by_venue': '🏛️',
+            'search_by_institution': '🏫', 'search_by_year': '📅',
+            'search_citations': '🔗', 'search_author_by_keywords': '👤🔑',
+            'search_by_year_range': '📆', 'top_cited_papers': '🏆',
+            'coauthor_network': '🤝', 'author_venue_stats': '📊',
+        }
+
+        templates = []
+        for key, tpl in templates_dict.items():
+            templates.append({
+                'key': key,
+                'name': key.replace('_', ' ').title(),
+                'icon': icon_map.get(key, '📋'),
+                'description': tpl.get('description', ''),
+                'cypher': tpl.get('cypher', ''),
+                'triggers': tpl.get('triggers', []),
+            })
+        return {"success": True, "templates": templates}
+    except FileNotFoundError:
+        return {"success": False, "templates": [], "error": "graph_templates.json not found"}
+    except Exception as e:
+        logger.error(f"Failed to load AI graph templates: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/graph/templates")
 async def list_cypher_templates(factory: ServiceFactory = Depends(get_services)):
     """List all saved Cypher query templates."""
     try:
-        templates = factory.mongo_client.get_cypher_templates()
-        # Serialize datetime fields
-        for t in templates:
-            for key in ("created_at", "updated_at"):
-                if key in t and hasattr(t[key], "isoformat"):
-                    t[key] = t[key].isoformat()
-        return {"success": True, "templates": templates}
+        # templates = factory.mongo_client.get_cypher_templates()
+        # # Serialize datetime fields
+        # for t in templates:
+        #     for key in ("created_at", "updated_at"):
+        #         if key in t and hasattr(t[key], "isoformat"):
+        #             t[key] = t[key].isoformat()
+        return {"success": True, "templates": []}
     except Exception as e:
         logger.error(f"Failed to list Cypher templates: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1074,7 +1110,8 @@ async def save_cypher_template(request: CypherTemplateSaveRequest,
             raise HTTPException(status_code=400, detail="Template name is required")
         if not request.query.strip():
             raise HTTPException(status_code=400, detail="Query is required")
-
+        if not mongo_client:
+            raise HTTPException(status_code=400, detail="MongoDB is required")
         result = factory.mongo_client.save_cypher_template(
             name=request.name,
             query=request.query,
@@ -1698,7 +1735,8 @@ async def get_cache_stats(factory: ServiceFactory = Depends(get_services)):
             "cache_stats": stats,
             "recommendations": [
                 "Consider increasing embedding cache size" if stats['embedding_cache']['hit_rate'] < 60 else None,
-                "Search cache performing well" if stats['search_cache']['hit_rate'] > 40 else "Consider query pattern analysis",
+                "Search cache performing well" if stats['search_cache'][
+                                                      'hit_rate'] > 40 else "Consider query pattern analysis",
                 "AI response cache needs attention" if stats['ai_response_cache']['hit_rate'] < 30 else None
             ]
         }
@@ -1710,11 +1748,11 @@ async def get_cache_stats(factory: ServiceFactory = Depends(get_services)):
 
 @app.post("/performance/tune")
 async def tune_performance_parameters(
-    milvus_nprobe: int = None,
-    embedding_cache_size: int = None,
-    search_cache_size: int = None,
-    max_rerank_candidates: int = None,
-    factory: ServiceFactory = Depends(get_services)
+        milvus_nprobe: int = None,
+        embedding_cache_size: int = None,
+        search_cache_size: int = None,
+        max_rerank_candidates: int = None,
+        factory: ServiceFactory = Depends(get_services)
 ):
     """Tune performance parameters at runtime.
 

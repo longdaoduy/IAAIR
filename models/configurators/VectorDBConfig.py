@@ -26,7 +26,7 @@ class VectorDBConfig:
     # Milvus/Zilliz specific
     collection_name: str = "scientific_papers"
     index_type: str = "IVF_FLAT"
-    metric_type: str = "L2"
+    metric_type: str = "COSINE"
     nlist: int = 1024
 
     # Weaviate specific

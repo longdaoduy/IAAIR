@@ -59,7 +59,7 @@ class PDFProcessingHandler:
     def __init__(self, clip_client: Optional[CLIPClient] = None, scibert_client: Optional[SciBERTClient] = None,
                  milvus_client: Optional[MilvusClient] = None):
         self.clip_client = clip_client or CLIPClient()
-        self.scibert_client = scibert_client or SciBERTClient()
+        self.scibert_client = scibert_client
         self.milvus_client = milvus_client or MilvusClient()
         self.logger = logging.getLogger(__name__)
 

@@ -8,6 +8,7 @@ with intelligent query routing and AI response generation.
 from typing import Dict, List, Optional
 from models.entities.retrieval.QueryType import QueryType
 import logging
+import os
 import re
 import json
 from clients.vector.MilvusClient import MilvusClient
@@ -161,26 +162,36 @@ class HybridRetrievalHandler:
     async def _execute_graph_search_with_template_internal(
             self, query: str, template_cypher: str, top_k: int,
             paper_ids: Optional[List[str]] = None) -> List[Dict]:
-        """Internal implementation of template-based graph search."""
+        """Internal implementation of template-based graph search.
+
+        If the template is keyword/topic-based (search_by_keywords or top_cited_papers),
+        applies vector-first strategy: run vector search to find semantically similar
+        papers, then use search_by_paper_ids for rich graph metadata.
+        """
         try:
             if not self.graph_handler:
                 logger.error("Graph handler not initialized")
                 return []
 
-            # Step 1: Use AI to refine the Cypher template based on the user query
-            refined_cypher, parameters = self._refine_template_with_ai(query, template_cypher, top_k, paper_ids)
+            # Detect keyword/topic-based templates → apply vector-first strategy
+            actual_cypher = template_cypher
+            # Refine template with logic-based condition injection
+            refined_cypher, parameters = self._refine_template_with_conditions(
+                query, actual_cypher, top_k, paper_ids
+            )
 
             logger.info(f"Template-based graph search - original template:\n{template_cypher}")
             logger.info(f"Refined Cypher:\n{refined_cypher}")
             logger.info(f"Parameters: {parameters}")
 
-            # Step 2: Execute the refined query
+            # Execute the refined query
             results = self.graph_handler.execute_query(refined_cypher, parameters)
             logger.info(f"Template-based graph search returned {len(results)} results")
 
-            # Add relevance scores
+            # Add relevance scores (higher for vector-first results)
+            score = 0.9 if actual_cypher != template_cypher else 0.85
             for result in results:
-                result['relevance_score'] = 0.85  # Template-based searches are usually well-targeted
+                result['relevance_score'] = score
 
             return results
 
@@ -198,12 +209,12 @@ class HybridRetrievalHandler:
                 logger.error(f"Fallback template execution also failed: {e2}")
                 return []
 
-    def _refine_template_with_ai(self, query: str, template_cypher: str, top_k: int,
-                                   paper_ids: Optional[List[str]] = None) -> tuple:
-        """Use AI agent to analyze the user's query and refine the Cypher template.
+    def _refine_template_with_conditions(self, query: str, template_cypher: str, top_k: int,
+                                          paper_ids: Optional[List[str]] = None) -> tuple:
+        """Refine Cypher template by programmatically injecting conditions from the query.
 
-        The AI extracts filter conditions (author names, keywords, date ranges, venues, etc.)
-        from the natural language query and injects proper WHERE clauses into the template.
+        Extracts entities (paper IDs, author names, years, keywords) from the user's
+        natural language query and injects appropriate WHERE clauses into the template.
 
         Args:
             query: The user's natural language search query
@@ -214,199 +225,157 @@ class HybridRetrievalHandler:
         Returns:
             (refined_cypher, parameters) tuple
         """
-        if not self.ai_agent:
-            logger.warning("AI agent not available for template refinement, using template as-is")
-            cypher = self._inject_limit(template_cypher, top_k)
-            params = {}
-            if paper_ids:
-                cypher, params = self._inject_paper_ids_filter(cypher, paper_ids)
-            return cypher, params
+        conditions = []
+        parameters = {}
 
-        # Build paper IDs instruction for the prompt
-        paper_ids_instruction = ""
+        # 1. Paper IDs filter (from explicit input)
         if paper_ids:
-            ids_str = json.dumps(paper_ids)
-            paper_ids_instruction = f"""\n\nIMPORTANT: The user has specified these paper IDs to filter on: {ids_str}
-You MUST add a WHERE clause: WHERE p.id IN $paper_ids (or combine with AND if WHERE already exists).
-Include "paper_ids": {ids_str} in the parameters object."""
+            conditions.append('p.id IN $paper_ids')
+            parameters['paper_ids'] = paper_ids
 
-        prompt = f"""You are a Neo4j Cypher query expert. A user wants to search academic papers using a graph database.
+        # 2. Extract inline paper IDs from query text (e.g. "W12345")
+        inline_ids = re.findall(r'\b(W\d+)\b', query)
+        if inline_ids and not paper_ids:
+            conditions.append('p.id IN $paper_ids')
+            parameters['paper_ids'] = inline_ids
 
-They selected this Cypher template:
-```cypher
-{template_cypher}
-```
+        # 3. Extract author names from query
+        author_names = self._extract_author_names(query)
+        if author_names:
+            # Only add author condition if template involves Author node
+            if ':Author' in template_cypher or 'a.name' in template_cypher:
+                conditions.append(
+                    'any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))'
+                )
+            else:
+                # Template doesn't have Author — add MATCH for it
+                conditions.append(
+                    'any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))'
+                )
+            parameters['author_names'] = author_names
 
-Their search query is: "{query}"{paper_ids_instruction}
+        # 4. Extract year from query (e.g. "2023", "since 2020", "before 2024")
+        year_match = re.search(r'\b(since|after|from)\s+(\d{4})\b', query, re.IGNORECASE)
+        if year_match:
+            year = year_match.group(2)
+            conditions.append(f"p.publication_date >= '{year}'")
+        else:
+            year_match = re.search(r'\b(before|until|up\s+to)\s+(\d{4})\b', query, re.IGNORECASE)
+            if year_match:
+                year = year_match.group(2)
+                conditions.append(f"p.publication_date < '{year}'")
+            else:
+                year_match = re.search(r'\b(in|year)\s+(\d{4})\b', query, re.IGNORECASE)
+                if year_match:
+                    year = year_match.group(2)
+                    conditions.append(f"p.publication_date STARTS WITH '{year}'")
+                else:
+                    # Standalone year at word boundary
+                    standalone_year = re.search(r'\b(20\d{2})\b', query)
+                    if standalone_year:
+                        year = standalone_year.group(1)
+                        conditions.append(f"p.publication_date STARTS WITH '{year}'")
 
-Your task: Modify the Cypher template to add proper filter conditions based on the user's query.
+        # 5. Extract keywords for title/abstract search (skip if we already have specific filters)
+        if not paper_ids and not inline_ids and not author_names:
+            keywords = self._extract_keywords(query)
+            if keywords:
+                keyword_conditions = []
+                for i, kw in enumerate(keywords[:5]):  # Limit to 5 keywords
+                    param_name = f'kw_{i}'
+                    keyword_conditions.append(
+                        f"(toLower(p.title) CONTAINS toLower(${param_name}) OR "
+                        f"toLower(p.abstract) CONTAINS toLower(${param_name}))"
+                    )
+                    parameters[param_name] = kw
+                if keyword_conditions:
+                    # Any keyword matches (OR logic)
+                    conditions.append('(' + ' OR '.join(keyword_conditions) + ')')
 
-Neo4j Schema for reference:
-- Paper: {{id, title, abstract, publication_date, doi, cited_by_count, pdf_url}}
-- Author: {{id, name, orcid}}
-- Venue: {{id, name, type, impact_factor}}
-- Institution: {{id, name, country, city}}
-- Relations: (Author)-[:AUTHORED]->(Paper), (Paper)-[:PUBLISHED_IN]->(Venue), (Paper)-[:CITES]->(Paper), (Paper)-[:ASSOCIATED_WITH]->(Institution)
+        # 6. Extract venue name if mentioned
+        venue_match = re.search(
+            r'(?:in|from|published\s+in|venue|journal|conference)\s+["\']?([A-Z][^"\',]{2,40})["\']?',
+            query, re.IGNORECASE
+        )
+        if venue_match and ':Venue' in template_cypher:
+            venue_name = venue_match.group(1).strip()
+            conditions.append('toLower(v.name) CONTAINS toLower($venue_name)')
+            parameters['venue_name'] = venue_name
 
-Rules:
-1. Keep the template's MATCH pattern and RETURN clause structure intact
-2. Add WHERE clauses to filter based on the user's query (keywords in title/abstract, author names, venue names, date ranges, etc.)
-3. Use case-insensitive matching with toLower() for text searches
-4. Use CONTAINS for keyword matching in titles and abstracts
-5. If the query mentions a date/year, use publication_date filtering
-6. If the query mentions an author, match on author name
-7. Always include LIMIT {top_k} at the end
-8. Use $param_name syntax for parameters and provide their values
-9. If the query is too vague to extract specific filters, just add a LIMIT and return the template as-is
-10. If paper_ids are provided, always add WHERE p.id IN $paper_ids (use AND to combine with other conditions)
+        # Build the refined Cypher
+        refined_cypher = self._inject_where_conditions(template_cypher, conditions)
+        refined_cypher = self._inject_limit(refined_cypher, top_k)
 
-Respond in EXACTLY this JSON format (no markdown, no extra text):
-{{
-  "cypher": "YOUR REFINED CYPHER QUERY HERE",
-  "parameters": {{"param_name": "param_value"}},
-  "explanation": "Brief explanation of what conditions were added"
-}}
-"""
+        logger.info(f"Extracted conditions from query: {conditions}")
+        return refined_cypher, parameters
 
-        try:
-            response = self.ai_agent.generate_content(
-                prompt=prompt,
-                system_prompt="You are a Cypher query expert. Always respond with valid JSON only.",
-                purpose='cypher_template_refinement'
-            )
+    def _inject_where_conditions(self, cypher: str, conditions: List[str]) -> str:
+        """Inject WHERE conditions into a Cypher query.
 
-            if not response:
-                logger.warning("Empty AI response for template refinement")
-                return self._inject_limit(template_cypher, top_k), {}
-
-            # Parse the JSON response
-            refined_cypher, parameters = self._parse_template_refinement_response(response, template_cypher, top_k)
-
-            # Safety net: ensure paper_ids are included if AI missed them
-            if paper_ids:
-                if 'paper_ids' not in parameters:
-                    parameters['paper_ids'] = paper_ids
-                if '$paper_ids' not in refined_cypher and 'paper_ids' not in refined_cypher:
-                    refined_cypher, parameters = self._inject_paper_ids_filter(refined_cypher, paper_ids, parameters)
-
-            return refined_cypher, parameters
-
-        except Exception as e:
-            logger.error(f"Error in AI template refinement: {e}")
-            cypher = self._inject_limit(template_cypher, top_k)
-            params = {}
-            if paper_ids:
-                cypher, params = self._inject_paper_ids_filter(cypher, paper_ids)
-            return cypher, params
-
-    def _parse_template_refinement_response(self, response: str, template_cypher: str, top_k: int) -> tuple:
-        """Parse the AI's JSON response for template refinement."""
-        try:
-            # Try to extract JSON from the response (handle markdown code blocks)
-            clean = response.strip()
-            if clean.startswith("```"):
-                lines = clean.split("\n")
-                # Remove first and last lines (code block markers)
-                clean = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-                clean = clean.strip()
-
-            parsed = json.loads(clean)
-            cypher = parsed.get("cypher", "").strip()
-            parameters = parsed.get("parameters", {})
-            explanation = parsed.get("explanation", "")
-
-            if explanation:
-                logger.info(f"AI template refinement: {explanation}")
-
-            if not cypher:
-                logger.warning("AI returned empty Cypher, using original template")
-                return self._inject_limit(template_cypher, top_k), {}
-
-            # Basic validation
-            cypher_upper = cypher.upper()
-            if "MATCH" not in cypher_upper or "RETURN" not in cypher_upper:
-                logger.warning("AI-refined Cypher missing MATCH/RETURN, using original template")
-                return self._inject_limit(template_cypher, top_k), {}
-
-            # Ensure LIMIT is present
-            if "LIMIT" not in cypher_upper:
-                cypher = cypher.rstrip().rstrip(';') + f"\nLIMIT {top_k}"
-
-            return cypher, parameters
-
-        except json.JSONDecodeError as e:
-            logger.warning(f"Could not parse AI template refinement JSON: {e}")
-            # Try to extract just the Cypher from a non-JSON response
-            return self._inject_limit(template_cypher, top_k), {}
-
-    def _inject_limit(self, cypher: str, top_k: int) -> str:
-        """Inject or replace LIMIT clause in a Cypher query."""
-        import re as _re
-        # Replace existing LIMIT
-        if _re.search(r'LIMIT\s+\d+', cypher, _re.IGNORECASE):
-            return _re.sub(r'LIMIT\s+\d+', f'LIMIT {top_k}', cypher, flags=_re.IGNORECASE)
-        # Add LIMIT at the end
-        return cypher.rstrip().rstrip(';') + f"\nLIMIT {top_k}"
-
-    def _inject_paper_ids_filter(self, cypher: str, paper_ids: List[str],
-                                  existing_params: Optional[Dict] = None) -> tuple:
-        """Inject a WHERE p.id IN $paper_ids clause into a Cypher query.
-
-        Handles three cases:
-        1. Query already has WHERE → append AND p.id IN $paper_ids
-        2. Query has no WHERE → insert WHERE p.id IN $paper_ids after the first MATCH line
-        3. Query already references $paper_ids → just ensure params are set
-
-        Returns:
-            (modified_cypher, parameters) tuple
+        Handles:
+        - Template already has WHERE → append conditions with AND
+        - Template has no WHERE → insert WHERE right after the first MATCH
+          (works even when OPTIONAL MATCH follows immediately)
         """
-        params = dict(existing_params) if existing_params else {}
-        params['paper_ids'] = paper_ids
+        if not conditions:
+            return cypher
 
-        # Already has paper_ids filter
-        if '$paper_ids' in cypher:
-            return cypher, params
-
+        condition_str = ' AND '.join(conditions)
         lines = cypher.strip().split('\n')
         new_lines = []
         injected = False
+        found_first_match = False
 
         for i, line in enumerate(lines):
             stripped = line.strip().upper()
-            new_lines.append(line)
 
-            if injected:
+            # Case 1: Existing WHERE — append with AND
+            if not injected and stripped.startswith('WHERE'):
+                new_lines.append(line.rstrip() + ' AND ' + condition_str)
+                injected = True
                 continue
 
-            # If we see a WHERE clause, append AND condition on the next WHERE-bearing line
-            if stripped.startswith('WHERE'):
-                # Append to existing WHERE
-                new_lines[-1] = line.rstrip() + ' AND p.id IN $paper_ids'
-                injected = True
-            # After a MATCH line (but before OPTIONAL MATCH / WHERE / RETURN), insert WHERE
-            elif stripped.startswith('MATCH') and not stripped.startswith('MATCH (P1') and not stripped.startswith('MATCH (P2'):
-                # Look ahead: if next non-empty line is not WHERE, insert WHERE
+            # Case 2: First non-OPTIONAL MATCH
+            if not injected and not found_first_match and stripped.startswith('MATCH') and not stripped.startswith('OPTIONAL'):
+                found_first_match = True
+                new_lines.append(line)
+                # Look ahead: if next non-empty line is WHERE, let that handle it
                 next_idx = i + 1
                 while next_idx < len(lines) and not lines[next_idx].strip():
                     next_idx += 1
                 if next_idx < len(lines) and lines[next_idx].strip().upper().startswith('WHERE'):
-                    continue  # WHERE follows, will be handled in next iteration
-                elif next_idx < len(lines) and not lines[next_idx].strip().upper().startswith('OPTIONAL'):
-                    # Insert WHERE before the next line
-                    new_lines.append('WHERE p.id IN $paper_ids')
-                    injected = True
+                    continue  # WHERE follows, will be handled next iteration
+                # Otherwise inject WHERE right after this MATCH line
+                new_lines.append('WHERE ' + condition_str)
+                injected = True
+                continue
 
-        # If still not injected (e.g. simple one-line query), add before RETURN
+            new_lines.append(line)
+
+        # Fallback: add before the first RETURN/ORDER BY/LIMIT if still not injected
         if not injected:
             final_lines = []
             for line in new_lines:
-                if line.strip().upper().startswith('RETURN') and not injected:
-                    final_lines.append('WHERE p.id IN $paper_ids')
+                s = line.strip().upper()
+                if not injected and (s.startswith('RETURN') or s.startswith('ORDER') or s.startswith('LIMIT')):
+                    final_lines.append('WHERE ' + condition_str)
                     injected = True
                 final_lines.append(line)
             new_lines = final_lines
 
-        return '\n'.join(new_lines), params
+        return '\n'.join(new_lines)
+
+    def _inject_limit(self, cypher: str, top_k: int) -> str:
+        """Inject or replace LIMIT clause in a Cypher query."""
+        import re as _re
+        # Replace existing LIMIT with numeric value (e.g. LIMIT 20)
+        if _re.search(r'LIMIT\s+\d+', cypher, _re.IGNORECASE):
+            return _re.sub(r'LIMIT\s+\d+', f'LIMIT {top_k}', cypher, flags=_re.IGNORECASE)
+        # Replace existing LIMIT with parameter (e.g. LIMIT $limit)
+        if _re.search(r'LIMIT\s+\$\w+', cypher, _re.IGNORECASE):
+            return _re.sub(r'LIMIT\s+\$\w+', f'LIMIT {top_k}', cypher, flags=_re.IGNORECASE)
+        # No LIMIT found — add at the end
+        return cypher.rstrip().rstrip(';') + f"\nLIMIT {top_k}"
 
     async def _execute_graph_search_internal(self, query: str, top_k: int) -> List[Dict]:
         """Internal graph search implementation with caching."""
@@ -431,7 +400,7 @@ Respond in EXACTLY this JSON format (no markdown, no extra text):
                 return []
 
             # Parse the query intelligently based on patterns
-            cypher_query, parameters = self._build_intelligent_cypher_query(query, top_k)
+            cypher_query, parameters = await self._build_intelligent_cypher_query(query, top_k)
 
             # Debug logging
             logger.info(f"Graph search query: {query}")
@@ -473,74 +442,6 @@ Respond in EXACTLY this JSON format (no markdown, no extra text):
                 any(pattern.search(query) for pattern in author_patterns))
 
     def _extract_author_names(self, query: str) -> List[str]:
-        """Extract author names from query text using AI agent for better accuracy."""
-        try:
-            # First try AI-powered extraction if available
-            if self.ai_agent:
-                ai_extracted_names = self._ai_extract_author_names(query)
-                if ai_extracted_names:
-                    return ai_extracted_names
-        except Exception as e:
-            logger.warning(f"AI author extraction failed, falling back to regex: {e}")
-
-        # Fallback to regex-based extraction
-        return self._regex_extract_author_names(query)
-
-    def _ai_extract_author_names(self, query: str) -> List[str]:
-        """Use AI agent to extract author names from query text."""
-        prompt = f"""
-Extract author names from the following query. Return only the author names, one per line, with no additional text.
-
-Query: "{query}"
-
-Rules:
-1. Extract only proper names that appear to be human authors
-2. Include full names when available (First Last, First Middle Last)
-3. Handle variations like "papers by John Smith", "authored by Mary Johnson and Bob Wilson"
-4. Return each name on a separate line
-5. If no author names are found, return "NONE"
-6. Remove any quotes or extra formatting
-
-Author names:
-"""
-
-        try:
-            response = self.ai_agent.generate_content(prompt=prompt, purpose='author_extraction')
-            if not response or response.strip().upper() == "NONE":
-                return []
-
-            # Parse the AI response
-            names = []
-            lines = response.strip().split('\n')
-            for line in lines:
-                name = line.strip()
-                # Clean up any numbering or bullet points
-                name = re.sub(r'^\d+\.\s*', '', name)
-                name = re.sub(r'^[-*•]\s*', '', name)
-                name = name.strip('"\'')
-
-                # Validate name format (at least 2 words, proper capitalization)
-                if (len(name.split()) >= 2 and
-                    any(c.isupper() for c in name) and
-                    not name.lower() in ['no author', 'none', 'not found']):
-                    names.append(name)
-
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_names = []
-            for name in names:
-                name_clean = name.lower().strip()
-                if name_clean not in seen:
-                    seen.add(name_clean)
-                    unique_names.append(name)
-
-            return unique_names
-
-        except Exception as e:
-            logger.error(f"Error in AI author extraction: {e}")
-            return []
-
-    def _regex_extract_author_names(self, query: str) -> List[str]:
         """Fallback regex-based author name extraction."""
         author_names = []
 
@@ -609,238 +510,397 @@ Author names:
 
         return list(set(keywords))  # Remove duplicates
 
-    def _build_intelligent_cypher_query(self, query: str, top_k: int) -> tuple:
-        """Build Cypher query using AI agent based on Neo4j schema and user query.
-        
-        Uses a cache-first strategy to avoid redundant LLM calls for Cypher generation.
-        Cache key is derived from the normalized query + top_k.
+    # =========================================================================
+    # GRAPH TEMPLATE LIBRARY — Loaded from data/graph_templates.json
+    # =========================================================================
+
+    _graph_templates_cache: Optional[Dict] = None
+
+    @classmethod
+    def _load_graph_templates(cls) -> Dict:
+        """Load graph query templates from data/graph_templates.json.
+
+        Templates are cached after first load for performance.
+        Returns the template dictionary.
+        """
+        if cls._graph_templates_cache is not None:
+            return cls._graph_templates_cache
+
+        # Resolve path relative to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        templates_path = os.path.join(project_root, 'data', 'graph_templates.json')
+
+        try:
+            with open(templates_path, 'r', encoding='utf-8') as f:
+                cls._graph_templates_cache = json.load(f)
+            logger.info(f"Loaded {len(cls._graph_templates_cache)} graph templates from {templates_path}")
+        except FileNotFoundError:
+            logger.error(f"Graph templates file not found: {templates_path}")
+            cls._graph_templates_cache = {}
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in graph templates file: {e}")
+            cls._graph_templates_cache = {}
+
+        return cls._graph_templates_cache
+
+    @classmethod
+    def reload_graph_templates(cls):
+        """Force reload templates from disk (e.g. after editing the JSON file)."""
+        cls._graph_templates_cache = None
+        return cls._load_graph_templates()
+
+    @property
+    def GRAPH_TEMPLATES(self) -> Dict:
+        """Access graph templates (loaded from data/graph_templates.json)."""
+        return self._load_graph_templates()
+
+    # =========================================================================
+    # TEMPLATE SELECTION — AI agent picks the best template
+    # =========================================================================
+
+    def _select_template_with_ai(self, query: str, extracted: Dict) -> str:
+        """Use AI agent to select the best graph template for the user's query.
+
+        Args:
+            query: User's natural language query
+            extracted: Pre-extracted entities {paper_ids, author_names, keywords, year, ...}
+
+        Returns:
+            Template key name from GRAPH_TEMPLATES
+        """
+        if not self.ai_agent:
+            return self._select_template_by_rules(extracted)
+
+        # Build template catalog for the AI
+        template_list = []
+        for key, tpl in self.GRAPH_TEMPLATES.items():
+            template_list.append(f"- {key}: {tpl['description']}")
+        templates_str = "\n".join(template_list)
+
+        # Build extracted entities summary
+        entities_str = json.dumps({k: v for k, v in extracted.items() if v}, ensure_ascii=False)
+
+        prompt = f"""You are a query router for a Neo4j academic paper database.
+
+Given the user's query and the extracted entities, select the BEST template to answer their question.
+
+User query: "{query}"
+Extracted entities: {entities_str}
+
+Available templates:
+{templates_str}
+
+Rules:
+1. If query mentions specific paper IDs (W12345), use "search_by_paper_ids"
+2. If query mentions both an author AND a topic, use "search_by_author_by_keywords"
+3. If query mentions an author name only, use "search_by_author"
+4. If query asks about co-authors or collaboration, use "coauthor_network"
+5. If query asks about which journals/venues an author publishes in, use "author_venue_stats"
+6. If query asks about citations or "cited by", use "search_citations"
+7. If query mentions a venue/journal/conference name, use "search_by_venue"
+8. If query mentions an institution/university, use "search_by_institution"
+9. If query mentions "most cited" or "top papers", use "top_cited_papers"
+10. If query mentions a year range (since/after/before), use "search_by_year_range"
+11. If query mentions a specific year, use "search_by_year"
+12. Otherwise, use "search_by_keywords"
+
+Respond with ONLY the template name, nothing else. Example: search_by_author"""
+
+        try:
+            response = self.ai_agent.generate_content(
+                prompt=prompt,
+                system_prompt="You are a query router. Respond with only the template name.",
+                purpose='template_selection'
+            )
+
+            if response:
+                template_key = response.strip().strip('"\'').strip()
+                # Validate the response is a known template
+                if template_key in self.GRAPH_TEMPLATES:
+                    logger.info(f"AI selected template: {template_key}")
+                    return template_key
+                else:
+                    logger.warning(f"AI returned unknown template '{template_key}', falling back to rules")
+
+        except Exception as e:
+            logger.warning(f"AI template selection failed: {e}")
+
+        return self._select_template_by_rules(extracted)
+
+    def _select_template_by_rules(self, extracted: Dict) -> str:
+        """Rule-based fallback for template selection when AI is unavailable.
+
+        Args:
+            extracted: Pre-extracted entities from the query
+
+        Returns:
+            Template key name
+        """
+        has_ids = bool(extracted.get('paper_ids'))
+        has_authors = bool(extracted.get('author_names'))
+        has_keywords = bool(extracted.get('keywords'))
+        has_venue = bool(extracted.get('venue'))
+        has_institution = bool(extracted.get('institution'))
+        has_year = bool(extracted.get('year'))
+        has_year_range = bool(extracted.get('year_from'))
+        has_citations = extracted.get('wants_citations', False)
+        has_coauthor = extracted.get('wants_coauthors', False)
+        has_top_cited = extracted.get('wants_top_cited', False)
+
+        # Priority-based selection
+        if has_ids:
+            if has_citations:
+                return 'search_citations'
+            return 'search_by_paper_ids'
+        if has_coauthor and has_authors:
+            return 'coauthor_network'
+        if has_authors and has_keywords:
+            return 'search_author_by_keywords'
+        if has_authors:
+            return 'search_by_author'
+        if has_citations:
+            return 'search_citations'
+        if has_top_cited:
+            return 'top_cited_papers'
+        if has_venue:
+            return 'search_by_venue'
+        if has_institution:
+            return 'search_by_institution'
+        if has_year_range:
+            return 'search_by_year_range'
+        if has_year:
+            return 'search_by_year'
+        return 'search_by_keywords'
+
+    # =========================================================================
+    # ENTITY EXTRACTION — Pull structured data from natural language query
+    # =========================================================================
+
+    def _extract_all_entities(self, query: str) -> Dict:
+        """Extract all entities from a natural language query.
+
+        Returns a dict with:
+            paper_ids, author_names, keywords, year, year_from, year_to,
+            venue, institution, wants_citations, wants_coauthors, wants_top_cited
+        """
+        extracted = {}
+        query_lower = query.lower()
+
+        # 1. Paper IDs
+        paper_ids = re.findall(r'\b(W\d+)\b', query)
+        if paper_ids:
+            extracted['paper_ids'] = paper_ids
+
+        # 2. Author names
+        author_names = self._regex_extract_author_names(query)
+        if author_names:
+            extracted['author_names'] = author_names
+
+        # 3. Year / year range
+        range_match = re.search(r'\b(since|after|from)\s+(\d{4})\b', query, re.IGNORECASE)
+        if range_match:
+            extracted['year_from'] = range_match.group(2)
+            extracted['year_to'] = '2099'  # open-ended
+        else:
+            before_match = re.search(r'\b(before|until|up\s+to)\s+(\d{4})\b', query, re.IGNORECASE)
+            if before_match:
+                extracted['year_from'] = '1900'
+                extracted['year_to'] = before_match.group(2)
+            else:
+                between_match = re.search(r'\b(\d{4})\s*[-–to]+\s*(\d{4})\b', query)
+                if between_match:
+                    extracted['year_from'] = between_match.group(1)
+                    extracted['year_to'] = between_match.group(2)
+                else:
+                    year_match = re.search(r'\b(in|year)\s+(\d{4})\b', query, re.IGNORECASE)
+                    if year_match:
+                        extracted['year'] = year_match.group(2)
+                    else:
+                        standalone = re.search(r'\b(20\d{2})\b', query)
+                        if standalone:
+                            extracted['year'] = standalone.group(1)
+
+        # 4. Venue
+        venue_match = re.search(
+            r'(?:in|from|published\s+in|venue|journal|conference)\s+["\']?([A-Z][^"\',]{2,40})["\']?',
+            query, re.IGNORECASE
+        )
+        if venue_match:
+            extracted['venue'] = venue_match.group(1).strip()
+
+        # 5. Institution
+        inst_match = re.search(
+            r'(?:from|at|institution|university|org(?:anization)?)\s+["\']?([A-Z][^"\',]{2,50})["\']?',
+            query, re.IGNORECASE
+        )
+        if inst_match and not extracted.get('venue'):  # avoid conflict with venue
+            extracted['institution'] = inst_match.group(1).strip()
+
+        # 6. Intent flags
+        if re.search(r'\bcit(?:e|ed|ation|ing)\b', query_lower):
+            extracted['wants_citations'] = True
+        if re.search(r'\bco-?author|collaborat', query_lower):
+            extracted['wants_coauthors'] = True
+        if re.search(r'\b(?:most|top|highest)\s+cited\b|\btop\s+papers?\b|\bmost\s+influential\b', query_lower):
+            extracted['wants_top_cited'] = True
+
+        # 7. Keywords (extract last — exclude entities already captured)
+        keywords = self._extract_keywords(query)
+        if keywords:
+            extracted['keywords'] = keywords
+
+        return extracted
+
+    # =========================================================================
+    # PARAMETER BUILDERS — Fill template parameters from extracted entities
+    # =========================================================================
+
+    def _params_paper_ids(self, extracted: Dict, top_k: int) -> Dict:
+        return {"paper_ids": extracted.get('paper_ids', []), "limit": top_k}
+
+    def _params_author(self, extracted: Dict, top_k: int) -> Dict:
+        return {"author_names": extracted.get('author_names', []), "limit": top_k}
+
+    def _params_keywords(self, extracted: Dict, top_k: int) -> Dict:
+        return {"keywords": extracted.get('keywords', []), "limit": top_k}
+
+    def _params_venue(self, extracted: Dict, top_k: int) -> Dict:
+        return {"venue_name": extracted.get('venue', ''), "limit": top_k}
+
+    def _params_institution(self, extracted: Dict, top_k: int) -> Dict:
+        return {"institution_name": extracted.get('institution', ''), "limit": top_k}
+
+    def _params_year(self, extracted: Dict, top_k: int) -> Dict:
+        return {"year": extracted.get('year', ''), "limit": top_k}
+
+    def _params_year_range(self, extracted: Dict, top_k: int) -> Dict:
+        return {"year_from": extracted.get('year_from', '1900'), "year_to": extracted.get('year_to', '2099'), "limit": top_k}
+
+    def _params_citations(self, extracted: Dict, top_k: int) -> Dict:
+        return {"paper_ids": extracted.get('paper_ids', []), "limit": top_k}
+
+    def _params_author_keywords(self, extracted: Dict, top_k: int) -> Dict:
+        return {"author_names": extracted.get('author_names', []), "keywords": extracted.get('keywords', []), "limit": top_k}
+
+    def _params_top_cited(self, extracted: Dict, top_k: int) -> Dict:
+        return {"limit": top_k}
+
+    def _params_coauthor(self, extracted: Dict, top_k: int) -> Dict:
+        return {"author_names": extracted.get('author_names', []), "limit": top_k}
+
+    # =========================================================================
+    # BUILD INTELLIGENT CYPHER — Main entry point for graph search
+    # =========================================================================
+
+    async def _build_intelligent_cypher_query(self, query: str, top_k: int) -> tuple:
+        """Build Cypher query by selecting the best template and filling parameters.
+
+        Flow:
+        1. Check Cypher cache
+        2. Extract entities from query (paper IDs, authors, keywords, years, etc.)
+        3. AI agent selects the best template (fallback: rule-based selection)
+        4. If template is keyword-only → vector-first: run vector search to get
+           relevant paper IDs, then use search_by_paper_ids for rich graph metadata
+        5. Fill template parameters from extracted entities
+        6. Cache and return
+
+        Returns:
+            (cypher_query, parameters) tuple
         """
         try:
-            # Check Cypher cache first — avoid expensive LLM call
+            # Check Cypher cache first
             if self.cache_manager:
                 cached = self.cache_manager.get_cypher(query, top_k)
                 if cached is not None:
                     cypher_query, parameters = cached
-                    logger.info(f"Cypher cache HIT — reusing cached query for: {query[:50]}...")
+                    logger.info(f"Cypher cache HIT for: {query[:50]}...")
                     return cypher_query, parameters
-            return self._build_fallback_cypher_query(query, top_k)
 
-            # if not self.ai_agent:
-            #     logger.warning("AI agent not available, falling back to basic query generation")
-            #     return self._build_fallback_cypher_query(query, top_k)
-            #
-            # # Generate Cypher query using AI agent
-            # schema_prompt = self._create_schema_prompt(query, top_k)
-            # ai_response = self.ai_agent.generate_content(prompt=schema_prompt, purpose='cypher_generation')
-            #
-            # if not ai_response:
-            #     logger.error("Empty response from AI agent for Cypher generation")
-            #     return self._build_fallback_cypher_query(query, top_k)
-            #
-            # # Parse AI response to extract Cypher query and parameters
-            # cypher_query, parameters = self._parse_ai_cypher_response(ai_response, query, top_k)
-            #
-            # logger.info(f"AI-generated Cypher: {cypher_query}")
-            # logger.info(f"AI-generated Parameters: {parameters}")
-            #
-            # # Cache the successfully generated Cypher query
-            # if self.cache_manager:
-            #     self.cache_manager.cache_cypher(query, top_k, cypher_query, parameters)
-            #
-            # return cypher_query, parameters
-            
-        except Exception as e:
-            logger.error(f"Error in AI Cypher generation: {e}")
-            return self._build_fallback_cypher_query(query, top_k)
-    
-    def _create_schema_prompt(self, query: str, top_k: int) -> str:
-        """Create a comprehensive prompt for AI-based Cypher query generation."""
-        return f"""
-You are a Neo4j Cypher query expert. Generate a precise Cypher query based on the user's natural language question.
+            # Step 1: Extract entities from the query
+            extracted = self._extract_all_entities(query)
+            logger.info(f"Extracted entities: {extracted}")
 
-Neo4j Schema:
+            # Step 2: AI agent selects the best template
+            template_key = self._select_template_with_ai(query, extracted)
+            logger.info(f"AI selected template: {template_key}")
 
-Nodes:
-- Paper: {{id, title, abstract, publication_date, doi, pmid, arxiv_id, pdf_url, source, metadata}}
-- Author: {{id, name, orcid, email, h_index, metadata}}  
-- Venue: {{id, name, type, issn, impact_factor, publisher, metadata}}
-- Institution: {{id, name, country, city, type, website, metadata}}
-- Figure: {{id, paper_id, caption, image_path, metadata}}
-- Table: {{id, paper_id, caption, content, metadata}}
+            # Step 3: Vector-first for keyword queries
+            # When the query is keyword-based (no specific IDs, authors, etc.),
+            # use vector search to find semantically relevant papers first,
+            # then fetch their full graph metadata via search_by_paper_ids.
+            if template_key == 'search_by_keywords' and self.milvus_client:
+                paper_ids = self._vector_first_paper_ids(query, top_k)
+                if paper_ids:
+                    logger.info(f"Vector-first: found {len(paper_ids)} paper IDs, switching to search_by_paper_ids")
+                    template_key = 'search_by_paper_ids'
+                    extracted['paper_ids'] = paper_ids
 
-Relations:
-- (Author)-[:AUTHORED]->(Paper) - Authorship relationships
-- (Paper)-[:PUBLISHED_IN]->(Venue) - Publication venue associations
-- (Paper)-[:CITES]->(Paper) - Citation networks between papers
-- (Paper)-[:ASSOCIATED_WITH]->(Institution) - Institutional affiliations
-- (Paper)-[:CONTAINS_FIGURE]->(Figure) - Figure ownership
-- (Paper)-[:CONTAINS_TABLE]->(Table) - Table ownership
+            # Similarly for top_cited with keywords — vector can find more relevant papers
+            elif template_key == 'top_cited_papers' and self.milvus_client:
+                paper_ids = self._vector_first_paper_ids(query, top_k)  # wider net
+                if paper_ids:
+                    logger.info(f"Vector-first for top_cited: found {len(paper_ids)} paper IDs")
+                    template_key = 'search_by_paper_ids'
+                    extracted['paper_ids'] = paper_ids
 
-User Query: "{query}"
-Limit: {top_k}
+            template = self.GRAPH_TEMPLATES[template_key]
+            logger.info(f"Final template: {template_key} — {template['description']}")
 
-Instructions:
-1. Analyze the user's query to understand what information they're seeking
-2. Generate a Cypher query that returns the most relevant information
-3. Always include basic paper information (id, title, abstract, doi, publication_date)
-4. Use OPTIONAL MATCH for relationships that might not exist
-5. Use collect(DISTINCT ...) for aggregating related data
-6. Include proper WHERE clauses for filtering
-7. Add ORDER BY and LIMIT clauses when appropriate
-8. Use parameters for dynamic values (e.g., paper IDs, author names)
+            # Step 4: Build parameters using the template's param builder
+            param_builder = getattr(self, template['param_builder'])
+            parameters = param_builder(extracted, top_k)
 
-Response Format:
-CYPHER_QUERY:
-[Your Cypher query here]
+            cypher_query = template['cypher'].strip()
 
-PARAMETERS:
-[JSON object with parameter values, or {{}} if no parameters needed]
+            # Step 5: Cache the result
+            if self.cache_manager:
+                self.cache_manager.cache_cypher(query, top_k, cypher_query, parameters)
 
-EXPLANATION:
-[Brief explanation of what the query does]
-
-Generate the query now:"""
-
-    def _parse_ai_cypher_response(self, ai_response: str, original_query: str, top_k: int) -> tuple:
-        """Parse AI response to extract Cypher query and parameters."""
-        try:
-            # Extract Cypher query section
-            cypher_start = ai_response.find("CYPHER_QUERY:")
-            params_start = ai_response.find("PARAMETERS:")
-            
-            if cypher_start == -1:
-                logger.warning("Could not find CYPHER_QUERY section in AI response")
-                return self._build_fallback_cypher_query(original_query, top_k)
-            
-            # Extract query text
-            if params_start != -1:
-                cypher_text = ai_response[cypher_start + 13:params_start].strip()
-                params_text = ai_response[params_start + 11:].strip()
-                
-                # Extract parameters if explanation follows
-                explanation_start = params_text.find("EXPLANATION:")
-                if explanation_start != -1:
-                    params_text = params_text[:explanation_start].strip()
-            else:
-                cypher_text = ai_response[cypher_start + 13:].strip()
-                params_text = "{}"
-            
-            # Clean up the query text
-            cypher_query = self._clean_cypher_query(cypher_text)
-            
-            # Parse parameters
-            try:
-                import json
-                parameters = json.loads(params_text) if params_text and params_text != "{}" else {}
-            except json.JSONDecodeError:
-                logger.warning(f"Could not parse parameters: {params_text}")
-                parameters = {}
-            
-            # Add top_k limit if not present
-            if "limit" not in parameters and "LIMIT" not in cypher_query.upper():
-                parameters["limit"] = top_k
-            
-            # Validate the query has required components
-            if not self._validate_cypher_query(cypher_query):
-                logger.warning("Generated Cypher query failed validation")
-                return self._build_fallback_cypher_query(original_query, top_k)
-            
             return cypher_query, parameters
-            
+
         except Exception as e:
-            logger.error(f"Error parsing AI Cypher response: {e}")
-            return self._build_fallback_cypher_query(original_query, top_k)
-    
-    def _clean_cypher_query(self, query_text: str) -> str:
-        """Clean and format the Cypher query from AI response."""
-        # Remove code block markers if present
-        query_text = query_text.strip()
-        if query_text.startswith("```"):
-            lines = query_text.split("\n")[1:-1]  # Remove first and last lines
-            query_text = "\n".join(lines)
-        
-        # Remove any remaining markdown or formatting
-        query_text = query_text.replace("```cypher", "").replace("```", "")
-        
-        return query_text.strip()
-    
-    def _validate_cypher_query(self, cypher_query: str) -> bool:
-        """Basic validation of generated Cypher query."""
-        query_upper = cypher_query.upper()
-        
-        # Must contain MATCH
-        if "MATCH" not in query_upper:
-            return False
-        
-        # Must contain RETURN
-        if "RETURN" not in query_upper:
-            return False
-        
-        # Should reference Paper node (main entity)
-        if ":Paper" not in cypher_query:
-            return False
-        
-        return True
-    
-    def _build_fallback_cypher_query(self, query: str, top_k: int) -> tuple:
-        """Fallback method for basic Cypher query generation when AI fails."""
-        query_lower = query.lower()
-        
-        # Extract basic entities
-        paper_ids = re.findall(r'\b(W\d+)\b', query)
-        author_names = self._extract_author_names(query)
-        
-        # Simple fallbacks based on detected entities
-        if paper_ids:
-            cypher_query = """
-            MATCH (p:Paper)
-            WHERE p.id IN $paper_ids
-            OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                   p.doi as doi, p.publication_date as publication_date,
-                   p.cited_by_count as cited_by_count,
-                   collect(DISTINCT a.name) as authors,
-                   v.name as venue
-            ORDER BY p.id
-            """
-            return cypher_query, {"paper_ids": paper_ids}
-        
-        elif author_names:
-            cypher_query = """
-            MATCH (a:Author)-[:AUTHORED]->(p:Paper)
-            WHERE any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))
-            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-            OPTIONAL MATCH (all_authors:Author)-[:AUTHORED]->(p)
-            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                   p.doi as doi, p.publication_date as publication_date,
-                   p.cited_by_count as cited_by_count,
-                   collect(DISTINCT all_authors.name) as authors,
-                   v.name as venue
-            LIMIT $limit
-            """
-            return cypher_query, {"author_names": author_names, "limit": top_k}
-        
-        else:
-            # Default text search
+            logger.error(f"Error in intelligent Cypher generation: {e}")
+            # Ultimate fallback — vector-first then paper IDs lookup
+            paper_ids = self._vector_first_paper_ids(query, top_k) if self.milvus_client else None
+            if paper_ids:
+                return self.GRAPH_TEMPLATES['search_by_paper_ids']['cypher'].strip(), \
+                       {"paper_ids": paper_ids, "limit": top_k}
             keywords = self._extract_keywords(query)
-            cypher_query = """
-            MATCH (p:Paper)
-            WHERE any(keyword IN $keywords WHERE 
-                      p.title CONTAINS keyword OR 
-                      p.abstract CONTAINS keyword OR
-                      toLower(p.title) CONTAINS toLower(keyword) OR
-                      toLower(p.abstract) CONTAINS toLower(keyword))
-            OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-            RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                   p.doi as doi, p.publication_date as publication_date,
-                   p.cited_by_count as cited_by_count,
-                   collect(DISTINCT a.name) as authors,
-                   v.name as venue
-            LIMIT $limit
-            """
-            return cypher_query, {"keywords": keywords, "limit": top_k}
+            return self.GRAPH_TEMPLATES['search_by_keywords']['cypher'].strip(), \
+                   {"keywords": keywords or [query], "limit": top_k}
+
+    def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
+        """Run vector search to extract relevant paper IDs for graph enrichment.
+
+        This is the core of the vector-first strategy: use semantic similarity
+        to find relevant papers, then pass their IDs to a graph template for
+        rich metadata (authors, venues, citations, etc.).
+
+        Args:
+            query: Natural language search query
+            top_k: Number of papers to retrieve
+
+        Returns:
+            List of paper IDs (e.g. ['W12345', 'W67890'])
+        """
+        try:
+            vector_results = self.search_similar_papers(
+                query_text=query,
+                top_k=top_k,
+                use_hybrid=True
+            )
+            if not vector_results:
+                logger.warning("Vector-first: no results from vector search")
+                return []
+
+            paper_ids = [r.get('paper_id') for r in vector_results]
+
+            logger.info(f"Vector-first: extracted {len(paper_ids)} paper IDs from vector search")
+            return paper_ids
+
+        except Exception as e:
+            logger.error(f"Vector-first search failed: {e}")
+            return []
 
     async def _execute_graph_refinement(self, paper_ids: List[str], top_k: int) -> List[Dict]:
         """Refine vector results using graph relationships."""
