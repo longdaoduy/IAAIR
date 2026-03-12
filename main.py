@@ -572,47 +572,33 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         fusion_start = datetime.now()
 
-        if routing_strategy == RoutingStrategy.VECTOR_FIRST:
-            # Vector search first, then optional graph refinement
-            # If a graph template is provided, also run template-based graph search for fusion
-            # if request.graph_template:
-            #     logger.info(f"Vector-first + graph template: running template-based graph search")
-            #     graph_results = await factory.retrieval_handler.execute_graph_search_with_template(
-            #         query=request.query,
-            #         template_cypher=request.graph_template,
-            #         top_k=request.top_k,
-            #         paper_ids=request.paper_ids
-            #     )
-            vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
-
-        elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
-            # Graph search first - use template if provided, otherwise standard graph search
-            # if request.graph_template:
-            #     logger.info(f"Using graph template with AI condition extraction for query: {request.query}")
-            #     graph_results = await factory.retrieval_handler.execute_graph_search_with_template(
-            #         query=request.query,
-            #         template_cypher=request.graph_template,
-            #         top_k=request.top_k * 2,
-            #         paper_ids=request.paper_ids
-            #     )
-            graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k)
-            logger.info("Using graph-only search - vector search skipped for performance")
-            vector_results = []
-
-        elif routing_strategy == RoutingStrategy.PARALLEL:
-            # Execute both searches in parallel
-            vector_task = factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
-            # Use template-based graph search if a template is provided
-            graph_task = factory.retrieval_handler.execute_graph_search(
-                query=request.query,
-                template_cypher=request.graph_template,
-                top_k=request.top_k
-            )
-
-            results = await asyncio.gather(vector_task, graph_task)
-            # Safely unpack results with fallbacks
-            vector_results = results[0] if results[0] is not None else []
-            graph_results = results[1] if results[1] is not None else []
+        graph_results = factory.retrieval_handler.execute_graph_search(
+            query=request.query,
+            template_cypher=request.graph_template,
+            top_k=request.top_k
+        )
+        # if routing_strategy == RoutingStrategy.VECTOR_FIRST:
+        #     vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
+        #
+        # elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
+        #     graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k)
+        #     logger.info("Using graph-only search - vector search skipped for performance")
+        #     vector_results = []
+        #
+        # elif routing_strategy == RoutingStrategy.PARALLEL:
+        #     # Execute both searches in parallel
+        #     vector_task = factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
+        #     # Use template-based graph search if a template is provided
+        #     graph_task = factory.retrieval_handler.execute_graph_search(
+        #         query=request.query,
+        #         template_cypher=request.graph_template,
+        #         top_k=request.top_k
+        #     )
+        #
+        #     results = await asyncio.gather(vector_task, graph_task)
+        #     # Safely unpack results with fallbacks
+        #     vector_results = results[0] if results[0] is not None else []
+        #     graph_results = results[1] if results[1] is not None else []
 
         # Step 3: Result fusion
         logger.info(

@@ -137,27 +137,6 @@ class HybridRetrievalHandler:
         else:
             return await self._execute_graph_search_internal(query, top_k,template_cypher)
 
-    async def execute_graph_search_with_template(self, query: str, template_cypher: str, top_k: int) -> List[Dict]:
-        """Execute graph search using a user-selected Cypher template with AI-extracted conditions.
-
-        The AI agent analyzes the user's natural language query and the template to produce
-        a refined Cypher query with proper WHERE clauses, ORDER BY, and LIMIT injected.
-
-        Args:
-            query: The user's natural language search query
-            template_cypher: The Cypher template selected by the user
-            top_k: Maximum number of results to return
-            paper_ids: Optional list of paper IDs to filter results (added as WHERE clause)
-
-        Returns:
-            List of matching records from Neo4j
-        """
-        if self.performance_monitor:
-            with self.performance_monitor.track_operation('graph_search_template'):
-                return await self._execute_graph_search_internal(query, top_k, template_cypher)
-        else:
-            return await self._execute_graph_search_internal(query, top_k, template_cypher)
-
     def _refine_template_with_conditions(self, query: str, template_cypher: str, top_k: int,
                                          paper_ids: Optional[List[str]] = None) -> tuple:
         """Refine Cypher template by programmatically injecting conditions from the query.
