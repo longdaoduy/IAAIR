@@ -35,7 +35,7 @@ class ServiceFactory:
         self.milvus_client = MilvusClient()
         self.scibert_client = SciBERTClient()
         self.clip_client = CLIPClient()
-        self.deepseek_client = None
+        self.deepseek_client = DeepseekClient()
 
         # Performance & Caching
         self.cache_manager = CacheManager(
