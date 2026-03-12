@@ -703,8 +703,7 @@ Answer:""".format(query=query)
         entities_str = json.dumps({k: v for k, v in extracted.items() if v}, ensure_ascii=False)
 
         prompt = f"""You are a query router for a Neo4j academic paper database.
-
-Given the user's query and the extracted entities, select the BEST template to answer their question.
+Given the user's query and the extracted entities, select the BEST template.
 
 User query: "{query}"
 Extracted entities: {entities_str}
@@ -712,21 +711,83 @@ Extracted entities: {entities_str}
 Available templates:
 {templates_str}
 
-Rules:
-1. If query mentions specific paper IDs (W12345), use "search_by_paper_ids"
-2. If query mentions both an author AND a topic, use "search_by_author_by_keywords"
-3. If query mentions an author name only, use "search_by_author"
-4. If query asks about co-authors or collaboration, use "coauthor_network"
-5. If query asks about which journals/venues an author publishes in, use "author_venue_stats"
-6. If query asks about citations or "cited by", use "search_citations"
-7. If query mentions a venue/journal/conference name, use "search_by_venue"
-8. If query mentions an institution/university, use "search_by_institution"
-9. If query mentions "most cited" or "top papers", use "top_cited_papers"
-10. If query mentions a year range (since/after/before), use "search_by_year_range"
-11. If query mentions a specific year, use "search_by_year"
-12. Otherwise, use "search_by_keywords"
+Here are example queries and their correct template:
 
-Respond with ONLY the template name, nothing else. Example: search_by_author"""
+Query: "Who are the authors of paper W1775749144?"
+Template: search_by_paper_ids
+
+Query: "What papers has Kaiming He authored?"
+Template: search_by_author
+
+Query: "Which papers cite W2128635872?"
+Template: search_citations
+
+Query: "How many citations does paper W2100837269 have?"
+Template: search_by_paper_ids
+
+Query: "What venue published paper W3038568908?"
+Template: search_by_paper_ids
+
+Query: "Which papers were published in Nature?"
+Template: search_by_venue
+
+Query: "What papers were published in Analytical Biochemistry?"
+Template: search_by_venue
+
+Query: "Which papers were co-authored by Georg Kresse and J. Furthmüller?"
+Template: coauthor_network
+
+Query: "What papers are co-authored by Kaiming He and Jian Sun?"
+Template: coauthor_network
+
+Query: "Which paper has the highest citation count?"
+Template: top_cited_papers
+
+Query: "What is the DOI of paper W1979290264?"
+Template: search_by_paper_ids
+
+Query: "What is the publication year of paper W2107277218?"
+Template: search_by_paper_ids
+
+Query: "papers about protein quantification methods"
+Template: search_by_keywords
+
+Query: "Research on deep learning architectures for computer vision"
+Template: search_by_keywords
+
+Query: "papers by Kaiming He about deep learning"
+Template: search_author_by_keywords
+
+Query: "What papers discuss bioinformatics algorithms?"
+Template: search_by_keywords
+
+Query: "papers from Stanford University"
+Template: search_by_institution
+
+Query: "papers published since 2020"
+Template: search_by_year_range
+
+Query: "papers published in 2023"
+Template: search_by_year
+
+Query: "which journals does Stephen F. Altschul publish in?"
+Template: author_venue_stats
+
+Rules (use if no example above matches):
+1. Paper ID mentioned (W12345) + asking about citations → search_citations
+2. Paper ID mentioned (W12345) for any other question → search_by_paper_ids
+3. Two or more author names + "co-author" or "together" or "collaboration" → coauthor_network
+4. Author name + topic/keywords → search_author_by_keywords
+5. Author name only → search_by_author
+6. "most cited" or "top papers" or "highest citation" → top_cited_papers
+7. "which journals/venues" + author name → author_venue_stats
+8. Venue/journal/conference name mentioned → search_by_venue
+9. Institution/university mentioned → search_by_institution
+10. Year range (since/after/before/between) → search_by_year_range
+11. Specific year → search_by_year
+12. Topic, keyword, or concept search → search_by_keywords
+
+Respond with ONLY the template name, nothing else."""
 
         try:
             response = self.ai_agent.generate_content(
