@@ -603,14 +603,11 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             # Execute both searches in parallel
             vector_task = factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
             # Use template-based graph search if a template is provided
-            if request.graph_template:
-                graph_task = factory.retrieval_handler.execute_graph_search_with_template(
-                    query=request.query,
-                    template_cypher=request.graph_template,
-                    top_k=request.top_k
-                )
-            else:
-                graph_task = factory.retrieval_handler.execute_graph_search(request.query, request.top_k)
+            graph_task = factory.retrieval_handler.execute_graph_search(
+                query=request.query,
+                template_cypher=request.graph_template,
+                top_k=request.top_k
+            )
 
             results = await asyncio.gather(vector_task, graph_task)
             # Safely unpack results with fallbacks

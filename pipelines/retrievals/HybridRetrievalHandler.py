@@ -129,13 +129,13 @@ class HybridRetrievalHandler:
             print(f"❌ Search failed: {e}")
             return []
 
-    async def execute_graph_search(self, query: str, top_k: int) -> List[Dict]:
+    async def execute_graph_search(self, query: str, top_k: int, template_cypher: str = None) -> List[Dict]:
         """Execute graph search using Cypher query with intelligent query parsing and caching."""
         if self.performance_monitor:
             with self.performance_monitor.track_operation('graph_search'):
-                return await self._execute_graph_search_internal(query, top_k)
+                return await self._execute_graph_search_internal(query, top_k, template_cypher)
         else:
-            return await self._execute_graph_search_internal(query, top_k)
+            return await self._execute_graph_search_internal(query, top_k,template_cypher)
 
     async def execute_graph_search_with_template(self, query: str, template_cypher: str, top_k: int) -> List[Dict]:
         """Execute graph search using a user-selected Cypher template with AI-extracted conditions.
@@ -154,21 +154,9 @@ class HybridRetrievalHandler:
         """
         if self.performance_monitor:
             with self.performance_monitor.track_operation('graph_search_template'):
-                return await self._execute_graph_search_with_template_internal(query, template_cypher, top_k)
+                return await self._execute_graph_search_internal(query, top_k, template_cypher)
         else:
-            return await self._execute_graph_search_with_template_internal(query, template_cypher, top_k)
-
-    async def _execute_graph_search_with_template_internal(
-            self, query: str, template_cypher: str, top_k: int) -> List[Dict]:
-        """Internal implementation of template-based graph search.
-
-        If the query is about a keyword or topic (detected automatically),
-        applies vector-first strategy: run vector search to find semantically
-        similar papers, then inject their IDs as a WHERE condition into
-        whatever template was selected — scoping graph results to the most
-        relevant papers.
-        """
-        await self._build_intelligent_cypher_query(query, top_k, template_cypher)
+            return await self._execute_graph_search_internal(query, top_k, template_cypher)
 
     def _refine_template_with_conditions(self, query: str, template_cypher: str, top_k: int,
                                          paper_ids: Optional[List[str]] = None) -> tuple:
@@ -392,7 +380,7 @@ class HybridRetrievalHandler:
                 params[param] = param_defaults[param]
         return params
 
-    async def _execute_graph_search_internal(self, query: str, top_k: int) -> List[Dict]:
+    async def _execute_graph_search_internal(self, query: str, top_k: int, template_cypher: str = None) -> List[Dict]:
         """Internal graph search implementation with caching."""
         try:
             # Check cache first
@@ -415,7 +403,7 @@ class HybridRetrievalHandler:
                 return []
 
             # Parse the query intelligently based on patterns
-            cypher_query, parameters = await self._build_intelligent_cypher_query(query, top_k)
+            cypher_query, parameters = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
 
             # Debug logging
             logger.info(f"Graph search query: {query}")
@@ -978,35 +966,67 @@ Respond with ONLY the template name, nothing else. Example: search_by_author"""
             logger.info(f"Extracted entities: {extracted}")
 
             # Step 2: AI agent selects the best template
+            # template_cypher can be a template KEY name (e.g. "search_by_institution")
+            # or raw Cypher text passed from the API.
             if template_cypher:
-                template_key = template_cypher
+                if template_cypher in self.GRAPH_TEMPLATES:
+                    # It's a known template key name
+                    template_key = template_cypher
+                else:
+                    # It's raw Cypher text — reverse-lookup the template key
+                    template_key = None
+                    for key, tpl in self.GRAPH_TEMPLATES.items():
+                        if tpl['cypher'].strip() == template_cypher.strip():
+                            template_key = key
+                            break
+                    if not template_key:
+                        # No matching template found — use raw Cypher directly
+                        logger.info("Using raw Cypher template (no matching template key found)")
+                        refined_cypher, parameters = self._refine_template_with_conditions(
+                            query, template_cypher, top_k
+                        )
+                        if self.cache_manager:
+                            self.cache_manager.cache_cypher(query, top_k, refined_cypher, parameters)
+                        return refined_cypher, parameters
             else:
                 template_key = self._select_template_with_ai(query, extracted)
-            logger.info(f"AI selected template: {template_key}")
+            logger.info(f"Selected template: {template_key}")
 
             # Step 3: Vector-first for keyword queries
-            # When the query is keyword-based (no specific IDs, authors, etc.),
-            # use vector search to find semantically relevant papers first,
-            # then fetch their full graph metadata via search_by_paper_ids.
-            # Use .get() with an empty list default to simplify the loop
-            keywords = extracted.get('keywords', [])
+            # Only run keyword → vector search when the selected template
+            # requires $paper_ids but none were extracted from the query.
+            # Templates with their own structured filters (author, venue, year,
+            # keywords, etc.) don't need this expensive round-trip.
+            template_cypher_text = self.GRAPH_TEMPLATES.get(template_key, {}).get('cypher', '')
+            needs_paper_ids = '$paper_ids' in template_cypher_text
+            has_paper_ids = bool(extracted.get('paper_ids'))
 
-            all_results = {}
+            if needs_paper_ids and not has_paper_ids:
+                keywords = extracted.get('keywords', [])
 
-            for keyword in keywords:
-                results = await self._execute_vector_search_internal(keyword, top_k)
+                all_results = {}
 
-                for paper in results:
-                    p_id = paper.get('paper_id')
-                    dist = paper.get('distance', 0.0)
-                    if p_id not in all_results or dist < all_results[p_id]:
-                        all_results[p_id] = dist
+                for keyword in keywords:
+                    results = await self._execute_vector_search_internal(keyword, top_k)
 
-            # Sort by distance (ascending) and take the top_k
-            sorted_ids = sorted(all_results, key=all_results.get)[:top_k]
+                    for paper in results:
+                        p_id = paper.get('paper_id')
+                        dist = paper.get('distance', 0.0)
+                        if p_id not in all_results or dist < all_results[p_id]:
+                            all_results[p_id] = dist
 
-            # Extend the extracted list
-            extracted.setdefault('paper_ids', []).extend(sorted_ids)
+                # Sort by distance (ascending) and take the top_k
+                sorted_ids = sorted(all_results, key=all_results.get)[:top_k]
+
+                # Extend the extracted list
+                extracted.setdefault('paper_ids', []).extend(sorted_ids)
+                logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for template '{template_key}'")
+            else:
+                if has_paper_ids:
+                    logger.info(f"Skipping keyword vector search — paper IDs already extracted from query")
+                else:
+                    logger.info(
+                        f"Skipping keyword vector search — template '{template_key}' uses its own filters (no $paper_ids needed)")
 
             template = self.GRAPH_TEMPLATES[template_key]
             logger.info(f"Final template: {template_key} — {template['description']}")
