@@ -13,6 +13,15 @@ scrape_configs:
     scrape_interval: 15s
     scrape_timeout: 10s
 
+# ── Grafana Cloud remote_write ──────────────────────────────────────────
+# Pushes all scraped metrics to Grafana Cloud Mimir.
+# Credentials are loaded from .env (see .env.example).
+remote_write:
+  - url: ${GRAFANA_CLOUD_REMOTE_WRITE_URL}
+    basic_auth:
+      username: ${GRAFANA_CLOUD_PROM_USERNAME}
+      password: ${GRAFANA_CLOUD_API_KEY}
+
 alerting:
   alertmanagers:
     - static_configs:

@@ -1,0 +1,28 @@
+// ──────────────────────────────────────────────────────────────
+// Grafana Alloy configuration for IAAIR
+//
+// Alloy scrapes the IAAIR API /metrics endpoint and pushes
+// metrics to Grafana Cloud (remote_write to Mimir).
+// ──────────────────────────────────────────────────────────────
+
+// Scrape IAAIR API Prometheus metrics
+prometheus.scrape "iaair_api" {
+  targets = [{
+    __address__ = "localhost:8000",
+  }]
+  metrics_path = "/metrics"
+  scrape_interval = "15s"
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+// Push metrics to Grafana Cloud
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    url = env("GRAFANA_CLOUD_REMOTE_WRITE_URL")
+
+    basic_auth {
+      username = env("GRAFANA_CLOUD_PROM_USERNAME")
+      password = env("GRAFANA_CLOUD_API_KEY")
+    }
+  }
+}

@@ -1,18 +1,28 @@
-# IAAIR Grafana/Prometheus Monitoring Setup
+# IAAIR Grafana Cloud Monitoring Setup
 
-This guide explains how to set up comprehensive monitoring for the IAAIR system using Prometheus for metrics collection and Grafana for visualization and alerting.
+This guide explains how to set up monitoring for the IAAIR system using **Grafana Cloud** for dashboards and alerting, with Prometheus scraping metrics locally and pushing them via `remote_write`.
 
 ## Architecture Overview
 
 ```
 IAAIR API (Port 8000)
     ↓ /metrics endpoint
-Prometheus (Port 9090)
-    ↓ scrapes metrics
-Grafana (Port 3000)
-    ↓ queries Prometheus
-Alertmanager (Port 9093)
-    ↓ sends alerts
+Prometheus (local, Port 9090)
+    ↓ remote_write
+Grafana Cloud Mimir (daongochoa2002.grafana.net)
+    ↓ stored metrics
+Grafana Cloud Dashboards
+    https://daongochoa2002.grafana.net
+```
+
+**Alternative (no local Prometheus):**
+
+```
+IAAIR API (Port 8000)
+    ↓ /metrics endpoint
+Grafana Alloy (local agent)
+    ↓ remote_write
+Grafana Cloud Mimir → Grafana Cloud Dashboards
 ```
 
 ## Quick Start
@@ -23,18 +33,46 @@ Alertmanager (Port 9093)
 pip install prometheus-client
 ```
 
-### 2. Start Monitoring Stack
+### 2. Configure Grafana Cloud Credentials
+
+```bash
+cd monitoring
+cp .env.example .env
+```
+
+Edit `.env` and fill in your Grafana Cloud credentials:
+
+1. Go to **https://daongochoa2002.grafana.net**
+2. Navigate to **Connections → Add new connection → Prometheus**
+3. Copy your **Instance ID** → `GRAFANA_CLOUD_PROM_USERNAME`
+4. Generate an **API Key** with `MetricsPublisher` role → `GRAFANA_CLOUD_API_KEY`
+5. Copy the **Remote Write URL** → `GRAFANA_CLOUD_REMOTE_WRITE_URL`
+6. Update `prometheus.yml` `remote_write.url` if your region differs
+
+### 3. Start Monitoring Stack
 
 ```bash
 cd monitoring
 docker-compose up -d
 ```
 
-### 3. Access Dashboards
+This starts:
+- **Prometheus** — scrapes IAAIR `/metrics` and pushes to Grafana Cloud
+- **Alloy** — alternative lightweight agent (also pushes to Grafana Cloud)
+- **Alertmanager** — local alert routing (optional)
 
-- **Grafana**: http://localhost:3000 (admin/iaair123)
-- **Prometheus**: http://localhost:9090
-- **Alertmanager**: http://localhost:9093
+### 4. Access Dashboards
+
+- **Grafana Cloud**: https://daongochoa2002.grafana.net
+- **Prometheus (local)**: http://localhost:9090
+- **Alertmanager (local)**: http://localhost:9093
+- **Alloy UI**: http://localhost:12345
+
+### 5. Import the Dashboard
+
+1. Go to https://daongochoa2002.grafana.net → **Dashboards → Import**
+2. Upload `grafana/dashboards/iaair-performance.json`
+3. Select the **Prometheus** datasource (auto-provisioned from remote_write)
 
 ## Metrics Collected
 
@@ -173,20 +211,28 @@ For production deployments:
 
 ### Common Issues
 
-1. **Metrics Not Appearing**:
+1. **Metrics Not Appearing in Grafana Cloud**:
    - Check `/metrics` endpoint: `curl http://localhost:8000/metrics`
    - Verify Prometheus targets: http://localhost:9090/targets
+   - Check remote_write status: http://localhost:9090 → Status → TSDB Status
    - Check container logs: `docker-compose logs prometheus`
+   - Verify `.env` credentials are correct
+   - Confirm remote_write URL matches your Grafana Cloud region
 
-2. **Dashboard Not Loading**:
-   - Verify Grafana datasource configuration
-   - Check Prometheus connectivity from Grafana
-   - Reload dashboards: `docker-compose restart grafana`
+2. **Authentication Errors on remote_write**:
+   - Regenerate API key at https://daongochoa2002.grafana.net/org/apikeys
+   - Ensure API key has `MetricsPublisher` role
+   - Check `GRAFANA_CLOUD_PROM_USERNAME` is the Instance ID (numeric), not your email
 
-3. **Alerts Not Firing**:
-   - Check alert rules syntax in Prometheus
-   - Verify Alertmanager configuration
-   - Test alert expressions in Prometheus UI
+3. **Dashboard Not Loading**:
+   - Import `grafana/dashboards/iaair-performance.json` manually
+   - Verify the Prometheus datasource is configured in Grafana Cloud
+   - Check that metric names match (prefix: `iaair_`)
+
+4. **Alloy Not Connecting**:
+   - Check Alloy logs: `docker-compose logs alloy`
+   - Verify `.env` has `GRAFANA_CLOUD_REMOTE_WRITE_URL`
+   - Test connectivity: `curl -u <username>:<api_key> <remote_write_url>`
 
 ### Log Analysis
 
@@ -199,16 +245,15 @@ logging.getLogger('models.engines.PrometheusMonitor').setLevel(logging.DEBUG)
 ## Production Deployment
 
 ### Security
-- Change default passwords
-- Enable HTTPS for Grafana
-- Use authentication providers (LDAP, OAuth)
-- Secure Prometheus scrape endpoints
+- Store `.env` secrets in a vault (never commit `.env` to git)
+- Use Grafana Cloud's built-in HTTPS and SSO
+- Restrict API key permissions to `MetricsPublisher` only
+- Secure local Prometheus scrape endpoints
 
 ### Scaling
-- Use Prometheus federation for multiple instances
-- Implement service discovery for dynamic targets
-- Use remote storage for long-term retention
-- Set up Grafana clustering for high availability
+- Use Grafana Alloy instead of full Prometheus for lighter footprint
+- Grafana Cloud Mimir handles storage, retention, and HA automatically
+- No need for Prometheus federation — remote_write handles it
 
 ### Maintenance
 - Regular backup of Grafana dashboards

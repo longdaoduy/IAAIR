@@ -18,8 +18,9 @@ receivers:
   - name: 'email'
     email_configs:
       - to: 'admin@example.com'
-        subject: 'IAAIR Alert: {{ .GroupLabels.alertname }}'
-        body: |
+        headers:
+          Subject: 'IAAIR Alert: {{ .GroupLabels.alertname }}'
+        text: |
           {{ range .Alerts }}
           Alert: {{ .Annotations.summary }}
           Description: {{ .Annotations.description }}
