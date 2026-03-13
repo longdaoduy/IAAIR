@@ -572,7 +572,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         fusion_start = datetime.now()
 
-        graph_results = factory.retrieval_handler.execute_graph_search(
+        graph_results = await factory.retrieval_handler.execute_graph_search(
             query=request.query,
             template_cypher=request.graph_template,
             top_k=request.top_k
