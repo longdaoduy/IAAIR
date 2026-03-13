@@ -1,4 +1,5 @@
 import logging
+import asyncio
 
 # Import handlers
 from pipelines.ingestions.IngestionHandler import IngestionHandler
@@ -114,7 +115,7 @@ class ServiceFactory:
 
     async def connect_all(self):
         """Standardize startup for all database clients"""
-        self.milvus_client.connect()
+        await asyncio.to_thread(self.milvus_client.connect)
         # self.clip_client.initialize()
         # try:
         #     self.mongo_client.connect()
@@ -124,5 +125,5 @@ class ServiceFactory:
 
     async def disconnect_all(self):
         """Cleanup connections on shutdown"""
-        self.milvus_client.disconnect()
+        await asyncio.to_thread(self.milvus_client.disconnect)
         # self.mongo_client.disconnect()

@@ -539,32 +539,32 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         logger.info(f"Starting hybrid search for query: '{request.query}'")
 
         # Step 1: Query classification and intelligent routing decision
-        query_type, confidence = (factory.routing_engine.query_classifier.classify_query(request.query))
+        # query_type, confidence = (factory.routing_engine.query_classifier.classify_query(request.query))
 
         # Record query type
-        factory.performance_monitor.record_query_type(
-            query_type.value if hasattr(query_type, 'value') else str(query_type))
-
-        # Check if user specified a routing strategy explicitly
-        if request.routing_strategy != RoutingStrategy.ADAPTIVE:
-            # User provided specific routing strategy - use it
-            routing_strategy = request.routing_strategy
-            logger.info(f"Using user-specified routing strategy: {routing_strategy}")
-        else:
-            # Use AI routing decision for adaptive strategy with optimizations
-            routing_result = factory.routing_engine.decide_routing(request.query, request)
-
-            # Handle routing result (could be tuple with 3 values)
-            if isinstance(routing_result, tuple) and len(routing_result) == 3:
-                routing_strategy, _, _ = routing_result
-            else:
-                routing_strategy = routing_result
-
-        # Record routing strategy
-        factory.performance_monitor.record_routing_strategy(routing_strategy.value)
-
-        logger.info(
-            f"Query classified as {query_type} (confidence: {confidence:.2f}), using {routing_strategy} routing")
+        # factory.performance_monitor.record_query_type(
+        #     query_type.value if hasattr(query_type, 'value') else str(query_type))
+        #
+        # # Check if user specified a routing strategy explicitly
+        # if request.routing_strategy != RoutingStrategy.ADAPTIVE:
+        #     # User provided specific routing strategy - use it
+        #     routing_strategy = request.routing_strategy
+        #     logger.info(f"Using user-specified routing strategy: {routing_strategy}")
+        # else:
+        #     # Use AI routing decision for adaptive strategy with optimizations
+        #     routing_result = factory.routing_engine.decide_routing(request.query, request)
+        #
+        #     # Handle routing result (could be tuple with 3 values)
+        #     if isinstance(routing_result, tuple) and len(routing_result) == 3:
+        #         routing_strategy, _, _ = routing_result
+        #     else:
+        #         routing_strategy = routing_result
+        #
+        # # Record routing strategy
+        # factory.performance_monitor.record_routing_strategy(routing_strategy.value)
+        #
+        # logger.info(
+        #     f"Query classified as {query_type} (confidence: {confidence:.2f}), using {routing_strategy} routing")
 
         # Step 2: Execute search based on routing strategy with optimizations
         vector_results = []
@@ -572,9 +572,8 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         fusion_start = datetime.now()
 
-        graph_results = await factory.retrieval_handler.execute_graph_search(
+        graph_results = await factory.retrieval_handler.execute_hybrid_search(
             query=request.query,
-            template_cypher=request.graph_template,
             top_k=request.top_k
         )
         # if routing_strategy == RoutingStrategy.VECTOR_FIRST:
@@ -635,7 +634,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         fusion_stats = {
             'vector_results_count': len(vector_results or []),
             'graph_results_count': len(graph_results or []),
-            'fusion_method': routing_strategy.value,
+            # 'fusion_method': routing_strategy.value,
             'fusion_weights': request.fusion_weights or factory.result_fusion.default_weights
         }
 
@@ -668,7 +667,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
                 with factory.performance_monitor.track_operation('ai_response'):
                     # 1. Generate the raw synthesis
                     ai_response = await factory.retrieval_handler.generate_ai_response(request.query, fused_results,
-                                                                                       query_type)
+                                                                                       )
 
                     # if ai_response:
                     # # 2. PERFORM SCIFACT VERIFICATION FIRST (Week 5/7 requirement)
@@ -697,10 +696,10 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         return HybridSearchResponse(
             success=True,
-            message=f"Hybrid search completed using {routing_strategy.value} strategy",
+            # message=f"Hybrid search completed using {routing_strategy.value} strategy",
             query=request.query,
-            query_type=query_type,
-            routing_used=routing_strategy,
+            # query_type=query_type,
+            # routing_used=routing_strategy,
             results_found=len(fused_results),
             search_time_seconds=total_time,
             fusion_time_seconds=fusion_time,
@@ -1092,8 +1091,6 @@ async def save_cypher_template(request: CypherTemplateSaveRequest,
             raise HTTPException(status_code=400, detail="Template name is required")
         if not request.query.strip():
             raise HTTPException(status_code=400, detail="Query is required")
-        if not mongo_client:
-            raise HTTPException(status_code=400, detail="MongoDB is required")
         result = factory.mongo_client.save_cypher_template(
             name=request.name,
             query=request.query,

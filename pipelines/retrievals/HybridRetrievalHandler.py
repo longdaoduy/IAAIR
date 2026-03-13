@@ -17,6 +17,7 @@ from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.huggingface.DeepseekClient import DeepseekClient
 from clients.huggingface.CLIPClient import CLIPClient
 from pymilvus import (Collection)
+from utils.async_utils import run_blocking
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ class HybridRetrievalHandler:
             if self.performance_monitor:
                 self.performance_monitor.record_cache_hit('search', False)
 
-            results = self.search_similar_papers(
+            results = await self.search_similar_papers(
                 query_text=query,
                 top_k=top_k,
                 use_hybrid=True
@@ -82,8 +83,11 @@ class HybridRetrievalHandler:
             logger.error(f"Vector search error: {e}")
             return []
 
-    def search_similar_papers(self, query_text: str, top_k: int = 10, use_hybrid: bool = True) -> List[Dict]:
+    async def search_similar_papers(self, query_text: str, top_k: int = 10, use_hybrid: bool = True) -> List[Dict]:
         """Search for similar papers using hybrid search (dense + sparse) or dense-only search.
+
+        Blocking operations (embedding generation, Milvus search) are offloaded
+        to a thread pool so they don't block the asyncio event loop.
 
         Args:
             query_text: Text query to search for similar papers
@@ -105,14 +109,18 @@ class HybridRetrievalHandler:
                 if query_embedding is not None and self.performance_monitor:
                     self.performance_monitor.record_cache_hit('embedding', True)
 
-            # Generate embedding if not cached
+            # Generate embedding if not cached — offload to thread pool
             if query_embedding is None:
                 if self.performance_monitor:
                     self.performance_monitor.record_cache_hit('embedding', False)
                     with self.performance_monitor.track_operation('embedding'):
-                        query_embedding = self.embedding_client.generate_text_embedding(query_text)
+                        query_embedding = await run_blocking(
+                            self.embedding_client.generate_text_embedding, query_text
+                        )
                 else:
-                    query_embedding = self.embedding_client.generate_text_embedding(query_text)
+                    query_embedding = await run_blocking(
+                        self.embedding_client.generate_text_embedding, query_text
+                    )
 
                 # Cache the embedding
                 if self.cache_manager and query_embedding is not None:
@@ -122,20 +130,22 @@ class HybridRetrievalHandler:
                 print("❌ Failed to generate query embedding")
                 return []
 
-            # Execute search with optimized parameters
-            return self.milvus_client._hybrid_search(query_text, query_embedding, top_k)
+            # Execute Milvus search — offload to thread pool
+            return await run_blocking(
+                self.milvus_client._hybrid_search, query_text, query_embedding, top_k
+            )
 
         except Exception as e:
             print(f"❌ Search failed: {e}")
             return []
 
-    async def execute_graph_search(self, query: str, top_k: int, template_cypher: str = None) -> List[Dict]:
+    async def execute_hybrid_search(self, query: str, top_k: int, template_cypher: str = None) -> List[Dict]:
         """Execute graph search using Cypher query with intelligent query parsing and caching."""
         if self.performance_monitor:
             with self.performance_monitor.track_operation('graph_search'):
-                return await self._execute_graph_search_internal(query, top_k, template_cypher)
+                return await self._execute_hybrid_search_internal(query, top_k, template_cypher)
         else:
-            return await self._execute_graph_search_internal(query, top_k,template_cypher)
+            return await self._execute_hybrid_search_internal(query, top_k, template_cypher)
 
     def _refine_template_with_conditions(self, query: str, template_cypher: str, top_k: int,
                                          paper_ids: Optional[List[str]] = None) -> tuple:
@@ -359,7 +369,7 @@ class HybridRetrievalHandler:
                 params[param] = param_defaults[param]
         return params
 
-    async def _execute_graph_search_internal(self, query: str, top_k: int, template_cypher: str = None) -> List[Dict]:
+    async def _execute_hybrid_search_internal(self, query: str, top_k: int, template_cypher: str = None) -> List[Dict]:
         """Internal graph search implementation with caching."""
         try:
             # Check cache first
@@ -389,7 +399,7 @@ class HybridRetrievalHandler:
             logger.info(f"Generated Cypher: {cypher_query}")
             logger.info(f"Parameters: {parameters}")
 
-            results = self.graph_handler.execute_query(cypher_query, parameters)
+            results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
             logger.info(f"Graph search returned {len(results)} results")
 
             # Cache results
@@ -523,7 +533,7 @@ class HybridRetrievalHandler:
     # TEMPLATE SELECTION — AI agent picks the best template
     # =========================================================================
 
-    def _select_template_with_ai(self, query: str, extracted: Dict) -> str:
+    async def _select_template_with_ai(self, query: str, extracted: Dict) -> str:
         """Use AI agent to select the best graph template for the user's query.
 
         Args:
@@ -633,7 +643,8 @@ Rules (use if no example above matches):
 Respond with ONLY the template name, nothing else."""
 
         try:
-            response = self.ai_agent.generate_content(
+            response = await run_blocking(
+                self.ai_agent.generate_content,
                 prompt=prompt,
                 system_prompt="You are a query router. Respond with only the template name.",
                 purpose='template_selection'
@@ -872,7 +883,7 @@ Respond with ONLY the template name, nothing else."""
                             self.cache_manager.cache_cypher(query, top_k, refined_cypher, parameters)
                         return refined_cypher, parameters
             else:
-                template_key = self._select_template_with_ai(query, extracted)
+                template_key = await self._select_template_with_ai(query, extracted)
             logger.info(f"Selected template: {template_key}")
 
             # Step 3: Vector-first for keyword queries
@@ -929,7 +940,7 @@ Respond with ONLY the template name, nothing else."""
         except Exception as e:
             logger.error(f"Error in intelligent Cypher generation: {e}")
             # Ultimate fallback — vector-first then paper IDs lookup
-            paper_ids = self._vector_first_paper_ids(query, top_k) if self.milvus_client else None
+            paper_ids = await self._vector_first_paper_ids(query, top_k) if self.milvus_client else None
             if paper_ids:
                 return self.GRAPH_TEMPLATES['search_by_paper_ids']['cypher'].strip(), \
                     {"paper_ids": paper_ids, "limit": top_k}
@@ -937,7 +948,7 @@ Respond with ONLY the template name, nothing else."""
             return self.GRAPH_TEMPLATES['search_by_keywords']['cypher'].strip(), \
                 {"keywords": keywords or [query], "limit": top_k}
 
-    def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
+    async def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
         """Run vector search to extract relevant paper IDs for graph enrichment.
 
         This is the core of the vector-first strategy: use semantic similarity
@@ -952,7 +963,7 @@ Respond with ONLY the template name, nothing else."""
             List of paper IDs (e.g. ['W12345', 'W67890'])
         """
         try:
-            vector_results = self.search_similar_papers(
+            vector_results = await self.search_similar_papers(
                 query_text=query,
                 top_k=top_k,
                 use_hybrid=True
@@ -993,7 +1004,7 @@ Respond with ONLY the template name, nothing else."""
 
             logger.info(paper_ids)
 
-            results = self.graph_handler.execute_query(cypher_query, {
+            results = await run_blocking(self.graph_handler.execute_query, cypher_query, {
                 "paper_ids": paper_ids,
                 "top_k": top_k
             })
@@ -1011,7 +1022,6 @@ Respond with ONLY the template name, nothing else."""
             self,
             query: str,
             search_results: List,
-            query_type: QueryType
     ) -> Optional[str]:
         """Generate AI response from vector and graph searches."""
         try:
@@ -1048,49 +1058,22 @@ Respond with ONLY the template name, nothing else."""
                         "doi": result.get("doi", "") or ""
                     })
 
-            # Create specialized prompt and system prompt based on query type
-            if query_type == QueryType.STRUCTURAL:
-                system_prompt = "You are a helpful research assistant. Be direct, factual, and concise."
-                prompt = f"""Answer this question directly: "{query}"
+            system_prompt = "You are a research assistant. Be accurate and concise."
+            prompt = f"""Answer this question based on the search results: "{query}"
 
-Search Results:
-{self._format_papers_for_prompt(context_papers[:3])}
+                Search Results:
+                {self._format_papers_for_prompt(context_papers[:4])}
+                
+                Instructions:
+                - Answer directly in 3-5 sentences
+                - Cite specific papers and authors when relevant
+                - Be accurate — only use information from the provided results
+                
+                Answer:"""
 
-Instructions:
-- Answer in 2-4 sentences maximum
-- Use specific information (authors, dates, titles)
-- Be factual and precise
-
-Answer:"""
-            elif query_type == QueryType.SEMANTIC:
-                system_prompt = "You are a research assistant. Synthesize findings concisely."
-                prompt = f"""Answer this question based on the search results: "{query}"
-
-Search Results:
-{self._format_papers_for_prompt(context_papers[:4])}
-
-Instructions:
-- Synthesize key findings in 3-5 sentences
-- Cite specific papers and authors
-- Connect related findings
-
-Answer:"""
-            else:  # FACTUAL, HYBRID, or other types
-                system_prompt = "You are a research assistant. Be accurate and concise."
-                prompt = f"""Answer this question based on the search results: "{query}"
-
-Search Results:
-{self._format_papers_for_prompt(context_papers[:4])}
-
-Instructions:
-- Answer directly in 3-5 sentences
-- Cite specific papers and authors when relevant
-- Be accurate — only use information from the provided results
-
-Answer:"""
-
-            # Generate response using DeepseekClient with both prompt and system_prompt
-            ai_answer = self.ai_agent.generate_content(
+            # Generate response using DeepseekClient — offload to thread pool
+            ai_answer = await run_blocking(
+                self.ai_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
                 purpose='answer_synthesis'
@@ -1107,6 +1090,27 @@ Answer:"""
             logger.error(f"Error generating AI response: {e}")
             return None
 
+
+    def _format_papers_for_prompt(papers: List[Dict]) -> str:
+        """Format papers for inclusion in Gemini prompt."""
+        formatted_papers = []
+
+        for i, paper in enumerate(papers, 1):
+            authors = paper.get("authors", [])
+            authors_str = ", ".join(authors[:3])
+            if len(authors) > 3:
+                authors_str += " et al."
+
+            paper_text = f"""{i}. Title: {paper.get('title', 'N/A')}
+           Authors: {authors_str or 'N/A'}
+           Venue: {paper.get('venue', 'N/A')}
+           Date: {paper.get('publication_date', 'N/A')}
+           Relevance: {paper.get('relevance_score', 0):.2f}
+           Abstract: {paper.get('abstract', 'N/A')}"""
+
+            formatted_papers.append(paper_text)
+
+        return "\n\n".join(formatted_papers)
     async def verify_claims_scifact(self, ai_answer: str, context_papers: List) -> List[Dict]:
         """
         Implements SciFact-style verification by breaking the AI response into
@@ -1114,7 +1118,7 @@ Answer:"""
         """
         # Step 1: Claim Extraction
         # Use a prompt to break the response into individual facts
-        claims = self.extract_atomic_claims(ai_answer)
+        claims = await self.extract_atomic_claims(ai_answer)
 
         verification_results = []
 
@@ -1131,12 +1135,15 @@ Answer:"""
             - NO_EVIDENCE: If the evidence is relevant but doesn't prove/disprove it.
             """
 
-            label = self.ai_agent.generate_content(logic_prompt, purpose='scifact_verification')
+            label = await run_blocking(
+                self.ai_agent.generate_content, logic_prompt,
+                purpose='scifact_verification'
+            )
             verification_results.append({"claim": claim, "label": label})
 
         return verification_results
 
-    def extract_atomic_claims(self, ai_answer: str) -> List[str]:
+    async def extract_atomic_claims(self, ai_answer: str) -> List[str]:
         """
         Decomposes a complex AI response into atomic, verifiable scientific claims.
         This supports the 'Verification' research goal of reducing hallucinations[cite: 25].
@@ -1163,7 +1170,10 @@ Answer:"""
             """
 
             # Using your existing AI agent infrastructure
-            raw_claims = self.ai_agent.generate_content(prompt=extraction_prompt, purpose='claim_extraction')
+            raw_claims = await run_blocking(
+                self.ai_agent.generate_content,
+                prompt=extraction_prompt, purpose='claim_extraction'
+            )
 
             if not raw_claims:
                 return []
@@ -1226,30 +1236,36 @@ Answer:"""
         table_results = []
 
         try:
-            # Search figures collection
+            # Search figures collection — offload to thread pool
             if search_figures:
-                figure_results = self.milvus_client.search_figures_by_image(
+                figure_results = await run_blocking(
+                    self.milvus_client.search_figures_by_image,
                     image_embedding, top_k
                 )
 
-            # Search tables collection
+            # Search tables collection — offload to thread pool
             if search_tables:
-                table_results = self.milvus_client.search_tables_by_image(
+                table_results = await run_blocking(
+                    self.milvus_client.search_tables_by_image,
                     image_embedding, top_k
                 )
 
             # If text query provided, also search by description and merge results
             if text_query and self.embedding_client:
-                text_embedding = self.embedding_client.generate_text_embedding(text_query)
+                text_embedding = await run_blocking(
+                    self.embedding_client.generate_text_embedding, text_query
+                )
                 if text_embedding:
                     if search_figures:
-                        text_fig_results = self.milvus_client.search_figures_by_description(
+                        text_fig_results = await run_blocking(
+                            self.milvus_client.search_figures_by_description,
                             text_embedding, top_k
                         )
                         figure_results = self._merge_visual_results(figure_results, text_fig_results)
 
                     if search_tables:
-                        text_tab_results = self.milvus_client.search_tables_by_description(
+                        text_tab_results = await run_blocking(
+                            self.milvus_client.search_tables_by_description,
                             text_embedding, top_k
                         )
                         table_results = self._merge_visual_results(table_results, text_tab_results)
@@ -1276,7 +1292,8 @@ Answer:"""
             if not related_papers and paper_ids_list and self.milvus_client.collection:
                 for pid in paper_ids_list:
                     try:
-                        paper_results = self.milvus_client.collection.query(
+                        paper_results = await run_blocking(
+                            self.milvus_client.collection.query,
                             expr=f'id == "{pid}"',
                             output_fields=["id", "title", "abstract"]
                         )
