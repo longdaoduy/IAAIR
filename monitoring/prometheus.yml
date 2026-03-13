@@ -7,13 +7,16 @@ rule_files:
 
 scrape_configs:
   - job_name: 'iaair-api'
+    scheme: https
     static_configs:
       - targets: ['dressily-duskish-felisha.ngrok-free.dev']
-    scheme: https
     metrics_path: /metrics
-    # This header is MANDATORY for ngrok free tier
-    extra_headers:
-      ngrok-skip-browser-warning: "true"
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    # ngrok free tier returns an interstitial page without this header
+    authorization:
+      type: Bearer
+      credentials: ngrok-skip-browser-warning
 
 # ── Grafana Cloud remote_write ──────────────────────────────────────────
 # Pushes all scraped metrics to Grafana Cloud Mimir.

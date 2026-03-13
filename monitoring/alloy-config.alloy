@@ -5,13 +5,18 @@
 // metrics to Grafana Cloud (remote_write to Mimir).
 // ──────────────────────────────────────────────────────────────
 
-// Scrape IAAIR API Prometheus metrics
+// Scrape IAAIR API Prometheus metrics via ngrok
 prometheus.scrape "iaair_api" {
   targets = [{
-    __address__ = "localhost:8000",
+    __address__ = "dressily-duskish-felisha.ngrok-free.dev",
   }]
+  scheme    = "https"
   metrics_path = "/metrics"
   scrape_interval = "15s"
+
+  // ngrok free tier returns an interstitial page without this header
+  bearer_token = "ngrok-skip-browser-warning"
+
   forward_to = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
