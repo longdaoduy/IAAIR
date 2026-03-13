@@ -778,6 +778,45 @@ Respond with ONLY the template name, nothing else."""
         return extracted
 
     # =========================================================================
+    # PARAMETER BUILDERS — Fill template parameters from extracted entities
+    # =========================================================================
+
+    def _params_paper_ids(self, extracted: Dict, top_k: int) -> Dict:
+        return {"paper_ids": extracted.get('paper_ids', []), "limit": top_k}
+
+    def _params_author(self, extracted: Dict, top_k: int) -> Dict:
+        return {"author_names": extracted.get('author_names', []), "limit": top_k}
+
+    def _params_keywords(self, extracted: Dict, top_k: int) -> Dict:
+        return {"keywords": extracted.get('keywords', []), "limit": top_k}
+
+    def _params_venue(self, extracted: Dict, top_k: int) -> Dict:
+        return {"venue_name": extracted.get('venue', ''), "limit": top_k}
+
+    def _params_institution(self, extracted: Dict, top_k: int) -> Dict:
+        return {"institution_name": extracted.get('institution', ''), "limit": top_k}
+
+    def _params_year(self, extracted: Dict, top_k: int) -> Dict:
+        return {"year": extracted.get('year', ''), "limit": top_k}
+
+    def _params_year_range(self, extracted: Dict, top_k: int) -> Dict:
+        return {"year_from": extracted.get('year_from', '1900'), "year_to": extracted.get('year_to', '2099'),
+                "limit": top_k}
+
+    def _params_citations(self, extracted: Dict, top_k: int) -> Dict:
+        return {"paper_ids": extracted.get('paper_ids', []), "limit": top_k}
+
+    def _params_author_keywords(self, extracted: Dict, top_k: int) -> Dict:
+        return {"author_names": extracted.get('author_names', []), "keywords": extracted.get('keywords', []),
+                "limit": top_k}
+
+    def _params_top_cited(self, extracted: Dict, top_k: int) -> Dict:
+        return {"limit": top_k}
+
+    def _params_coauthor(self, extracted: Dict, top_k: int) -> Dict:
+        return {"author_names": extracted.get('author_names', []), "limit": top_k}
+
+    # =========================================================================
     # BUILD INTELLIGENT CYPHER — Main entry point for graph search
     # =========================================================================
 
