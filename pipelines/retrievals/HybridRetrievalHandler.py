@@ -280,7 +280,8 @@ class HybridRetrievalHandler:
         logger.info(f"Extracted conditions from query: {conditions}")
         return refined_cypher, parameters
 
-    def _inject_where_conditions(self, cypher: str, conditions: List[str]) -> str:
+    @staticmethod
+    def _inject_where_conditions(cypher: str, conditions: List[str]) -> str:
         """Inject WHERE conditions into a Cypher query.
 
         Handles:
@@ -337,7 +338,8 @@ class HybridRetrievalHandler:
 
         return '\n'.join(new_lines)
 
-    def _inject_limit(self, cypher: str, top_k: int) -> str:
+    @staticmethod
+    def _inject_limit(cypher: str, top_k: int) -> str:
         """Inject or replace LIMIT clause in a Cypher query."""
         import re as _re
         # Replace existing LIMIT with numeric value (e.g. LIMIT 20)

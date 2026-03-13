@@ -8,7 +8,6 @@ descriptions and visual embeddings.
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, List
-import numpy as np
 
 @dataclass
 class Figure:

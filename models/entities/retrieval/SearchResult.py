@@ -1,5 +1,5 @@
-from typing import List, Dict, Optional, Any, Union
-from pydantic import BaseModel, Field, validator
+from typing import List, Dict, Optional
+from pydantic import BaseModel, Field
 from models.entities.retrieval.AttributionSpan import AttributionSpan
 
 

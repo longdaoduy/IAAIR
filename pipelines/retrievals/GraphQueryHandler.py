@@ -5,11 +5,9 @@ This module delegates query execution to Neo4jClient, providing a
 backward-compatible interface for the retrieval pipeline.
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 import logging
 from clients.graph.Neo4jClient import Neo4jClient
-from models.configurators.GraphDBConfig import GraphDBConfig
-
 
 class GraphQueryHandler:
     """Handler that delegates Cypher query execution to Neo4jClient."""
@@ -24,7 +22,6 @@ class GraphQueryHandler:
 
         self._client = neo4j_client
         # Ensure the sync driver is ready
-        self._client._ensure_sync_driver()
         self.logger.info("✅ GraphQueryHandler initialized (delegates to Neo4jClient)")
     
     def execute_query(self, query: str, parameters: Dict = None) -> List[Dict]:

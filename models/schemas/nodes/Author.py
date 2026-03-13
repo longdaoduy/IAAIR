@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Dict, Optional, Any, Union
+from typing import Dict, Optional
 import uuid
+
+
 @dataclass
 class Author:
     """Represents an author in the knowledge fabric."""
@@ -11,7 +13,7 @@ class Author:
     # affiliation: Optional[str] = None
     email: Optional[str] = None
     h_index: Optional[int] = None
-    
+
     # Tracking fields
     ingested_at: datetime = field(default_factory=datetime.now)
     last_updated: datetime = field(default_factory=datetime.now)

@@ -53,7 +53,7 @@ class PerformanceMetrics:
 class PerformanceMonitor:
     """Monitor and track performance metrics across the system with Prometheus integration."""
 
-    def __init__(self, slow_query_threshold: float = 5.0, enable_prometheus: bool = True):
+    def __init__(self, slow_query_threshold: float = 5.0):
         self.slow_query_threshold = slow_query_threshold
         self.current_breakdown: Optional[LatencyBreakdown] = None
         self.breakdowns: List[LatencyBreakdown] = []
