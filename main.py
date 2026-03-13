@@ -19,9 +19,7 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from pydantic import BaseModel
 import logging
-import os
 import asyncio
-from fastapi.responses import FileResponse
 
 # Import handlers
 from models.entities.ingestion.PaperRequest import PaperRequest
@@ -29,7 +27,6 @@ from models.entities.ingestion.PaperResponse import PaperResponse
 from models.entities.retrieval.HybridSearchRequest import HybridSearchRequest
 from models.entities.retrieval.GraphQueryRequest import GraphQueryRequest
 from models.entities.retrieval.GraphQueryResponse import GraphQueryResponse
-from models.entities.retrieval.SearchRequest import SearchRequest
 
 # Import evaluation components
 from pipelines.evaluation.ComprehensiveEvaluationSuite import ComprehensiveEvaluationSuite
@@ -40,12 +37,9 @@ from pipelines.evaluation.PerformanceRegressionTester import PerformanceRegressi
 from pipelines.evaluation.SciMMIRBenchmarkIntegration import (
     SciMMIRResultAnalyzer
 )
-from models.entities.retrieval.SearchResponse import SearchResponse
 from models.entities.retrieval.HybridSearchResponse import HybridSearchResponse
-from models.entities.retrieval.RoutingStrategy import RoutingStrategy
 
 import uvicorn
-import time
 import base64
 import io
 import json
@@ -63,6 +57,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from models.engines.ServiceFactory import ServiceFactory
 from pipelines.evaluation.MockDataEvaluator import MockDataEvaluator
+from utils.async_utils import run_blocking
 import time
 from typing import Callable
 
@@ -538,76 +533,20 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
     try:
         logger.info(f"Starting hybrid search for query: '{request.query}'")
 
-        # Step 1: Query classification and intelligent routing decision
-        # query_type, confidence = (factory.routing_engine.query_classifier.classify_query(request.query))
-
-        # Record query type
-        # factory.performance_monitor.record_query_type(
-        #     query_type.value if hasattr(query_type, 'value') else str(query_type))
-        #
-        # # Check if user specified a routing strategy explicitly
-        # if request.routing_strategy != RoutingStrategy.ADAPTIVE:
-        #     # User provided specific routing strategy - use it
-        #     routing_strategy = request.routing_strategy
-        #     logger.info(f"Using user-specified routing strategy: {routing_strategy}")
-        # else:
-        #     # Use AI routing decision for adaptive strategy with optimizations
-        #     routing_result = factory.routing_engine.decide_routing(request.query, request)
-        #
-        #     # Handle routing result (could be tuple with 3 values)
-        #     if isinstance(routing_result, tuple) and len(routing_result) == 3:
-        #         routing_strategy, _, _ = routing_result
-        #     else:
-        #         routing_strategy = routing_result
-        #
-        # # Record routing strategy
-        # factory.performance_monitor.record_routing_strategy(routing_strategy.value)
-        #
-        # logger.info(
-        #     f"Query classified as {query_type} (confidence: {confidence:.2f}), using {routing_strategy} routing")
-
-        # Step 2: Execute search based on routing strategy with optimizations
         vector_results = []
-        graph_results = []
 
         fusion_start = datetime.now()
 
-        graph_results = await factory.retrieval_handler.execute_hybrid_search(
+        hybrid_results = await factory.retrieval_handler.execute_graph_search(
             query=request.query,
+            template_cypher=request.graph_template,
             top_k=request.top_k
         )
-        # if routing_strategy == RoutingStrategy.VECTOR_FIRST:
-        #     vector_results = await factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
-        #
-        # elif routing_strategy == RoutingStrategy.GRAPH_FIRST:
-        #     graph_results = await factory.retrieval_handler.execute_graph_search(request.query, request.top_k)
-        #     logger.info("Using graph-only search - vector search skipped for performance")
-        #     vector_results = []
-        #
-        # elif routing_strategy == RoutingStrategy.PARALLEL:
-        #     # Execute both searches in parallel
-        #     vector_task = factory.retrieval_handler.execute_vector_search(request.query, request.top_k)
-        #     # Use template-based graph search if a template is provided
-        #     graph_task = factory.retrieval_handler.execute_graph_search(
-        #         query=request.query,
-        #         template_cypher=request.graph_template,
-        #         top_k=request.top_k
-        #     )
-        #
-        #     results = await asyncio.gather(vector_task, graph_task)
-        #     # Safely unpack results with fallbacks
-        #     vector_results = results[0] if results[0] is not None else []
-        #     graph_results = results[1] if results[1] is not None else []
-
-        # Step 3: Result fusion
-        logger.info(
-            f"Before fusion - vector_results: {len(vector_results or [])}, graph_results: {len(graph_results or [])}")
-        logger.info(graph_results)
 
         with factory.performance_monitor.track_operation('fusion'):
             fused_results = factory.result_fusion.fuse_results(
                 vector_results or [],
-                graph_results or [],
+                hybrid_results or [],
                 request.fusion_weights
             )
 
@@ -633,7 +572,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         fusion_stats = {
             'vector_results_count': len(vector_results or []),
-            'graph_results_count': len(graph_results or []),
+            'graph_results_count': len(hybrid_results or []),
             # 'fusion_method': routing_strategy.value,
             'fusion_weights': request.fusion_weights or factory.result_fusion.default_weights
         }
@@ -698,8 +637,6 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             success=True,
             # message=f"Hybrid search completed using {routing_strategy.value} strategy",
             query=request.query,
-            # query_type=query_type,
-            # routing_used=routing_strategy,
             results_found=len(fused_results),
             search_time_seconds=total_time,
             fusion_time_seconds=fusion_time,
@@ -774,7 +711,9 @@ async def image_search(
             image_embedding = factory.cache_manager.get_image_embedding(contents)
 
         if image_embedding is None:
-            image_embedding = factory.clip_client.generate_image_embedding(image)
+            image_embedding = await run_blocking(
+                factory.clip_client.generate_image_embedding, image
+            )
             if not image_embedding:
                 raise HTTPException(status_code=500, detail="Failed to generate image embedding")
             if factory.cache_manager:
@@ -880,7 +819,9 @@ async def image_search_base64(
             image_embedding = factory.cache_manager.get_image_embedding(image_bytes)
 
         if image_embedding is None:
-            image_embedding = factory.clip_client.generate_image_embedding(image)
+            image_embedding = await run_blocking(
+                factory.clip_client.generate_image_embedding, image
+            )
             if not image_embedding:
                 raise HTTPException(status_code=500, detail="Failed to generate image embedding")
             if factory.cache_manager:
@@ -1002,7 +943,7 @@ async def execute_custom_query(request: GraphQueryRequest, factory: ServiceFacto
             if not any(keyword in query.upper() for keyword in ['LIMIT', 'SKIP']):
                 query += f" LIMIT {request.limit}"
 
-        results = factory.query_handler.execute_query(query, request.parameters)
+        results = await run_blocking(factory.query_handler.execute_query, query, request.parameters)
 
         query_time = (datetime.now() - start_time).total_seconds()
 
@@ -1091,7 +1032,10 @@ async def save_cypher_template(request: CypherTemplateSaveRequest,
             raise HTTPException(status_code=400, detail="Template name is required")
         if not request.query.strip():
             raise HTTPException(status_code=400, detail="Query is required")
-        result = factory.mongo_client.save_cypher_template(
+        # if not mongo_client:
+        #     raise HTTPException(status_code=400, detail="MongoDB is required")
+        result = await run_blocking(
+            factory.mongo_client.save_cypher_template,
             name=request.name,
             query=request.query,
             icon=request.icon,
@@ -1116,7 +1060,7 @@ async def save_cypher_template(request: CypherTemplateSaveRequest,
 async def delete_cypher_template(name: str, factory: ServiceFactory = Depends(get_services)):
     """Delete a saved Cypher query template."""
     try:
-        deleted = factory.mongo_client.delete_cypher_template(name)
+        deleted = await run_blocking(factory.mongo_client.delete_cypher_template, name)
         if deleted:
             return {"success": True, "message": f"Template '{name}' deleted"}
         else:
@@ -1307,11 +1251,11 @@ async def run_comprehensive_evaluation(version: str = "current", factory: Servic
         # Initialize evaluation suite
         eval_suite = ComprehensiveEvaluationSuite(factory)
 
-        # Run full evaluation
-        results = eval_suite.run_full_evaluation(version)
+        # Run full evaluation — offload heavy computation to thread pool
+        results = await run_blocking(eval_suite.run_full_evaluation, version)
 
         # Generate report
-        report = eval_suite.generate_evaluation_report(results)
+        report = await run_blocking(eval_suite.generate_evaluation_report, results)
 
         return {
             "success": True,
@@ -1338,16 +1282,27 @@ async def evaluate_retrieval_quality(factory: ServiceFactory = Depends(get_servi
         benchmark_loader = ScientificBenchmarkLoader()
         benchmarks = benchmark_loader.load_default_benchmarks()
 
-        # Define retrieval function
-        def retrieval_function(query_text: str):
-            return factory.retrieval_handler.search_similar_papers(
+        # Define retrieval function that runs the async search in the event loop
+        async def async_retrieval_function(query_text: str):
+            return await factory.retrieval_handler.search_similar_papers(
                 query_text=query_text,
                 top_k=20,
                 use_hybrid=True
             )
 
-        # Run evaluation
-        results = evaluator.evaluate_benchmark_suite(benchmarks, retrieval_function)
+        # Wrap the sync evaluator — it calls retrieval_function internally
+        loop = asyncio.get_event_loop()
+
+        def retrieval_function(query_text: str):
+            """Sync wrapper that schedules the async search on the running loop."""
+            import concurrent.futures
+            future = asyncio.run_coroutine_threadsafe(
+                async_retrieval_function(query_text), loop
+            )
+            return future.result(timeout=60)
+
+        # Run evaluation — offload to thread pool
+        results = await run_blocking(evaluator.evaluate_benchmark_suite, benchmarks, retrieval_function)
 
         return {
             "success": True,
@@ -1384,7 +1339,7 @@ async def evaluate_attribution_fidelity(factory: ServiceFactory = Depends(get_se
         # Generate search results with attributions
         search_results = []
         for benchmark in benchmarks:
-            results = factory.retrieval_handler.search_similar_papers(
+            results = await factory.retrieval_handler.search_similar_papers(
                 query_text=benchmark.query_text,
                 top_k=10,
                 use_hybrid=True
@@ -1392,17 +1347,18 @@ async def evaluate_attribution_fidelity(factory: ServiceFactory = Depends(get_se
 
             # Add attribution tracking
             if results:
-                results = factory.attribution_tracker.track_attributions(
+                results = await run_blocking(
+                    factory.attribution_tracker.track_attributions,
                     results, benchmark.query_text
                 )
 
             search_results.extend(results)
 
-        # Evaluate attribution quality
-        metrics = evaluator.evaluate_attribution_quality(search_results, benchmarks)
+        # Evaluate attribution quality — offload to thread pool
+        metrics = await run_blocking(evaluator.evaluate_attribution_quality, search_results, benchmarks)
 
         # Generate report
-        report = evaluator.create_attribution_report(metrics)
+        report = await run_blocking(evaluator.create_attribution_report, metrics)
 
         return {
             "success": True,
@@ -1445,11 +1401,11 @@ async def evaluate_verification(factory: ServiceFactory = Depends(get_services))
         # Load benchmarks
         benchmarks = create_verification_benchmarks()
 
-        # Run verification on each benchmark
+        # Run verification on each benchmark — offload to thread pool
         verification_results = []
         for benchmark in benchmarks:
             try:
-                result = verification_pipeline.verify_claim(benchmark.claim)
+                result = await run_blocking(verification_pipeline.verify_claim, benchmark.claim)
                 verification_results.append(result)
             except Exception as e:
                 logger.warning(f"Error verifying claim {benchmark.claim.claim_id}: {e}")
@@ -1457,7 +1413,7 @@ async def evaluate_verification(factory: ServiceFactory = Depends(get_services))
 
         # Evaluate verification accuracy
         evaluator = VerificationEvaluator()
-        metrics = evaluator.evaluate_verification(verification_results, benchmarks)
+        metrics = await run_blocking(evaluator.evaluate_verification, verification_results, benchmarks)
 
         return {
             "success": True,
@@ -1495,11 +1451,11 @@ async def run_regression_test(version: str = "current", baseline: str = "latest"
         benchmarks = benchmark_loader.load_default_benchmarks()
 
         try:
-            # Try to run regression test against existing baseline
-            result = regression_tester.run_regression_test(factory, benchmarks, baseline)
+            # Try to run regression test against existing baseline — offload to thread pool
+            result = await run_blocking(regression_tester.run_regression_test, factory, benchmarks, baseline)
 
             # Generate report
-            report = regression_tester.generate_regression_report(result)
+            report = await run_blocking(regression_tester.generate_regression_report, result)
 
             return {
                 "success": True,
@@ -1515,7 +1471,8 @@ async def run_regression_test(version: str = "current", baseline: str = "latest"
         except ValueError:
             # No baseline exists, create one
             logger.info(f"No baseline found for {baseline}, creating new baseline")
-            baseline_result = regression_tester.capture_performance_baseline(
+            baseline_result = await run_blocking(
+                regression_tester.capture_performance_baseline,
                 factory, benchmarks, version
             )
 
@@ -1553,8 +1510,9 @@ async def run_scimmir_benchmark(
         mode = "mock data" if use_mock else ("streaming" if use_streaming else "cached")
         logger.info(f"Starting SciMMIR benchmark with {limit_samples} samples using {mode}")
 
-        # Run SciMMIR benchmark with memory-efficient options
-        result = factory.run_scimmir_benchmark_suite(
+        # Run SciMMIR benchmark with memory-efficient options — offload to thread pool
+        result = await run_blocking(
+            factory.run_scimmir_benchmark_suite,
             limit_samples=limit_samples,
             cache_dir="./data/scimmir_cache",
             report_path="./data/scimmir_benchmark_report.md" if generate_report else None,
@@ -1562,7 +1520,7 @@ async def run_scimmir_benchmark(
 
         # Generate comparison analysis
         analyzer = SciMMIRResultAnalyzer()
-        comparison = analyzer.compare_with_baselines(result)
+        comparison = await run_blocking(analyzer.compare_with_baselines, result)
 
         return {
             "success": True,
@@ -1794,118 +1752,6 @@ async def get_prometheus_metrics(factory: ServiceFactory = Depends(get_services)
         raise HTTPException(status_code=500, detail=f"Failed to serve metrics: {str(e)}")
 
 
-@app.get("/api/stats")
-async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services)):
-    """Get detailed statistics for all API endpoints."""
-    try:
-        if not (factory.performance_monitor and factory.performance_monitor.prometheus_integration):
-            return {
-                "error": "Prometheus monitoring not available",
-                "message": "Enable monitoring with ServiceFactory.setup_monitoring()"
-            }
-
-        # Get endpoint statistics
-        prometheus_metrics = factory.performance_monitor.prometheus_integration.metrics
-        endpoint_stats = prometheus_metrics.get_endpoint_statistics()
-
-        # Sort by total request count
-        sorted_stats = sorted(
-            endpoint_stats.values(),
-            key=lambda x: x['total_count'],
-            reverse=True
-        )
-
-        # Calculate summary statistics
-        total_requests = sum(s['total_count'] for s in sorted_stats)
-        total_successes = sum(s['success_count'] for s in sorted_stats)
-        total_errors = sum(s['error_count'] for s in sorted_stats)
-
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "monitoring": {
-                "status": "enabled",
-                "total_endpoints_tracked": len(sorted_stats),
-                "metrics_endpoint": "/metrics",
-                "grafana_dashboard": "http://localhost:3000"
-            },
-            "summary": {
-                "total_requests": total_requests,
-                "total_successes": total_successes,
-                "total_errors": total_errors,
-                "overall_success_rate": round(total_successes / max(1, total_requests), 4),
-                "overall_error_rate": round(total_errors / max(1, total_requests), 4)
-            },
-            "top_endpoints": {
-                "most_used": sorted_stats[0] if sorted_stats else None,
-                "top_5": sorted_stats[:5]
-            },
-            "endpoint_details": sorted_stats,
-            "insights": {
-                "busiest_endpoint": sorted_stats[0]['endpoint'] if sorted_stats else None,
-                "endpoints_with_errors": len([s for s in sorted_stats if s['error_count'] > 0]),
-                "perfect_endpoints": len([s for s in sorted_stats if s['error_count'] == 0 and s['total_count'] > 0])
-            }
-        }
-
-    except Exception as e:
-        logger.error(f"Error getting API statistics: {e}")
-        return {
-            "error": "Failed to retrieve API statistics",
-            "details": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-
-
-@app.get("/api/stats")
-async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services)):
-    """Get detailed statistics for all API endpoints."""
-    try:
-        if not (factory.performance_monitor and factory.performance_monitor.prometheus_integration):
-            return {"error": "Prometheus monitoring not available"}
-
-        # Get endpoint statistics
-        prometheus_monitor = factory.performance_monitor.prometheus_integration.metrics
-        endpoint_stats = prometheus_monitor.get_endpoint_statistics()
-
-        # Sort by total request count
-        sorted_stats = sorted(
-            endpoint_stats.values(),
-            key=lambda x: x['total_count'],
-            reverse=True
-        )
-
-        # Calculate summary statistics
-        total_requests = sum(s['total_count'] for s in sorted_stats)
-        total_successes = sum(s['success_count'] for s in sorted_stats)
-        total_errors = sum(s['error_count'] for s in sorted_stats)
-
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "total_endpoints": len(sorted_stats),
-            "endpoint_statistics": sorted_stats,
-            "summary": {
-                "total_requests": total_requests,
-                "total_successes": total_successes,
-                "total_errors": total_errors,
-                "overall_success_rate": total_successes / max(1, total_requests),
-                "overall_error_rate": total_errors / max(1, total_requests),
-                "most_used_endpoint": sorted_stats[0] if sorted_stats else None,
-                "top_5_endpoints": sorted_stats[:5]
-            },
-            "monitoring_info": {
-                "prometheus_enabled": True,
-                "metrics_endpoint": "/metrics",
-                "grafana_dashboard": "http://localhost:3000"
-            }
-        }
-
-    except Exception as e:
-        logger.error(f"Error getting API statistics: {e}")
-        return {
-            "error": "Failed to retrieve API statistics",
-            "details": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
 
 
 # ===============================================================================
@@ -1979,11 +1825,23 @@ async def get_llm_stats(factory: ServiceFactory = Depends(get_services)):
 # ===============================================================================
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        workers=2,
-        reload=True,
-        log_level="info"
-    )
+    import sys
+
+    if "--production" in sys.argv:
+        # Production: multi-worker, no reload
+        uvicorn.run(
+            "main:app",
+            host="0.0.0.0",
+            port=8000,
+            workers=4,
+            log_level="info"
+        )
+    else:
+        # Development: single worker with auto-reload
+        uvicorn.run(
+            "main:app",
+            host="0.0.0.0",
+            port=8000,
+            reload=True,
+            log_level="info"
+        )

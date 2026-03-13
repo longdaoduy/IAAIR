@@ -1,16 +1,13 @@
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
-from models.entities.retrieval.RoutingStrategy import RoutingStrategy
-from models.entities.retrieval.QueryType import QueryType
 from models.entities.retrieval.SearchResult import SearchResult
 
 class HybridSearchResponse(BaseModel):
     """Response model for hybrid search."""
     success: bool
-    message: str
+    message: Optional[str] = None
     query: str
-    query_type: QueryType
-    routing_used: RoutingStrategy
+    query_type: Optional[str] = None
     results_found: int
     search_time_seconds: float
     fusion_time_seconds: Optional[float] = None

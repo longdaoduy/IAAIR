@@ -6,7 +6,7 @@ from clients.metadata.SemanticScholarClient import SemanticScholarClient
 from clients.metadata.OpenAlexClient import OpenAlexClient
 from pipelines.ingestions.PDFProcessingHandler import PDFProcessingHandler
 from clients.huggingface.CLIPClient import CLIPClient
-from clients.huggingface.DeepseekClient import DeepseekClient
+from clients.huggingface.LLM_Client import LLMClient
 from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.vector.MilvusClient import MilvusClient
 

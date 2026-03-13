@@ -16,7 +16,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class DeepseekClient:
+class LLMClient:
     """Service for generating SciBERT embeddings from academic papers."""
 
     def __init__(self, config: Optional[DeepseekConfig] = None):

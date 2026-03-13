@@ -14,7 +14,7 @@ import json
 from clients.vector.MilvusClient import MilvusClient
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
 from clients.huggingface.SciBERTClient import SciBERTClient
-from clients.huggingface.DeepseekClient import DeepseekClient
+from clients.huggingface.LLM_Client import LLMClient
 from clients.huggingface.CLIPClient import CLIPClient
 from pymilvus import (Collection)
 from utils.async_utils import run_blocking
@@ -26,7 +26,7 @@ class HybridRetrievalHandler:
     """Unified handler for vector and graph-based retrieval operations."""
 
     def __init__(self, vector_db: Optional[MilvusClient], graph_db: GraphQueryHandler,
-                 ai_agent: Optional[DeepseekClient], embedder: SciBERTClient,
+                 ai_agent: Optional[LLMClient], embedder: SciBERTClient,
                  cache_manager=None, performance_monitor=None,
                  clip_client: Optional[CLIPClient] = None):
         self.milvus_client = vector_db
@@ -1071,7 +1071,7 @@ Respond with ONLY the template name, nothing else."""
                 
                 Answer:"""
 
-            # Generate response using DeepseekClient — offload to thread pool
+            # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
                 self.ai_agent.generate_content,
                 prompt=prompt,

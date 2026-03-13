@@ -7,13 +7,12 @@ from pipelines.ingestions.GraphNeo4jHandler import GraphNeo4jHandler
 from clients.graph.Neo4jClient import Neo4jClient
 from clients.vector.MilvusClient import MilvusClient
 from clients.huggingface.SciBERTClient import SciBERTClient
-from clients.huggingface.DeepseekClient import DeepseekClient
+from clients.huggingface.LLM_Client import LLMClient
 from clients.huggingface.CLIPClient import CLIPClient
 from clients.mongo.MongoClient import MongoClient
 from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
 from pipelines.retrievals.HybridRetrievalHandler import HybridRetrievalHandler
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
-from models.engines.RoutingDecisionEngine import RoutingDecisionEngine
 from models.engines.ResultFusion import ResultFusion
 from models.engines.ScientificReranker import ScientificReranker
 from models.engines.AttributionTracker import AttributionTracker
@@ -38,7 +37,7 @@ class ServiceFactory:
         self.scibert_client = SciBERTClient()
         self.clip_client = None
         self.mongo_client = None
-        self.deepseek_client = DeepseekClient()
+        self.deepseek_client = LLMClient()
 
         # Performance & Caching
         self.cache_manager = CacheManager(
@@ -50,7 +49,6 @@ class ServiceFactory:
 
         # Pipelines & Engines
         self.query_handler = GraphQueryHandler(neo4j_client=self.neo4j_client)
-        self.routing_engine = RoutingDecisionEngine(self.deepseek_client)
         self.result_fusion = ResultFusion()
         self.scientific_reranker = None
         self.attribution_tracker = None

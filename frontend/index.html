@@ -967,8 +967,6 @@ function renderSearchResults(d) {
     html += `<div class="results-header">
         <h3>${d.results_found} results found</h3>
         <div class="results-meta">
-            <span class="meta-pill">${d.routing_used || d.routing_strategy || ''}</span>
-            <span class="meta-pill">${d.query_type || ''}</span>
             ${d.graph_template_used ? `<span class="meta-pill">🕸️ Template</span>` : ''}
             <span class="meta-pill green">⏱ ${d.search_time_seconds?.toFixed(2) || '?'}s</span>
             ${d.response_generation_time_seconds ? `<span class="meta-pill amber">🤖 AI: ${d.response_generation_time_seconds.toFixed(2)}s</span>` : ''}
