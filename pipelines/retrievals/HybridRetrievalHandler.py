@@ -139,8 +139,13 @@ class HybridRetrievalHandler:
             print(f"❌ Search failed: {e}")
             return []
 
-    async def execute_hybrid_search(self, query: str, top_k: int, template_cypher: str = None) -> List[Dict]:
-        """Execute graph search using Cypher query with intelligent query parsing and caching."""
+    async def execute_hybrid_search(self, query: str, top_k: int, template_cypher: str = None) -> tuple:
+        """Execute graph search using Cypher query with intelligent query parsing and caching.
+
+        Returns:
+            (results, template_info) tuple where template_info is a dict with
+            'template_key' and 'description' of the graph template used.
+        """
         if self.performance_monitor:
             with self.performance_monitor.track_operation('graph_search'):
                 return await self._execute_hybrid_search_internal(query, top_k, template_cypher)
@@ -369,8 +374,14 @@ class HybridRetrievalHandler:
                 params[param] = param_defaults[param]
         return params
 
-    async def _execute_hybrid_search_internal(self, query: str, top_k: int, template_cypher: str = None) -> List[Dict]:
-        """Internal graph search implementation with caching."""
+    async def _execute_hybrid_search_internal(self, query: str, top_k: int, template_cypher: str = None) -> tuple:
+        """Internal graph search implementation with caching.
+
+        Returns:
+            (results, template_info) tuple where template_info is a dict with
+            'template_key' and 'description' of the graph template used.
+        """
+        template_info = {"template_key": None, "description": None}
         try:
             # Check cache first
             if self.cache_manager:
@@ -382,22 +393,27 @@ class HybridRetrievalHandler:
                         self.performance_monitor.record_cache_hit('search', True)
                         self.performance_monitor.record_result_count('graph', len(cached_results))
                     logger.debug(f"Graph search cache hit for: {query[:50]}...")
-                    return cached_results
+                    return cached_results, template_info
 
             if self.performance_monitor:
                 self.performance_monitor.record_cache_hit('search', False)
 
             if not self.graph_handler:
                 logger.error("Graph handler not initialized")
-                return []
+                return [], template_info
 
             # Parse the query intelligently based on patterns
-            cypher_query, parameters = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
+            cypher_query, parameters, template_key = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
+
+            # Build template info
+            template_desc = self.GRAPH_TEMPLATES.get(template_key, {}).get('description', template_key)
+            template_info = {"template_key": template_key, "description": template_desc}
 
             # Debug logging
             logger.info(f"Graph search query: {query}")
             logger.info(f"Generated Cypher: {cypher_query}")
             logger.info(f"Parameters: {parameters}")
+            logger.info(f"Template used: {template_key} — {template_desc}")
 
             results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
             logger.info(f"Graph search returned {len(results)} results")
@@ -411,10 +427,10 @@ class HybridRetrievalHandler:
             if self.performance_monitor:
                 self.performance_monitor.record_result_count('graph', len(results))
 
-            return results
+            return results, template_info
         except Exception as e:
             logger.error(f"Graph search error: {e}")
-            return []
+            return [], template_info
 
     def _extract_author_names(self, query: str) -> List[str]:
         """Fallback regex-based author name extraction."""
@@ -844,7 +860,7 @@ Respond with ONLY the template name, nothing else."""
         6. Cache and return
 
         Returns:
-            (cypher_query, parameters) tuple
+            (cypher_query, parameters, template_key) tuple
         """
         try:
             # Check Cypher cache first
@@ -853,7 +869,7 @@ Respond with ONLY the template name, nothing else."""
                 if cached is not None:
                     cypher_query, parameters = cached
                     logger.info(f"Cypher cache HIT for: {query[:50]}...")
-                    return cypher_query, parameters
+                    return cypher_query, parameters, "cached"
 
             # Step 1: Extract entities from the query
             extracted = self._extract_all_entities(query)
@@ -881,7 +897,7 @@ Respond with ONLY the template name, nothing else."""
                         )
                         if self.cache_manager:
                             self.cache_manager.cache_cypher(query, top_k, refined_cypher, parameters)
-                        return refined_cypher, parameters
+                        return refined_cypher, parameters, "raw_cypher"
             else:
                 template_key = await self._select_template_with_ai(query, extracted)
             logger.info(f"Selected template: {template_key}")
@@ -935,7 +951,7 @@ Respond with ONLY the template name, nothing else."""
             if self.cache_manager:
                 self.cache_manager.cache_cypher(query, top_k, cypher_query, parameters)
 
-            return cypher_query, parameters
+            return cypher_query, parameters, template_key
 
         except Exception as e:
             logger.error(f"Error in intelligent Cypher generation: {e}")
@@ -943,10 +959,10 @@ Respond with ONLY the template name, nothing else."""
             paper_ids = await self._vector_first_paper_ids(query, top_k) if self.milvus_client else None
             if paper_ids:
                 return self.GRAPH_TEMPLATES['search_by_paper_ids']['cypher'].strip(), \
-                    {"paper_ids": paper_ids, "limit": top_k}
+                    {"paper_ids": paper_ids, "limit": top_k}, "search_by_paper_ids"
             keywords = self._extract_keywords(query)
             return self.GRAPH_TEMPLATES['search_by_keywords']['cypher'].strip(), \
-                {"keywords": keywords or [query], "limit": top_k}
+                {"keywords": keywords or [query], "limit": top_k}, "search_by_keywords"
 
     async def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
         """Run vector search to extract relevant paper IDs for graph enrichment.
@@ -1022,8 +1038,16 @@ Respond with ONLY the template name, nothing else."""
             self,
             query: str,
             search_results: List,
+            template_info: Optional[Dict] = None,
     ) -> Optional[str]:
-        """Generate AI response from vector and graph searches."""
+        """Generate AI response from vector and graph searches.
+
+        Args:
+            query: The user's natural language query
+            search_results: List of search result objects or dicts
+            template_info: Optional dict with 'template_key' and 'description'
+                           of the graph template used for retrieval
+        """
         try:
             if not self.ai_agent:
                 logger.info("AI Agent is not available for response generation")
@@ -1058,18 +1082,28 @@ Respond with ONLY the template name, nothing else."""
                         "doi": result.get("doi", "") or ""
                     })
 
-            system_prompt = "You are a research assistant. Be accurate and concise."
-            prompt = f"""Answer this question based on the search results: "{query}"
+            # Build template-aware context for the prompt
+            template_context = ""
+            if template_info and template_info.get("template_key"):
+                tpl_key = template_info["template_key"]
+                tpl_desc = template_info.get("description", tpl_key)
+                template_context = f"\nRetrieval Strategy: {tpl_key} — {tpl_desc}"
 
-                Search Results:
-                {self._format_papers_for_prompt(context_papers[:4])}
-                
-                Instructions:
-                - Answer directly in 3-5 sentences
-                - Cite specific papers and authors when relevant
-                - Be accurate — only use information from the provided results
-                
-                Answer:"""
+            # Build template-specific instructions
+            template_instructions = self._get_template_specific_instructions(template_info)
+
+            system_prompt = "You are a research assistant specializing in academic literature. Be accurate, concise, and tailor your response to the type of query."
+            prompt = f"""Answer this question based on the search results: "{query}"
+{template_context}
+
+Search Results:
+{self._format_papers_for_prompt(context_papers[:4])}
+
+Instructions:
+{template_instructions}
+- Be accurate — only use information from the provided results
+
+Answer:"""
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
@@ -1083,12 +1117,90 @@ Respond with ONLY the template name, nothing else."""
                 logger.error("Empty response from Llama for AI generation")
                 return None
 
-            logger.info(f"Generated AI response of {len(ai_answer)} characters")
+            logger.info(f"Generated AI response of {len(ai_answer)} characters (template: {template_info})")
             return ai_answer
 
         except Exception as e:
             logger.error(f"Error generating AI response: {e}")
             return None
+
+    def _get_template_specific_instructions(self, template_info: Optional[Dict] = None) -> str:
+        """Return tailored generation instructions based on the graph template used."""
+        if not template_info or not template_info.get("template_key"):
+            return (
+                "- Answer directly in 3-5 sentences\n"
+                "- Cite specific papers and authors when relevant"
+            )
+
+        tpl_key = template_info["template_key"]
+
+        instructions_map = {
+            "search_by_paper_ids": (
+                "- Provide details about the requested paper(s): title, authors, venue, year, and DOI\n"
+                "- Include citation count if available\n"
+                "- Summarize the paper's main contribution from its abstract"
+            ),
+            "search_by_author": (
+                "- List the papers found for the requested author(s)\n"
+                "- Highlight the author's most cited or notable works\n"
+                "- Mention venues and publication years"
+            ),
+            "search_by_keywords": (
+                "- Summarize the key findings across the retrieved papers\n"
+                "- Group results by sub-topic if applicable\n"
+                "- Cite specific papers and authors when relevant"
+            ),
+            "search_citations": (
+                "- List the citation relationships found\n"
+                "- Identify which papers cite which, and describe the connections\n"
+                "- Highlight any influential papers in the citation chain"
+            ),
+            "coauthor_network": (
+                "- Describe the collaboration between the mentioned authors\n"
+                "- List co-authored papers with titles and years\n"
+                "- Note the venues where their joint work was published"
+            ),
+            "search_by_venue": (
+                "- List papers found in the requested venue/journal/conference\n"
+                "- Highlight the most cited papers from that venue\n"
+                "- Mention key authors and topics"
+            ),
+            "search_by_institution": (
+                "- List papers associated with the requested institution\n"
+                "- Highlight notable authors and research areas\n"
+                "- Mention publication venues and years"
+            ),
+            "search_by_year": (
+                "- List papers from the requested year/period\n"
+                "- Highlight the most impactful publications\n"
+                "- Note trends or common topics in that timeframe"
+            ),
+            "search_by_year_range": (
+                "- List papers from the requested time range\n"
+                "- Highlight the most impactful publications\n"
+                "- Note trends or common topics across the period"
+            ),
+            "search_author_by_keywords": (
+                "- List the author's papers matching the requested topic\n"
+                "- Summarize how the author's work relates to the topic\n"
+                "- Cite specific papers with titles and years"
+            ),
+            "top_cited_papers": (
+                "- List the most cited papers with their citation counts\n"
+                "- Briefly describe each paper's contribution\n"
+                "- Mention authors and venues"
+            ),
+            "author_venue_stats": (
+                "- List the venues/journals where the author has published\n"
+                "- Include paper counts per venue if available\n"
+                "- Highlight the author's primary publication outlets"
+            ),
+        }
+
+        return instructions_map.get(tpl_key, (
+            "- Answer directly in 3-5 sentences\n"
+            "- Cite specific papers and authors when relevant"
+        ))
 
 
     def _format_papers_for_prompt(papers: List[Dict]) -> str:

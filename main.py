@@ -537,11 +537,13 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         fusion_start = datetime.now()
 
-        hybrid_results = await factory.retrieval_handler.execute_graph_search(
+        hybrid_results, template_info = await factory.retrieval_handler.execute_hybrid_search(
             query=request.query,
             template_cypher=request.graph_template,
             top_k=request.top_k
         )
+
+        logger.info(f"Template used: {template_info}")
 
         with factory.performance_monitor.track_operation('fusion'):
             fused_results = factory.result_fusion.fuse_results(
@@ -605,8 +607,9 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
                 factory.performance_monitor.record_cache_hit('ai_response', False)
                 with factory.performance_monitor.track_operation('ai_response'):
                     # 1. Generate the raw synthesis
-                    ai_response = await factory.retrieval_handler.generate_ai_response(request.query, fused_results,
-                                                                                       )
+                    ai_response = await factory.retrieval_handler.generate_ai_response(
+                        request.query, fused_results, template_info=template_info
+                    )
 
                     # if ai_response:
                     # # 2. PERFORM SCIFACT VERIFICATION FIRST (Week 5/7 requirement)
@@ -644,7 +647,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             response_generation_time_seconds=response_generation_time,
             results=fused_results,
             ai_response=ai_response,
-            graph_template_used=request.graph_template if request.graph_template else None,
+            graph_template_used=template_info.get('template_key') or request.graph_template or None,
             fusion_stats=fusion_stats,
             attribution_stats=attribution_stats
         )
