@@ -6,7 +6,6 @@ with intelligent query routing and AI response generation.
 """
 
 from typing import Dict, List, Optional
-from models.entities.retrieval.QueryType import QueryType
 import logging
 import os
 import re
@@ -350,7 +349,8 @@ class HybridRetrievalHandler:
         # No LIMIT found — add at the end
         return cypher.rstrip().rstrip(';') + f"\nLIMIT {top_k}"
 
-    def _build_default_params(self, cypher: str, top_k: int) -> Dict:
+    @staticmethod
+    def _build_default_params(cypher: str, top_k: int) -> Dict:
         """Scan a Cypher query for $param references and return a dict with safe defaults.
 
         This prevents Neo4j ParameterMissing errors when executing templates that
@@ -432,7 +432,8 @@ class HybridRetrievalHandler:
             logger.error(f"Graph search error: {e}")
             return [], template_info
 
-    def _extract_author_names(self, query: str) -> List[str]:
+    @staticmethod
+    def _extract_author_names(query: str) -> List[str]:
         """Fallback regex-based author name extraction."""
         author_names = []
 
@@ -471,7 +472,8 @@ class HybridRetrievalHandler:
 
         return unique_names
 
-    def _extract_keywords(self, query: str) -> List[str]:
+    @staticmethod
+    def _extract_keywords(query: str) -> List[str]:
         """Extract meaningful keywords from query text."""
         # Remove common stop words and query patterns
         stop_words = {
@@ -680,7 +682,8 @@ Respond with ONLY the template name, nothing else."""
 
         return self._select_template_by_rules(extracted)
 
-    def _select_template_by_rules(self, extracted: Dict) -> str:
+    @staticmethod
+    def _select_template_by_rules(extracted: Dict) -> str:
         """Rule-based fallback for template selection when AI is unavailable.
 
         Args:
@@ -1025,10 +1028,6 @@ Respond with ONLY the template name, nothing else."""
                 "top_k": top_k
             })
 
-            # # Add relevance scores based on graph distance
-            # for result in results:
-            #     result['relevance_score'] = 0.7  # Higher score for graph-refined results
-
             return results
         except Exception as e:
             logger.error(f"Graph refinement error: {e}")
@@ -1202,27 +1201,6 @@ Answer:"""
             "- Cite specific papers and authors when relevant"
         ))
 
-
-    def _format_papers_for_prompt(papers: List[Dict]) -> str:
-        """Format papers for inclusion in Gemini prompt."""
-        formatted_papers = []
-
-        for i, paper in enumerate(papers, 1):
-            authors = paper.get("authors", [])
-            authors_str = ", ".join(authors[:3])
-            if len(authors) > 3:
-                authors_str += " et al."
-
-            paper_text = f"""{i}. Title: {paper.get('title', 'N/A')}
-           Authors: {authors_str or 'N/A'}
-           Venue: {paper.get('venue', 'N/A')}
-           Date: {paper.get('publication_date', 'N/A')}
-           Relevance: {paper.get('relevance_score', 0):.2f}
-           Abstract: {paper.get('abstract', 'N/A')}"""
-
-            formatted_papers.append(paper_text)
-
-        return "\n\n".join(formatted_papers)
     async def verify_claims_scifact(self, ai_answer: str, context_papers: List) -> List[Dict]:
         """
         Implements SciFact-style verification by breaking the AI response into
@@ -1304,7 +1282,8 @@ Answer:"""
             logger.error(f"Error in claim extraction: {e}")
             return []
 
-    def _format_papers_for_prompt(self, papers: List[Dict]) -> str:
+    @staticmethod
+    def _format_papers_for_prompt(papers: List[Dict]) -> str:
         """Format papers for inclusion in response generation."""
         formatted_papers = []
 

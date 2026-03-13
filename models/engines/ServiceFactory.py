@@ -15,10 +15,9 @@ from pipelines.retrievals.HybridRetrievalHandler import HybridRetrievalHandler
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
 from models.engines.ResultFusion import ResultFusion
 from models.engines.ScientificReranker import ScientificReranker
-from models.engines.AttributionTracker import AttributionTracker
 from models.engines.CacheManager import CacheManager
 from models.engines.PerformanceMonitor import PerformanceMonitor
-from pipelines.evaluation.SciMMIRBenchmarkIntegration import (
+from pipelines.evaluation.SciMMIRBenchmarkEvaluator import (
     SciMMIRBenchmarkResult,
     SciMMIRResultAnalyzer,
     SciMMIRDataLoader,
