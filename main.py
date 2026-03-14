@@ -19,7 +19,6 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from pydantic import BaseModel
 import logging
-import asyncio
 
 # Import handlers
 from models.entities.ingestion.PaperRequest import PaperRequest
@@ -551,18 +550,27 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         # Limit to requested number of results
         fused_results = fused_results[:request.top_k]
-
+        # reranking_time = None
+        # if request.enable_reranking and factory.scientific_reranker:
+        #     reranking_start = datetime.now()
+        #     # Use selective reranking with limited candidates for speed
+        #     fused_results = await factory.scientific_reranker.rerank_results(
+        #         fused_results, request.query,
+        #         selective=True,  # Enable selective reranking
+        #         max_rerank_candidates=20  # Limit candidates for speed
+        #     )
+        #     reranking_time = (datetime.now() - reranking_start).total_seconds()
         # Step 4: Selective reranking (only when beneficial)
-        reranking_time = None
-        if request.enable_reranking and factory.scientific_reranker:
-            reranking_start = datetime.now()
-            # Use selective reranking with limited candidates for speed
-            fused_results = await factory.scientific_reranker.rerank_results(
-                fused_results, request.query,
-                selective=True,  # Enable selective reranking
-                max_rerank_candidates=20  # Limit candidates for speed
-            )
-            reranking_time = (datetime.now() - reranking_start).total_seconds()
+        # reranking_time = None
+        # if request.enable_reranking and factory.scientific_reranker:
+        #     reranking_start = datetime.now()
+        #     # Use selective reranking with limited candidates for speed
+        #     fused_results = await factory.scientific_reranker.rerank_results(
+        #         fused_results, request.query,
+        #         selective=True,  # Enable selective reranking
+        #         max_rerank_candidates=20  # Limit candidates for speed
+        #     )
+        #     reranking_time = (datetime.now() - reranking_start).total_seconds()
 
         # Step 5: Calculate statistics
         total_time = (datetime.now() - start_time).total_seconds()
@@ -574,15 +582,15 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             'fusion_weights': request.fusion_weights or factory.result_fusion.default_weights
         }
 
-        attribution_stats = {
-            'total_attributions': sum(len(r.attributions) for r in fused_results),
-            'high_confidence_attributions': sum(
-                1 for r in fused_results
-                for a in r.attributions
-                if a.confidence > factory.attribution_tracker.confidence_threshold
-            ),
-            'attribution_enabled': request.enable_attribution
-        }
+        # attribution_stats = {
+        #     'total_attributions': sum(len(r.attributions) for r in fused_results),
+        #     'high_confidence_attributions': sum(
+        #         1 for r in fused_results
+        #         for a in r.attributions
+        #         if a.confidence > factory.attribution_tracker.confidence_threshold
+        #     ),
+        #     'attribution_enabled': request.enable_attribution
+        # }
 
         # Step 6: Generate AI response with caching
         ai_response = None
@@ -638,13 +646,13 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             results_found=len(fused_results),
             search_time_seconds=total_time,
             fusion_time_seconds=fusion_time,
-            reranking_time_seconds=reranking_time,
+            # reranking_time_seconds=reranking_time,
             response_generation_time_seconds=response_generation_time,
             results=fused_results,
             ai_response=ai_response,
             graph_template_used=template_info.get('template_key') or request.graph_template or None,
             fusion_stats=fusion_stats,
-            attribution_stats=attribution_stats
+            # attribution_stats=attribution_stats
         )
 
     except Exception as e:
@@ -1196,7 +1204,6 @@ async def run_scimmir_benchmark(
         # Run SciMMIR benchmark with memory-efficient options — offload to thread pool
         result = await run_blocking(
             factory.run_scimmir_benchmark_suite,
-            limit_samples=limit_samples,
             cache_dir="./data/scimmir_cache",
             report_path="./data/scimmir_benchmark_report.md" if generate_report else None,
         )

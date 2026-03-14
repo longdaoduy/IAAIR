@@ -68,7 +68,6 @@ class ServiceFactory:
 
     def run_scimmir_benchmark_suite(
             self,
-            limit_samples: int = 50,
             cache_dir: str = "./data/scimmir_cache",
             report_path: str = "./data/scimmir_benchmark_report.md",
     ) -> SciMMIRBenchmarkResult:
