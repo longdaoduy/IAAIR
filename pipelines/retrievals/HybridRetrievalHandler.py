@@ -1211,6 +1211,7 @@ Respond with ONLY the template name, nothing else."""
             query: str,
             search_results: List,
             template_info: Optional[Dict] = None,
+            visual_evidence: Optional[Dict] = None,
     ) -> Optional[str]:
         """Generate AI response from vector and graph searches.
 
@@ -1274,7 +1275,6 @@ Respond with ONLY the template name, nothing else."""
 
 Search Results:
 {self._format_papers_for_prompt(context_papers[:4])}
-{visual_context}
 
 Instructions:
 {template_instructions}
