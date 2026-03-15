@@ -32,7 +32,8 @@ class HybridRetrievalHandler:
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
-        self.answer_agent = None
+        self.answer_agent = LLMClient()
+        self.template_agent = LLMClient()
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
         self.clip_client = clip_client
@@ -743,7 +744,7 @@ Rephrased description:"""
         Returns:
             Template key name from GRAPH_TEMPLATES
         """
-        if not self.ai_agent:
+        if not self.template_agent:
             return self._select_template_by_rules(extracted)
 
         # Paraphrase the query into a description-like format
@@ -846,7 +847,7 @@ Respond with ONLY the template name, nothing else."""
 
         try:
             response = await run_blocking(
-                self.ai_agent.generate_content,
+                self.template_agent.generate_content,
                 prompt=prompt,
                 system_prompt="You are a query router. Respond with only the template name.",
                 purpose='template_selection'
@@ -1235,7 +1236,7 @@ Respond with ONLY the template name, nothing else."""
                              and 'paper_visual_scores' from cross-modal visual search
         """
         try:
-            if not self.ai_agent:
+            if not self.answer_agent:
                 logger.info("AI Agent is not available for response generation")
                 return None
 
@@ -1324,7 +1325,7 @@ Answer:"""
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
-                self.ai_agent.generate_content,
+                self.answer_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
                 purpose='answer_synthesis'
