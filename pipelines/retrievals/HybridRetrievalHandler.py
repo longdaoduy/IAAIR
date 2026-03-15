@@ -720,10 +720,7 @@ Cleaned query:"""
         return re.sub(r'[?!.;:]+', '', query).strip()
 
     async def _select_template_with_ai(self, query: str, extracted: Dict) -> str:
-        """Use AI agent to select the best neo4j template for the user's query.
-
-        The query is first paraphrased into a clean description format (no special
-        characters) to match the style of template descriptions and few-shot examples.
+        """Use AI agent to select the best graph template for the user's query.
 
         Args:
             query: User's natural language query
@@ -734,8 +731,6 @@ Cleaned query:"""
         """
         if not self.ai_agent:
             return self._select_template_by_rules(extracted)
-
-        # Paraphrase the query into a description-like format
 
         # Build template catalog for the AI
         template_list = []
@@ -755,66 +750,66 @@ Extracted entities: {entities_str}
 Available templates:
 {templates_str}
 
-Here are example queries (described as clean descriptions) and their correct template:
+Here are example queries and their correct template:
 
-Description: Retrieve the authors of paper W1775749144
+Query: "Who are the authors of paper W1775749144?"
 Template: search_by_paper_ids
 
-Description: Find papers authored by Kaiming He
+Query: "What papers has Kaiming He authored?"
 Template: search_by_author
 
-Description: Find papers that cite W2128635872
+Query: "Which papers cite W2128635872?"
 Template: search_citations
 
-Description: Get the citation count for paper W2100837269
+Query: "How many citations does paper W2100837269 have?"
 Template: search_by_paper_ids
 
-Description: Find the venue that published paper W3038568908
+Query: "What venue published paper W3038568908?"
 Template: search_by_paper_ids
 
-Description: Retrieve papers published in Nature
+Query: "Which papers were published in Nature?"
 Template: search_by_venue
 
-Description: Retrieve papers published in Analytical Biochemistry
+Query: "What papers were published in Analytical Biochemistry?"
 Template: search_by_venue
 
-Description: Find papers co-authored by Georg Kresse and J Furthmuller
+Query: "Which papers were co-authored by Georg Kresse and J. Furthmüller?"
 Template: coauthor_network
 
-Description: Find papers co-authored by Kaiming He and Jian Sun
+Query: "What papers are co-authored by Kaiming He and Jian Sun?"
 Template: coauthor_network
 
-Description: Find the paper with the highest citation count
+Query: "Which paper has the highest citation count?"
 Template: top_cited_papers
 
-Description: Get the DOI of paper W1979290264
+Query: "What is the DOI of paper W1979290264?"
 Template: search_by_paper_ids
 
-Description: Get the publication year of paper W2107277218
+Query: "What is the publication year of paper W2107277218?"
 Template: search_by_paper_ids
 
-Description: Papers about protein quantification methods
+Query: "papers about protein quantification methods"
 Template: search_by_keywords
 
-Description: Research on deep learning architectures for computer vision
+Query: "Research on deep learning architectures for computer vision"
 Template: search_by_keywords
 
-Description: Papers by Kaiming He about deep learning
+Query: "papers by Kaiming He about deep learning"
 Template: search_author_by_keywords
 
-Description: Papers discussing bioinformatics algorithms
+Query: "What papers discuss bioinformatics algorithms?"
 Template: search_by_keywords
 
-Description: Papers from Stanford University
+Query: "papers from Stanford University"
 Template: search_by_institution
 
-Description: Papers published since 2020
+Query: "papers published since 2020"
 Template: search_by_year_range
 
-Description: Papers published in 2023
+Query: "papers published in 2023"
 Template: search_by_year
 
-Description: Journals where Stephen F Altschul publishes
+Query: "which journals does Stephen F. Altschul publish in?"
 Template: author_venue_stats
 
 Rules (use if no example above matches):

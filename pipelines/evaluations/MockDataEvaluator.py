@@ -93,7 +93,6 @@ class MockDataEvaluator:
                     ai_response = await self.service_factory.retrieval_handler.generate_ai_response(
                         query=question,
                         search_results=search_results,
-                        query_type=QueryType.STRUCTURAL if question_data['type'] == 'neo4j' else QueryType.SEMANTIC,
                     )
                     ai_generation_time = time.time() - ai_start_time
 
