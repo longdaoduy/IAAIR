@@ -539,7 +539,7 @@ class HybridRetrievalHandler:
 
             if len(results) > 0:
                 visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
-            if len(results) < top_k and template_key == 'search_by_keywords':
+            if (len(results)  == 0) or (len(results) < top_k and template_key == 'search_by_keywords'):
                 sorted_ids, visual_data = await self.execute_multimodal_vector_search(
                     query, keywords, top_k - len(results)
                 )
@@ -1627,20 +1627,45 @@ Answer:"""
                     except Exception as e:
                         logger.debug(f"Description table search failed: {e}")
 
-            # 3. Filter results to only keep figures/tables belonging to vector search papers
-            # Debug: log paper_ids from visual results vs allowed paper_ids
+            # 3. Try to filter results to figures/tables belonging to search papers,
+            #    but fall back to unscoped results when there's no overlap.
+            #    The figures/tables collections may contain papers not in the
+            #    text search results, so strict filtering can eliminate everything.
             visual_fig_pids = set(r.get('paper_id') for r in figure_results if r.get('paper_id'))
             visual_tab_pids = set(r.get('paper_id') for r in table_results if r.get('paper_id'))
+            fig_intersection = visual_fig_pids & allowed_pids
+            tab_intersection = visual_tab_pids & allowed_pids
             logger.info(
                 f"Visual filter debug — "
                 f"allowed_pids ({len(allowed_pids)}): {list(allowed_pids)[:5]}, "
                 f"figure paper_ids ({len(visual_fig_pids)}): {list(visual_fig_pids)[:5]}, "
                 f"table paper_ids ({len(visual_tab_pids)}): {list(visual_tab_pids)[:5]}, "
-                f"intersection figs: {visual_fig_pids & allowed_pids}, "
-                f"intersection tabs: {visual_tab_pids & allowed_pids}"
+                f"intersection figs: {fig_intersection}, "
+                f"intersection tabs: {tab_intersection}"
             )
-            figure_results = [r for r in figure_results if r.get('paper_id') in allowed_pids]
-            table_results = [r for r in table_results if r.get('paper_id') in allowed_pids]
+
+            scoped_figs = [r for r in figure_results if r.get('paper_id') in allowed_pids]
+            scoped_tabs = [r for r in table_results if r.get('paper_id') in allowed_pids]
+
+            if scoped_figs or scoped_tabs:
+                # Use scoped results when there is overlap
+                figure_results = scoped_figs
+                table_results = scoped_tabs
+                logger.info("Visual filter: using scoped results (overlap found)")
+            else:
+                # Fallback: keep the top unscoped results ranked by similarity
+                # so the UI still shows relevant visual evidence
+                figure_results = sorted(
+                    figure_results, key=lambda r: r.get('similarity_score', 0), reverse=True
+                )[:top_k]
+                table_results = sorted(
+                    table_results, key=lambda r: r.get('similarity_score', 0), reverse=True
+                )[:top_k]
+                logger.info(
+                    f"Visual filter: no overlap with search papers — "
+                    f"falling back to top {len(figure_results)} figures, "
+                    f"{len(table_results)} tables (unscoped)"
+                )
 
             # 4. Build per-paper visual scores from matched visual evidence
             for r in figure_results + table_results:
