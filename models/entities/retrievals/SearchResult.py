@@ -18,6 +18,11 @@ class SearchResult(BaseModel):
     vector_score: Optional[float] = None
     graph_score: Optional[float] = None
     rerank_score: Optional[float] = None
+    visual_score: Optional[float] = None  # Cross-modal visual evidence score
+    # Visual evidence linked to this paper
+    matched_figures: int = 0
+    matched_tables: int = 0
+    visual_evidence: List[Dict] = []  # List of matched figures/tables with descriptions
     # Attribution and provenance
     attributions: List[AttributionSpan] = []
     source_path: List[str] = []  # Retrieval path for provenance

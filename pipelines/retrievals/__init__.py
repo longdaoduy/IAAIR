@@ -6,4 +6,3 @@ This module handles various retrievals strategies including:
 - Vector-based retrievals using Milvus
 - Hybrid fusion approaches
 """
-from . import GraphQueryHandler

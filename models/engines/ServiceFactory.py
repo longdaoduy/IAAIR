@@ -33,7 +33,7 @@ class ServiceFactory:
         self.scibert_client = SciBERTClient()
         self.clip_client = None
         self.mongo_client = None
-        self.deepseek_client = LLMClient()
+        self.llms_client = LLMClient()
 
         # Performance & Caching
         self.cache_manager = CacheManager(
@@ -55,7 +55,7 @@ class ServiceFactory:
         self.retrieval_handler = HybridRetrievalHandler(
             self.milvus_client,
             self.neo4j_client,
-            self.deepseek_client,
+            self.llms_client,
             self.scibert_client,
             self.cache_manager,
             self.performance_monitor,

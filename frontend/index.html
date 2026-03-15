@@ -963,6 +963,11 @@ function renderSearchResults(d) {
     const div = document.getElementById('searchResults');
     let html = '';
 
+    const vs = d.visual_stats || {};
+    const hasFigs = (vs.figures_found || 0) > 0;
+    const hasTabs = (vs.tables_found || 0) > 0;
+    const hasVisual = hasFigs || hasTabs;
+
     // Header
     html += `<div class="results-header">
         <h3>${d.results_found} results found</h3>
@@ -970,6 +975,7 @@ function renderSearchResults(d) {
             ${d.graph_template_used ? `<span class="meta-pill">🕸️ Template</span>` : ''}
             <span class="meta-pill green">⏱ ${d.search_time_seconds?.toFixed(2) || '?'}s</span>
             ${d.response_generation_time_seconds ? `<span class="meta-pill amber">🤖 AI: ${d.response_generation_time_seconds.toFixed(2)}s</span>` : ''}
+            ${hasVisual ? `<span class="meta-pill" style="background:rgba(99,102,241,0.15);color:var(--accent-light);border-color:rgba(99,102,241,0.3)">🖼️ ${vs.figures_found || 0} figures · 📊 ${vs.tables_found || 0} tables</span>` : ''}
         </div>
     </div>`;
 
@@ -978,6 +984,28 @@ function renderSearchResults(d) {
         html += `<div class="ai-response">
             <div class="ai-response-header"><span class="icon">✨</span><h4>AI-Generated Answer</h4></div>
             <div class="ai-response-body">${escHtml(d.ai_response)}</div></div>`;
+    }
+
+    // Visual Evidence Section (cross-modal figures & tables)
+    const visualResults = d.visual_results || [];
+    if (visualResults.length > 0) {
+        html += `<div class="ai-response" style="border-color:rgba(99,102,241,0.3);background:rgba(99,102,241,0.05)">
+            <div class="ai-response-header"><span class="icon">🖼️</span><h4>Visual Evidence (${visualResults.length} matches)</h4></div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">`;
+        for (const v of visualResults.slice(0, 8)) {
+            const vScore = ((v.similarity_score || 0) * 100).toFixed(1);
+            const vType = (v.collection === 'figures') ? '🖼️ Figure' : '📊 Table';
+            const vDesc = (v.description || '').substring(0, 120) + ((v.description || '').length > 120 ? '...' : '');
+            html += `<div style="flex:1;min-width:280px;max-width:360px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:12px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                    <span style="font-weight:600;color:var(--text)">${vType}</span>
+                    <span style="color:var(--accent-light);font-size:11px">${vScore}% match</span>
+                </div>
+                <div style="color:var(--text-muted);line-height:1.4">${escHtml(vDesc)}</div>
+                ${v.paper_id ? `<div style="margin-top:4px;color:var(--text-dim);font-size:11px">📄 ${escHtml(v.paper_id)}</div>` : ''}
+            </div>`;
+        }
+        html += `</div></div>`;
     }
 
     // Paper cards
@@ -993,6 +1021,12 @@ function renderSearchResults(d) {
             const titleHtml = hasPdf
                 ? `<a href="${escHtml(pdfUrl)}" target="_blank" rel="noopener noreferrer" title="Open PDF">${escHtml(p.title || 'Untitled')}</a>`
                 : escHtml(p.title || 'Untitled');
+
+            // Visual evidence badges for this paper
+            const pFigs = p.matched_figures || 0;
+            const pTabs = p.matched_tables || 0;
+            const pVisual = p.visual_score || 0;
+            const hasVisualEvidence = pFigs > 0 || pTabs > 0;
 
             html += `<div class="paper-card ${hasPdf ? 'has-link' : ''}" ${hasPdf ? `onclick="if(event.target.tagName!=='A')window.open('${escHtml(pdfUrl)}','_blank')"` : ''}>
                 <div class="paper-card-header">
@@ -1012,8 +1046,22 @@ function renderSearchResults(d) {
                     ${p.paper_id ? `<span class="paper-meta-item">📄 ${escHtml(p.paper_id)}</span>` : ''}
                     ${p.vector_score != null ? `<span class="paper-meta-item">Vec: ${p.vector_score.toFixed(3)}</span>` : ''}
                     ${p.graph_score != null ? `<span class="paper-meta-item">Graph: ${p.graph_score.toFixed(3)}</span>` : ''}
+                    ${pVisual > 0 ? `<span class="paper-meta-item" style="color:var(--accent-light)">🖼️ Visual: ${pVisual.toFixed(3)}</span>` : ''}
+                    ${hasVisualEvidence ? `<span class="paper-meta-item" style="color:var(--accent-light)">${pFigs > 0 ? pFigs + ' fig' + (pFigs > 1 ? 's' : '') : ''}${pFigs > 0 && pTabs > 0 ? ' · ' : ''}${pTabs > 0 ? pTabs + ' table' + (pTabs > 1 ? 's' : '') : ''}</span>` : ''}
                 </div>
             </div>`;
+
+            // Inline visual evidence for this paper (collapsible)
+            if (p.visual_evidence && p.visual_evidence.length > 0) {
+                html += `<div style="margin:-8px 0 12px 16px;padding:8px 12px;background:rgba(99,102,241,0.05);border-left:3px solid rgba(99,102,241,0.3);border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:12px">`;
+                html += `<div style="font-weight:600;color:var(--accent-light);margin-bottom:4px">📎 Visual evidence from this paper</div>`;
+                for (const ve of p.visual_evidence.slice(0, 4)) {
+                    const veType = (ve.collection === 'figures') ? '🖼️' : '📊';
+                    const veScore = ((ve.similarity_score || 0) * 100).toFixed(1);
+                    html += `<div style="color:var(--text-muted);margin-top:4px">${veType} ${escHtml(ve.description || '')} <span style="color:var(--text-dim)">(${veScore}%)</span></div>`;
+                }
+                html += `</div>`;
+            }
         }
     }
 

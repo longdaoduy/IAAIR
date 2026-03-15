@@ -13,9 +13,45 @@ class ResultFusion:
         }
 
     def fuse_results(self, vector_results: List[Dict], graph_results: List[Dict],
-                     fusion_weights: Optional[Dict[str, float]] = None) -> List[SearchResult]:
-        """Fuse results from milvus and neo4j search."""
+                     fusion_weights: Optional[Dict[str, float]] = None,
+                     visual_data: Optional[Dict] = None) -> List[SearchResult]:
+        """Fuse results from milvus, neo4j, and cross-modal visual search.
+
+        Args:
+            vector_results: Results from milvus vector search
+            graph_results:  Results from neo4j graph search
+            fusion_weights: Optional custom fusion weights
+            visual_data:    Optional cross-modal visual search data containing:
+                            - paper_visual_scores: {paper_id: float} visual relevance boosts
+                            - figure_results: list of matched figures
+                            - table_results:  list of matched tables
+        """
         weights = fusion_weights or self.default_weights
+        visual_weight = weights.get('visual_score', 0.15)  # Default 15% visual boost
+
+        # Extract visual data
+        paper_visual_scores = {}
+        figure_results = []
+        table_results = []
+        if visual_data:
+            paper_visual_scores = visual_data.get('paper_visual_scores', {})
+            figure_results = visual_data.get('figure_results', [])
+            table_results = visual_data.get('table_results', [])
+
+        # Build per-paper visual evidence lookup
+        paper_visual_evidence: Dict[str, list] = {}
+        paper_fig_count: Dict[str, int] = {}
+        paper_tab_count: Dict[str, int] = {}
+        for r in figure_results:
+            pid = r.get('paper_id')
+            if pid:
+                paper_visual_evidence.setdefault(pid, []).append(r)
+                paper_fig_count[pid] = paper_fig_count.get(pid, 0) + 1
+        for r in table_results:
+            pid = r.get('paper_id')
+            if pid:
+                paper_visual_evidence.setdefault(pid, []).append(r)
+                paper_tab_count[pid] = paper_tab_count.get(pid, 0) + 1
 
         # Create result index by paper_id
         all_results = {}
@@ -38,6 +74,10 @@ class ResultFusion:
                 'cited_by_count': result.get('cited_by_count', 0) or 0,
                 'vector_score': result.get('distance', 0.0),
                 'graph_score': 0.0,
+                'visual_score': paper_visual_scores.get(paper_id, 0.0),
+                'matched_figures': paper_fig_count.get(paper_id, 0),
+                'matched_tables': paper_tab_count.get(paper_id, 0),
+                'visual_evidence': paper_visual_evidence.get(paper_id, []),
                 'source_path': ['vector_search']
             }
 
@@ -60,6 +100,12 @@ class ResultFusion:
                 # Update scores and path
                 existing['graph_score'] = min(result.get('relevance_score', 0.5), 1.0)
                 existing['source_path'].append('graph_search')  # Removed duplicate append
+                # Update visual fields if not already set
+                if existing.get('visual_score', 0.0) == 0.0:
+                    existing['visual_score'] = paper_visual_scores.get(paper_id, 0.0)
+                    existing['matched_figures'] = paper_fig_count.get(paper_id, 0)
+                    existing['matched_tables'] = paper_tab_count.get(paper_id, 0)
+                    existing['visual_evidence'] = paper_visual_evidence.get(paper_id, [])
             else:
                 # 3. Handle papers found ONLY in Graph
                 all_results[paper_id] = {
@@ -73,20 +119,63 @@ class ResultFusion:
                     'cited_by_count': result.get('cited_by_count', 0) or 0,
                     'vector_score': 0.0,
                     'graph_score': min(result.get('relevance_score', 0.5), 1.0),
+                    'visual_score': paper_visual_scores.get(paper_id, 0.0),
+                    'matched_figures': paper_fig_count.get(paper_id, 0),
+                    'matched_tables': paper_tab_count.get(paper_id, 0),
+                    'visual_evidence': paper_visual_evidence.get(paper_id, []),
                     'source_path': ['graph_search']
+                }
+
+        # 4. Add papers discovered ONLY through visual evidence (not in vector or graph)
+        for pid, v_score in paper_visual_scores.items():
+            if pid not in all_results:
+                all_results[pid] = {
+                    'paper_id': pid,
+                    'title': 'Unknown Title',
+                    'abstract': None,
+                    'authors': [],
+                    'venue': None,
+                    'publication_date': None,
+                    'doi': None,
+                    'cited_by_count': 0,
+                    'vector_score': 0.0,
+                    'graph_score': 0.0,
+                    'visual_score': v_score,
+                    'matched_figures': paper_fig_count.get(pid, 0),
+                    'matched_tables': paper_tab_count.get(pid, 0),
+                    'visual_evidence': paper_visual_evidence.get(pid, []),
+                    'source_path': ['visual_search']
                 }
 
         # Calculate fusion scores
         fused_results = []
         for result_data in all_results.values():
-            # Calculate weighted fusion score
+            v_score = result_data.get('visual_score', 0.0)
+
+            # Calculate weighted fusion score (with visual boost)
             raw_relevance_score = (
                     weights['vector_score'] * result_data['vector_score'] +
                     weights['graph_score'] * result_data['graph_score']
             )
+            # Add visual boost — cross-modal evidence increases paper relevance
+            if v_score > 0:
+                raw_relevance_score += visual_weight * v_score
+                if 'visual_search' not in result_data['source_path']:
+                    result_data['source_path'].append('visual_search')
 
             # Normalize the final score to ensure it's reasonable (optional cap at 1.0)
             relevance_score = min(raw_relevance_score, 1.0)
+
+            # Trim visual_evidence to essential fields for response size
+            trimmed_evidence = []
+            for ve in result_data.get('visual_evidence', [])[:6]:
+                trimmed_evidence.append({
+                    'id': ve.get('id', ''),
+                    'description': (ve.get('description', '') or '')[:200],
+                    'similarity_score': ve.get('similarity_score', 0.0),
+                    'collection': ve.get('collection', ''),
+                    'search_type': ve.get('search_type', ''),
+                })
 
             search_result = SearchResult(
                 paper_id=result_data['paper_id'],
@@ -100,12 +189,17 @@ class ResultFusion:
                 relevance_score=relevance_score,
                 vector_score=result_data['vector_score'],
                 graph_score=result_data['graph_score'],
+                visual_score=v_score,
+                matched_figures=result_data.get('matched_figures', 0),
+                matched_tables=result_data.get('matched_tables', 0),
+                visual_evidence=trimmed_evidence,
                 source_path=result_data['source_path'],
                 attributions=[],
                 confidence_scores={
                     'vector_confidence': result_data['vector_score'],
                     'graph_confidence': result_data['graph_score'],
-                    'raw_fusion_score': raw_relevance_score  # Keep track of original score
+                    'visual_confidence': v_score,
+                    'raw_fusion_score': raw_relevance_score
                 }
             )
             fused_results.append(search_result)

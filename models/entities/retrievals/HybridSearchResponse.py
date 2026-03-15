@@ -17,4 +17,7 @@ class HybridSearchResponse(BaseModel):
     ai_response: Optional[str] = None
     graph_template_used: Optional[str] = None
     fusion_stats: Dict[str, Any] = {}
+    # Visual evidence from cross-modal search
+    visual_results: List[Dict[str, Any]] = []  # Matched figures/tables
+    visual_stats: Dict[str, Any] = {}  # Visual search statistics
     # attribution_stats: Dict[str, Any] = {}

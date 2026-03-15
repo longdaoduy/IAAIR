@@ -37,14 +37,6 @@ class HybridRetrievalHandler:
         self.clip_client = clip_client
 
     async def execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
-        """Execute milvus search with performance tracking."""
-        if self.performance_monitor:
-            with self.performance_monitor.track_operation('vector_search'):
-                return await self._execute_vector_search_internal(query, top_k)
-        else:
-            return await self._execute_vector_search_internal(query, top_k)
-
-    async def _execute_vector_search_internal(self, query: str, top_k: int) -> List[Dict]:
         """Internal milvus search implementation."""
         try:
             # Check cache first
@@ -142,8 +134,11 @@ class HybridRetrievalHandler:
         """Execute neo4j search using Cypher query with intelligent query parsing and caching.
 
         Returns:
-            (results, template_info) tuple where template_info is a dict with
-            'template_key' and 'description' of the neo4j template used.
+            (results, template_info, vector_results, visual_data) tuple where template_info
+            is a dict with 'template_key' and 'description' of the neo4j template used,
+            vector_results is a list of milvus search results collected during the
+            vector-first path, and visual_data is a dict with figure_results, table_results,
+            and paper_visual_scores from cross-modal visual search.
         """
         if self.performance_monitor:
             with self.performance_monitor.track_operation('graph_search'):
@@ -253,15 +248,16 @@ class HybridRetrievalHandler:
                     # Any keyword matches (OR logic)
                     conditions.append('(' + ' OR '.join(keyword_conditions) + ')')
 
-        # 6. Extract venue name if mentioned
+        # 6. Extract venue name if mentioned (skip vague/generic descriptors)
         venue_match = re.search(
             r'(?:in|from|published\s+in|venue|journal|conference)\s+["\']?([A-Z][^"\',]{2,40})["\']?',
             query, re.IGNORECASE
         )
         if venue_match and ':Venue' in template_cypher:
             venue_name = venue_match.group(1).strip()
-            conditions.append('toLower(v.name) CONTAINS toLower($venue_name)')
-            parameters['venue_name'] = venue_name
+            if not self._is_vague_entity_name(venue_name):
+                conditions.append('toLower(v.name) CONTAINS toLower($venue_name)')
+                parameters['venue_name'] = venue_name
 
         # Build the refined Cypher
         refined_cypher = self._inject_where_conditions(template_cypher, conditions)
@@ -380,10 +376,14 @@ class HybridRetrievalHandler:
         """Internal neo4j search implementation with caching.
 
         Returns:
-            (results, template_info) tuple where template_info is a dict with
-            'template_key' and 'description' of the neo4j template used.
+            (results, template_info, vector_results, visual_data) tuple where template_info
+            is a dict with 'template_key' and 'description' of the neo4j template used,
+            vector_results is a list of milvus search results collected during the
+            vector-first path, and visual_data is a dict with figure_results, table_results,
+            and paper_visual_scores from cross-modal visual search.
         """
         template_info = {"template_key": None, "description": None}
+        empty_visual = {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
         try:
             # Check cache first
             if self.cache_manager:
@@ -395,17 +395,17 @@ class HybridRetrievalHandler:
                         self.performance_monitor.record_cache_hit('search', True)
                         self.performance_monitor.record_result_count('neo4j', len(cached_results))
                     logger.debug(f"Graph search cache hit for: {query[:50]}...")
-                    return cached_results, template_info
+                    return cached_results, template_info, [], empty_visual
 
             if self.performance_monitor:
                 self.performance_monitor.record_cache_hit('search', False)
 
             if not self.graph_handler:
                 logger.error("Graph handler not initialized")
-                return [], template_info
+                return [], template_info, [], empty_visual
 
             # Parse the query intelligently based on patterns
-            cypher_query, parameters, template_key = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
+            cypher_query, parameters, template_key, vector_results, visual_data = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
 
             # Build template info
             template_desc = self.GRAPH_TEMPLATES.get(template_key, {}).get('description', template_key)
@@ -429,10 +429,10 @@ class HybridRetrievalHandler:
             if self.performance_monitor:
                 self.performance_monitor.record_result_count('neo4j', len(results))
 
-            return results, template_info
+            return results, template_info, vector_results, visual_data
         except Exception as e:
             logger.error(f"Graph search error: {e}")
-            return [], template_info
+            return [], template_info, [], empty_visual
 
     @staticmethod
     def _extract_author_names(query: str) -> List[str]:
@@ -505,6 +505,77 @@ class HybridRetrievalHandler:
 
         return list(set(keywords))  # Remove duplicates
 
+    @staticmethod
+    def _is_vague_entity_name(name: str) -> bool:
+        """Check if a venue or institution name is a vague/generic descriptor.
+
+        Phrases like "top medical journals", "leading conferences", "major universities"
+        are qualitative descriptors — not actual entity names that can be matched
+        in the database. This method returns True for such vague names.
+
+        Args:
+            name: The venue or institution name to check
+
+        Returns:
+            True if the name is too vague/generic to be a real entity
+        """
+        name_lower = name.lower().strip()
+
+        # Vague qualifier words that indicate a generic descriptor, not a real name
+        vague_qualifiers = {
+            'top', 'leading', 'major', 'prestigious', 'high-impact', 'high impact',
+            'best', 'good', 'notable', 'prominent', 'renowned', 'well-known',
+            'well known', 'famous', 'important', 'significant', 'reputable',
+            'premier', 'elite', 'key', 'various', 'several', 'many',
+            'international', 'relevant', 'popular', 'mainstream',
+        }
+
+        # Generic category words (not specific names)
+        generic_categories = {
+            'journals', 'journal', 'conferences', 'conference', 'venues', 'venue',
+            'publications', 'publication', 'outlets', 'outlet',
+            'universities', 'university', 'institutions', 'institution',
+            'labs', 'lab', 'laboratories', 'laboratory',
+            'organizations', 'organization', 'companies', 'company',
+            'research groups', 'research labs', 'research centers',
+        }
+
+        # Check if name is just a combination of qualifiers + generic categories
+        # e.g. "top medical journals", "leading research universities"
+        words = name_lower.split()
+
+        # If any word is a vague qualifier and any word/phrase is a generic category → vague
+        has_qualifier = any(q in name_lower for q in vague_qualifiers)
+        has_category = any(c in name_lower for c in generic_categories)
+
+        if has_qualifier and has_category:
+            return True
+
+        # Also reject names that are purely generic categories (even without qualifiers)
+        # e.g. "medical journals", "computer science conferences"
+        if has_category and len(words) <= 4:
+            # Check if all non-category words are adjectives/modifiers rather than proper names
+            # A real venue name like "Nature Medicine" won't have generic categories
+            non_category_words = [w for w in words if w not in
+                                  {'journals', 'journal', 'conferences', 'conference',
+                                   'venues', 'venue', 'universities', 'university',
+                                   'institutions', 'institution', 'labs', 'lab',
+                                   'publications', 'publication', 'outlets', 'outlet',
+                                   'organizations', 'organization', 'laboratories', 'laboratory'}]
+            # If remaining words are all common adjectives (not proper nouns), it's vague
+            common_modifiers = {
+                'medical', 'scientific', 'academic', 'clinical', 'biomedical',
+                'computer', 'science', 'engineering', 'biological', 'chemical',
+                'physical', 'social', 'environmental', 'educational',
+                'top', 'leading', 'major', 'good', 'best', 'high', 'impact',
+                'peer', 'reviewed', 'peer-reviewed', 'open', 'access',
+                'research', 'technical', 'general', 'specialized', 'interdisciplinary',
+            }
+            if all(w in common_modifiers for w in non_category_words):
+                return True
+
+        return False
+
     # =========================================================================
     # GRAPH TEMPLATE LIBRARY — Loaded from data/graph_templates.json
     # =========================================================================
@@ -553,8 +624,56 @@ class HybridRetrievalHandler:
     # TEMPLATE SELECTION — AI agent picks the best template
     # =========================================================================
 
+    async def _paraphrase_query_as_description(self, query: str) -> str:
+        """Paraphrase the user's query into a clean description format.
+
+        Removes special characters (?, !, ...) and rephrases the query
+        so it reads like a template description while preserving meaning.
+        If the AI agent is unavailable, falls back to simple regex cleanup.
+
+        Args:
+            query: The user's original natural language query
+
+        Returns:
+            A cleaned, description-style version of the query
+        """
+        if not self.ai_agent:
+            # Fallback: strip special characters only
+            return re.sub(r'[?!.;:]+', '', query).strip()
+
+        paraphrase_prompt = f"""Rephrase the following user query into a short, clean description.
+Remove all special characters such as ? ! ... ; : and question marks.
+Keep the same meaning. Do NOT answer the query — only rephrase it.
+Output ONLY the rephrased description, nothing else.
+
+User query: "{query}"
+Rephrased description:"""
+
+        try:
+            response = await run_blocking(
+                self.ai_agent.generate_content,
+                prompt=paraphrase_prompt,
+                system_prompt="You rephrase queries into clean descriptions. Output only the rephrased text.",
+                purpose='query_paraphrase'
+            )
+            if response:
+                paraphrased = response.strip().strip('"\'')
+                # Extra safety: remove any leftover special chars
+                paraphrased = re.sub(r'[?!]+', '', paraphrased).strip()
+                if paraphrased:
+                    logger.info(f"Paraphrased query: '{query}' → '{paraphrased}'")
+                    return paraphrased
+        except Exception as e:
+            logger.warning(f"Query paraphrase failed: {e}")
+
+        # Fallback: simple regex cleanup
+        return re.sub(r'[?!.;:]+', '', query).strip()
+
     async def _select_template_with_ai(self, query: str, extracted: Dict) -> str:
         """Use AI agent to select the best neo4j template for the user's query.
+
+        The query is first paraphrased into a clean description format (no special
+        characters) to match the style of template descriptions and few-shot examples.
 
         Args:
             query: User's natural language query
@@ -565,6 +684,8 @@ class HybridRetrievalHandler:
         """
         if not self.ai_agent:
             return self._select_template_by_rules(extracted)
+
+        # Paraphrase the query into a description-like format
 
         # Build template catalog for the AI
         template_list = []
@@ -584,66 +705,66 @@ Extracted entities: {entities_str}
 Available templates:
 {templates_str}
 
-Here are example queries and their correct template:
+Here are example queries (described as clean descriptions) and their correct template:
 
-Query: "Who are the authors of paper W1775749144?"
+Description: Retrieve the authors of paper W1775749144
 Template: search_by_paper_ids
 
-Query: "What papers has Kaiming He authored?"
+Description: Find papers authored by Kaiming He
 Template: search_by_author
 
-Query: "Which papers cite W2128635872?"
+Description: Find papers that cite W2128635872
 Template: search_citations
 
-Query: "How many citations does paper W2100837269 have?"
+Description: Get the citation count for paper W2100837269
 Template: search_by_paper_ids
 
-Query: "What venue published paper W3038568908?"
+Description: Find the venue that published paper W3038568908
 Template: search_by_paper_ids
 
-Query: "Which papers were published in Nature?"
+Description: Retrieve papers published in Nature
 Template: search_by_venue
 
-Query: "What papers were published in Analytical Biochemistry?"
+Description: Retrieve papers published in Analytical Biochemistry
 Template: search_by_venue
 
-Query: "Which papers were co-authored by Georg Kresse and J. Furthmüller?"
+Description: Find papers co-authored by Georg Kresse and J Furthmuller
 Template: coauthor_network
 
-Query: "What papers are co-authored by Kaiming He and Jian Sun?"
+Description: Find papers co-authored by Kaiming He and Jian Sun
 Template: coauthor_network
 
-Query: "Which paper has the highest citation count?"
+Description: Find the paper with the highest citation count
 Template: top_cited_papers
 
-Query: "What is the DOI of paper W1979290264?"
+Description: Get the DOI of paper W1979290264
 Template: search_by_paper_ids
 
-Query: "What is the publication year of paper W2107277218?"
+Description: Get the publication year of paper W2107277218
 Template: search_by_paper_ids
 
-Query: "papers about protein quantification methods"
+Description: Papers about protein quantification methods
 Template: search_by_keywords
 
-Query: "Research on deep learning architectures for computer vision"
+Description: Research on deep learning architectures for computer vision
 Template: search_by_keywords
 
-Query: "papers by Kaiming He about deep learning"
+Description: Papers by Kaiming He about deep learning
 Template: search_author_by_keywords
 
-Query: "What papers discuss bioinformatics algorithms?"
+Description: Papers discussing bioinformatics algorithms
 Template: search_by_keywords
 
-Query: "papers from Stanford University"
+Description: Papers from Stanford University
 Template: search_by_institution
 
-Query: "papers published since 2020"
+Description: Papers published since 2020
 Template: search_by_year_range
 
-Query: "papers published in 2023"
+Description: Papers published in 2023
 Template: search_by_year
 
-Query: "which journals does Stephen F. Altschul publish in?"
+Description: Journals where Stephen F Altschul publishes
 Template: author_venue_stats
 
 Rules (use if no example above matches):
@@ -734,20 +855,238 @@ Respond with ONLY the template name, nothing else."""
     # ENTITY EXTRACTION — Pull structured data from natural language query
     # =========================================================================
 
-    def _extract_all_entities(self, query: str) -> Dict:
+    async def _extract_all_entities(self, query: str) -> Dict:
         """Extract all entities from a natural language query.
+
+        Uses the AI agent as the primary extractor for accurate entity recognition
+        (author names, venues, institutions, intents, etc.). Falls back to the
+        rule-based regex extractor when the AI agent is unavailable or fails.
+
+        Paper IDs (W12345 format) are always extracted via regex for reliability.
 
         Returns a dict with:
             paper_ids, author_names, keywords, year, year_from, year_to,
             venue, institution, wants_citations, wants_coauthors, wants_top_cited
         """
+        # Always extract paper IDs via regex — they have a deterministic format
         extracted = {}
-        query_lower = query.lower()
-
-        # 1. Paper IDs
         paper_ids = re.findall(r'\b(W\d+)\b', query)
         if paper_ids:
             extracted['paper_ids'] = paper_ids
+
+        # Try AI extraction first, fall back to rules
+        if self.ai_agent:
+            ai_extracted = await self._extract_all_entities_with_ai(query)
+            if ai_extracted:
+                # Merge: AI results take priority, but keep regex paper_ids
+                ai_extracted.setdefault('paper_ids', [])
+                if paper_ids:
+                    # Combine and deduplicate paper IDs from AI + regex
+                    combined_ids = list(dict.fromkeys(
+                        extracted.get('paper_ids', []) + ai_extracted.get('paper_ids', [])
+                    ))
+                    ai_extracted['paper_ids'] = combined_ids
+                logger.info(f"AI entity extraction succeeded: {ai_extracted}")
+                return ai_extracted
+
+        # Fallback to rule-based extraction
+        logger.info("Falling back to rule-based entity extraction")
+        return self._extract_all_entities_by_rules(query, extracted)
+
+    async def _extract_all_entities_with_ai(self, query: str) -> Optional[Dict]:
+        """Use AI agent to extract structured entities from a natural language query.
+
+        The AI agent is better at understanding context, disambiguating author names
+        from keywords, recognizing venues/institutions, and detecting user intent.
+
+        Args:
+            query: The user's natural language query
+
+        Returns:
+            Dict with extracted entities, or None if AI extraction fails
+        """
+        prompt = f"""You are an entity extractor for an academic paper search system.
+Extract structured entities from the user's query. Return a valid JSON object.
+
+User query: "{query}"
+
+Extract the following fields (use null or empty list [] if not found):
+{{
+  "paper_ids": ["W12345", ...],       // OpenAlex paper IDs starting with W followed by digits
+  "author_names": ["First Last", ...], // Full author names (first + last name minimum)
+  "keywords": ["keyword1", ...],       // Research topics, concepts, methods (NOT author names, venues, or years)
+  "year": "2023",                       // Specific year if mentioned (e.g. "papers in 2023")
+  "year_from": "2020",                  // Start year for ranges (e.g. "since 2020", "after 2020")
+  "year_to": "2024",                    // End year for ranges (e.g. "before 2024", "until 2024")
+  "venue": "Nature",                    // Journal, conference, or venue name
+  "institution": "Stanford University", // University or research institution
+  "wants_citations": false,             // true if asking about citations or citing relationships
+  "wants_coauthors": false,             // true if asking about co-authorship or collaboration
+  "wants_top_cited": false              // true if asking for most cited / top / most influential papers
+}}
+
+Rules:
+1. "paper_ids" are always in the format W followed by digits (e.g. W1775749144)
+2. "author_names" must have at least first and last name (e.g. "Kaiming He", not just "He")
+3. "keywords" are research topics/concepts — do NOT include author names, venue names, years, or common words
+4. For year ranges: "since 2020" → year_from="2020", year_to="2099"; "before 2024" → year_from="1900", year_to="2024"
+5. For a single year: "in 2023" → year="2023" (leave year_from and year_to as null)
+6. "venue" MUST be a SPECIFIC, real journal/conference name (e.g. "Nature", "NeurIPS", "Analytical Biochemistry", "The Lancet").
+   NEVER use vague/generic descriptors as venue — these are NOT valid venues:
+   "top journals", "high-impact journals", "medical journals", "leading conferences",
+   "prestigious venues", "top medical journals", "major conferences", "good journals".
+   If the query mentions a category of venues (e.g. "medical journals") without naming a specific one, set venue to null and incorporate the descriptor into keywords instead.
+7. "institution" MUST be a SPECIFIC, real institution name (e.g. "Stanford University", "Google DeepMind", "MIT").
+   NEVER use vague/generic descriptors as institution — these are NOT valid institutions:
+   "top universities", "leading research labs", "major institutions".
+   If no specific institution is named, set institution to null.
+8. Set intent flags (wants_citations, wants_coauthors, wants_top_cited) based on the query's intent
+
+Examples:
+Query: "Find papers by Kaiming He about deep learning since 2020"
+{{"paper_ids": [], "author_names": ["Kaiming He"], "keywords": ["deep learning"], "year": null, "year_from": "2020", "year_to": "2099", "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "What are the most cited papers about transformer architectures?"
+{{"paper_ids": [], "author_names": [], "keywords": ["transformer architectures"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": true}}
+
+Query: "Papers co-authored by Georg Kresse and J Furthmuller"
+{{"paper_ids": [], "author_names": ["Georg Kresse", "J Furthmuller"], "keywords": [], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": true, "wants_top_cited": false}}
+
+Query: "Find papers that cite W2128635872"
+{{"paper_ids": ["W2128635872"], "author_names": [], "keywords": [], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": true, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "Papers published in Nature about protein folding"
+{{"paper_ids": [], "author_names": [], "keywords": ["protein folding"], "year": null, "year_from": null, "year_to": null, "venue": "Nature", "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "Cancer papers published in high-impact medical journals"
+{{"paper_ids": [], "author_names": [], "keywords": ["cancer", "high-impact medical journals"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "Deep learning research from top universities"
+{{"paper_ids": [], "author_names": [], "keywords": ["deep learning"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "Papers about CRISPR published in Cell"
+{{"paper_ids": [], "author_names": [], "keywords": ["CRISPR"], "year": null, "year_from": null, "year_to": null, "venue": "Cell", "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Return ONLY the JSON object, nothing else."""
+
+        try:
+            response = await run_blocking(
+                self.ai_agent.generate_content,
+                prompt=prompt,
+                system_prompt="You are a precise entity extractor. Return only valid JSON.",
+                purpose='entity_extraction'
+            )
+
+            if not response:
+                return None
+
+            # Clean response — strip markdown code fences if present
+            cleaned = response.strip()
+            if cleaned.startswith('```'):
+                # Remove ```json ... ``` wrapping
+                cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+                cleaned = re.sub(r'\s*```$', '', cleaned)
+            cleaned = cleaned.strip()
+
+            ai_result = json.loads(cleaned)
+
+            # Validate and normalize the AI output
+            extracted = {}
+
+            # Paper IDs
+            pids = ai_result.get('paper_ids', [])
+            if pids and isinstance(pids, list):
+                # Validate format: must match W followed by digits
+                valid_pids = [p for p in pids if isinstance(p, str) and re.match(r'^W\d+$', p)]
+                if valid_pids:
+                    extracted['paper_ids'] = valid_pids
+
+            # Author names
+            authors = ai_result.get('author_names', [])
+            if authors and isinstance(authors, list):
+                valid_authors = [a for a in authors if isinstance(a, str) and len(a.split()) >= 2]
+                if valid_authors:
+                    extracted['author_names'] = valid_authors
+
+            # Keywords
+            kws = ai_result.get('keywords', [])
+            if kws and isinstance(kws, list):
+                valid_kws = [k for k in kws if isinstance(k, str) and len(k.strip()) > 1]
+                if valid_kws:
+                    extracted['keywords'] = valid_kws
+
+            # Year (single)
+            year = ai_result.get('year')
+            if year and isinstance(year, str) and re.match(r'^\d{4}$', year):
+                extracted['year'] = year
+
+            # Year range
+            year_from = ai_result.get('year_from')
+            year_to = ai_result.get('year_to')
+            if year_from and isinstance(year_from, str) and re.match(r'^\d{4}$', year_from):
+                extracted['year_from'] = year_from
+                extracted['year_to'] = year_to if (year_to and isinstance(year_to, str) and re.match(r'^\d{4}$', year_to)) else '2099'
+
+            # Venue — reject vague/generic descriptors
+            venue = ai_result.get('venue')
+            if venue and isinstance(venue, str) and len(venue.strip()) > 1:
+                venue_clean = venue.strip()
+                if self._is_vague_entity_name(venue_clean):
+                    logger.info(f"Discarded vague venue '{venue_clean}' — moving to keywords")
+                    extracted.setdefault('keywords', []).append(venue_clean)
+                else:
+                    extracted['venue'] = venue_clean
+
+            # Institution — reject vague/generic descriptors
+            institution = ai_result.get('institution')
+            if institution and isinstance(institution, str) and len(institution.strip()) > 1:
+                inst_clean = institution.strip()
+                if self._is_vague_entity_name(inst_clean):
+                    logger.info(f"Discarded vague institution '{inst_clean}' — moving to keywords")
+                    extracted.setdefault('keywords', []).append(inst_clean)
+                else:
+                    extracted['institution'] = inst_clean
+
+            # Intent flags
+            if ai_result.get('wants_citations') is True:
+                extracted['wants_citations'] = True
+            if ai_result.get('wants_coauthors') is True:
+                extracted['wants_coauthors'] = True
+            if ai_result.get('wants_top_cited') is True:
+                extracted['wants_top_cited'] = True
+
+            return extracted
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"AI entity extraction returned invalid JSON: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"AI entity extraction failed: {e}")
+            return None
+
+    def _extract_all_entities_by_rules(self, query: str, extracted: Optional[Dict] = None) -> Dict:
+        """Rule-based fallback for entity extraction when AI is unavailable.
+
+        Uses regex patterns to extract entities from the query. This is the
+        original extraction logic, now serving as a reliable backup.
+
+        Args:
+            query: The user's natural language query
+            extracted: Optional pre-populated dict (e.g. with paper_ids already set)
+
+        Returns a dict with:
+            paper_ids, author_names, keywords, year, year_from, year_to,
+            venue, institution, wants_citations, wants_coauthors, wants_top_cited
+        """
+        if extracted is None:
+            extracted = {}
+        query_lower = query.lower()
+
+        # 1. Paper IDs (if not already set)
+        if not extracted.get('paper_ids'):
+            paper_ids = re.findall(r'\b(W\d+)\b', query)
+            if paper_ids:
+                extracted['paper_ids'] = paper_ids
 
         # 2. Author names
         author_names = self._extract_author_names(query)
@@ -778,21 +1117,31 @@ Respond with ONLY the template name, nothing else."""
                         if standalone:
                             extracted['year'] = standalone.group(1)
 
-        # 4. Venue
+        # 4. Venue — reject vague/generic descriptors
         venue_match = re.search(
             r'(?:in|from|published\s+in|venue|journal|conference)\s+["\']?([A-Z][^"\',]{2,40})["\']?',
             query, re.IGNORECASE
         )
         if venue_match:
-            extracted['venue'] = venue_match.group(1).strip()
+            venue_name = venue_match.group(1).strip()
+            if self._is_vague_entity_name(venue_name):
+                logger.info(f"Rule-based: discarded vague venue '{venue_name}'")
+                extracted.setdefault('keywords', []).append(venue_name)
+            else:
+                extracted['venue'] = venue_name
 
-        # 5. Institution
+        # 5. Institution — reject vague/generic descriptors
         inst_match = re.search(
             r'(?:from|at|institution|university|org(?:anization)?)\s+["\']?([A-Z][^"\',]{2,50})["\']?',
             query, re.IGNORECASE
         )
         if inst_match and not extracted.get('venue'):  # avoid conflict with venue
-            extracted['institution'] = inst_match.group(1).strip()
+            inst_name = inst_match.group(1).strip()
+            if self._is_vague_entity_name(inst_name):
+                logger.info(f"Rule-based: discarded vague institution '{inst_name}'")
+                extracted.setdefault('keywords', []).append(inst_name)
+            else:
+                extracted['institution'] = inst_name
 
         # 6. Intent flags
         if re.search(r'\bcit(?:e|ed|ation|ing)\b', query_lower):
@@ -859,13 +1208,18 @@ Respond with ONLY the template name, nothing else."""
         1. Check Cypher cache
         2. Extract entities from query (paper IDs, authors, keywords, years, etc.)
         3. AI agent selects the best template (fallback: rule-based selection)
-        4. If template is keyword-only → milvus-first: run milvus search to get
-           relevant paper IDs, then use search_by_paper_ids for rich neo4j metadata
+        4. If template is keyword-only → multi-modal search:
+           a. Run milvus vector search (SciBERT) for textual similarity
+           b. Run cross-modal visual search (CLIP + SciBERT) for figure/table similarity
+           c. Re-rank and merge paper IDs from both sources
+           d. Use final ranked paper IDs for the Cypher query
         5. Fill template parameters from extracted entities
         6. Cache and return
 
         Returns:
-            (cypher_query, parameters, template_key) tuple
+            (cypher_query, parameters, template_key, vector_results, visual_data) tuple
+            where vector_results is a list of dicts from milvus search (may be empty)
+            and visual_data is a dict with figure_results, table_results, paper_visual_scores
         """
         try:
             # Check Cypher cache first
@@ -874,10 +1228,12 @@ Respond with ONLY the template name, nothing else."""
                 if cached is not None:
                     cypher_query, parameters = cached
                     logger.info(f"Cypher cache HIT for: {query[:50]}...")
-                    return cypher_query, parameters, "cached"
+                    return cypher_query, parameters, "cached", [], {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
 
-            # Step 1: Extract entities from the query
-            extracted = self._extract_all_entities(query)
+            paraphrased_query = await self._paraphrase_query_as_description(query)
+
+            # Step 1: Extract entities from the query (AI-first, rule-based fallback)
+            extracted = await self._extract_all_entities(paraphrased_query)
             logger.info(f"Extracted entities: {extracted}")
 
             # Step 2: AI agent selects the best template
@@ -898,13 +1254,13 @@ Respond with ONLY the template name, nothing else."""
                         # No matching template found — use raw Cypher directly
                         logger.info("Using raw Cypher template (no matching template key found)")
                         refined_cypher, parameters = self._refine_template_with_conditions(
-                            query, template_cypher, top_k
+                            paraphrased_query, template_cypher, top_k
                         )
                         if self.cache_manager:
                             self.cache_manager.cache_cypher(query, top_k, refined_cypher, parameters)
-                        return refined_cypher, parameters, "raw_cypher"
+                        return refined_cypher, parameters, "raw_cypher", [], {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
             else:
-                template_key = await self._select_template_with_ai(query, extracted)
+                template_key = await self._select_template_with_ai(paraphrased_query, extracted)
             logger.info(f"Selected template: {template_key}")
 
             # Step 3: Vector-first for keyword queries
@@ -916,27 +1272,81 @@ Respond with ONLY the template name, nothing else."""
             needs_paper_ids = '$paper_ids' in template_cypher_text
             has_paper_ids = bool(extracted.get('paper_ids'))
 
-            if needs_paper_ids and not has_paper_ids:
+            # Collect vector results and visual data from multi-modal search
+            collected_vector_results = []
+            visual_data = {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
+
+            if (needs_paper_ids and not has_paper_ids) or template_key == 'search_by_keywords':
+                if template_key == 'search_by_keywords':
+                    template_key = 'search_by_paper_ids'
                 keywords = extracted.get('keywords', [])
 
-                all_results = {}
+                # ── Step 3a: Vector search (SciBERT) ──
+                all_vector_scores = {}   # paper_id → best distance (lower = better)
+                all_vector_results = []
 
                 for keyword in keywords:
-                    results = await self._execute_vector_search_internal(keyword, top_k)
+                    results = await self.execute_vector_search(keyword, top_k)
+                    all_vector_results.extend(results)
 
                     for paper in results:
                         p_id = paper.get('paper_id')
                         dist = paper.get('distance', 0.0)
-                        if p_id not in all_results or dist < all_results[p_id]:
-                            all_results[p_id] = dist
+                        if p_id not in all_vector_scores or dist < all_vector_scores[p_id]:
+                            all_vector_scores[p_id] = dist
 
-                # Sort by distance (ascending) and take the top_k
-                sorted_ids = sorted(all_results, key=all_results.get)[:top_k]
+                # Deduplicate vector results by paper_id, keeping best distance
+                seen_ids = set()
+                for r in sorted(all_vector_results, key=lambda x: x.get('distance', 0.0)):
+                    pid = r.get('paper_id')
+                    if pid and pid not in seen_ids:
+                        seen_ids.add(pid)
+                        collected_vector_results.append(r)
+                collected_vector_results = collected_vector_results[:top_k]
+
+                # ── Step 3b: Cross-modal visual search scoped to vector search papers ──
+                vector_paper_ids = list(all_vector_scores.keys())
+                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=vector_paper_ids)
+                paper_visual_scores = visual_data.get('paper_visual_scores', {})
+                logger.info(
+                    f"Visual search (scoped to {len(vector_paper_ids)} papers): "
+                    f"{len(paper_visual_scores)} with visual evidence, "
+                    f"{len(visual_data.get('figure_results', []))} figures, "
+                    f"{len(visual_data.get('table_results', []))} tables"
+                )
+
+                # ── Step 3c: Re-rank vector results by combining vector + visual scores ──
+                # Normalize vector distances to [0, 1] similarity (1 = best)
+                max_dist = max(all_vector_scores.values()) if all_vector_scores else 1.0
+                min_dist = min(all_vector_scores.values()) if all_vector_scores else 0.0
+                dist_range = max_dist - min_dist if max_dist > min_dist else 1.0
+
+                combined_scores = {}  # paper_id → combined score (higher = better)
+                vector_weight = 0.7
+                visual_rerank_weight = 0.3
+
+                # Re-rank papers found by vector search, boosted by visual evidence
+                for pid, dist in all_vector_scores.items():
+                    vec_sim = 1.0 - ((dist - min_dist) / dist_range)  # normalize to similarity
+                    vis_score = paper_visual_scores.get(pid, 0.0)
+                    combined_scores[pid] = vector_weight * vec_sim + visual_rerank_weight * vis_score
+
+                # Sort by combined score (descending) and take top_k
+                sorted_ids = sorted(combined_scores, key=combined_scores.get, reverse=True)[:top_k]
+
+                logger.info(
+                    f"Re-ranked paper IDs: {len(sorted_ids)} "
+                    f"(vector: {len(all_vector_scores)}, visual boost on: {len(paper_visual_scores)})"
+                )
 
                 # Extend the extracted list
                 extracted.setdefault('paper_ids', []).extend(sorted_ids)
-                logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for template '{template_key}'")
+                logger.info(f"Multi-modal search: injected {len(sorted_ids)} re-ranked paper IDs for template '{template_key}'")
             else:
+                # Still run visual search scoped to existing paper IDs for evidence enrichment
+                existing_pids = extracted.get('paper_ids', [])
+                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=existing_pids)
+
                 if has_paper_ids:
                     logger.info(f"Skipping keyword milvus search — paper IDs already extracted from query")
                 else:
@@ -954,20 +1364,23 @@ Respond with ONLY the template name, nothing else."""
 
             # Step 5: Cache the result
             if self.cache_manager:
-                self.cache_manager.cache_cypher(query, top_k, cypher_query, parameters)
+                self.cache_manager.cache_cypher(paraphrased_query, top_k, cypher_query, parameters)
 
-            return cypher_query, parameters, template_key
+            return cypher_query, parameters, template_key, collected_vector_results, visual_data
 
         except Exception as e:
             logger.error(f"Error in intelligent Cypher generation: {e}")
+            paraphrased_query = await self._paraphrase_query_as_description(query)
+
+            empty_visual = {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
             # Ultimate fallback — milvus-first then paper IDs lookup
-            paper_ids = await self._vector_first_paper_ids(query, top_k) if self.milvus_client else None
+            paper_ids = await self._vector_first_paper_ids(paraphrased_query, top_k) if self.milvus_client else None
             if paper_ids:
                 return self.GRAPH_TEMPLATES['search_by_paper_ids']['cypher'].strip(), \
-                    {"paper_ids": paper_ids, "limit": top_k}, "search_by_paper_ids"
-            keywords = self._extract_keywords(query)
+                    {"paper_ids": paper_ids, "limit": top_k}, "search_by_paper_ids", [], empty_visual
+            keywords = self._extract_keywords(paraphrased_query)
             return self.GRAPH_TEMPLATES['search_by_keywords']['cypher'].strip(), \
-                {"keywords": keywords or [query], "limit": top_k}, "search_by_keywords"
+                {"keywords": keywords or [paraphrased_query], "limit": top_k}, "search_by_keywords", [], empty_visual
 
     async def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
         """Run milvus search to extract relevant paper IDs for neo4j enrichment.
@@ -1040,14 +1453,17 @@ Respond with ONLY the template name, nothing else."""
             query: str,
             search_results: List,
             template_info: Optional[Dict] = None,
+            visual_evidence: Optional[Dict] = None,
     ) -> Optional[str]:
-        """Generate AI response from milvus and neo4j searches.
+        """Generate AI response from milvus, neo4j, and cross-modal visual searches.
 
         Args:
             query: The user's natural language query
             search_results: List of search result objects or dicts
             template_info: Optional dict with 'template_key' and 'description'
                            of the neo4j template used for retrievals
+            visual_evidence: Optional dict with 'figure_results', 'table_results',
+                             and 'paper_visual_scores' from cross-modal visual search
         """
         try:
             if not self.ai_agent:
@@ -1068,7 +1484,9 @@ Respond with ONLY the template name, nothing else."""
                         "venue": getattr(result, "venue", "") or "",
                         "publication_date": getattr(result, "publication_date", "") or "",
                         "paper_id": getattr(result, "paper_id", "") or getattr(result, "id", ""),
-                        "doi": getattr(result, "doi", "") or ""
+                        "doi": getattr(result, "doi", "") or "",
+                        "matched_figures": getattr(result, "matched_figures", 0),
+                        "matched_tables": getattr(result, "matched_tables", 0),
                     })
                 else:
                     # It's a dict, use .get()
@@ -1080,7 +1498,9 @@ Respond with ONLY the template name, nothing else."""
                         "venue": result.get("venue", "") or "",
                         "publication_date": result.get("publication_date", "") or "",
                         "paper_id": result.get("paper_id", "") or result.get("id", ""),
-                        "doi": result.get("doi", "") or ""
+                        "doi": result.get("doi", "") or "",
+                        "matched_figures": result.get("matched_figures", 0),
+                        "matched_tables": result.get("matched_tables", 0),
                     })
 
             # Build template-aware context for the prompt
@@ -1090,8 +1510,34 @@ Respond with ONLY the template name, nothing else."""
                 tpl_desc = template_info.get("description", tpl_key)
                 template_context = f"\nRetrieval Strategy: {tpl_key} — {tpl_desc}"
 
+            # Build visual evidence context for the prompt
+            visual_context = ""
+            if visual_evidence:
+                figs = visual_evidence.get('figure_results', [])
+                tabs = visual_evidence.get('table_results', [])
+                if figs or tabs:
+                    visual_context = "\n\nVisual Evidence Retrieved:"
+                    for i, fig in enumerate(figs[:5], 1):
+                        desc = (fig.get('description', '') or '')[:150]
+                        pid = fig.get('paper_id', '')
+                        score = fig.get('similarity_score', 0)
+                        visual_context += f"\n  Figure {i} (paper {pid}, relevance {score:.2f}): {desc}"
+                    for i, tab in enumerate(tabs[:5], 1):
+                        desc = (tab.get('description', '') or '')[:150]
+                        pid = tab.get('paper_id', '')
+                        score = tab.get('similarity_score', 0)
+                        visual_context += f"\n  Table {i} (paper {pid}, relevance {score:.2f}): {desc}"
+
             # Build template-specific instructions
             template_instructions = self._get_template_specific_instructions(template_info)
+
+            # Add visual evidence instructions if visual results are present
+            if visual_context:
+                template_instructions += (
+                    "\n- Reference relevant figures and tables when they support the answer"
+                    "\n- Mention which paper each visual element comes from"
+                    "\n- If the query is about experimental results, graphs, or data, emphasize the visual evidence"
+                )
 
             system_prompt = "You are a research assistant specializing in academic literature. Be accurate, concise, and tailor your response to the type of query."
             prompt = f"""Answer this question based on the search results: "{query}"
@@ -1099,6 +1545,7 @@ Respond with ONLY the template name, nothing else."""
 
 Search Results:
 {self._format_papers_for_prompt(context_papers[:4])}
+{visual_context}
 
 Instructions:
 {template_instructions}
@@ -1305,6 +1752,144 @@ Answer:"""
             formatted_papers.append(paper_text)
 
         return "\n\n".join(formatted_papers)
+
+    # =========================================================================
+    # CROSS-MODAL VISUAL SEARCH (text query → figure/table retrieval)
+    # =========================================================================
+
+    async def search_visual_by_text(self, query: str, top_k: int = 5,
+                                      paper_ids: Optional[List[str]] = None) -> Dict:
+        """Cross-modal search: find figures and tables for papers found by vector search.
+
+        Visual search is scoped to the paper IDs already discovered by vector search.
+        This ensures visual evidence is only retrieved for papers the system has
+        already identified as relevant, avoiding noise from unrelated papers.
+
+        Flow:
+        1. Generates a CLIP text embedding from the query
+        2. Searches figures_collection and tables_collection by image_embedding similarity
+        3. Also searches by description_embedding (SciBERT) for description-level matches
+        4. Filters results to keep only figures/tables belonging to the given paper_ids
+        5. Returns visual results + a per-paper visual score boost
+
+        Args:
+            query: Natural language search query
+            top_k: Max figures + tables to return per collection
+            paper_ids: List of paper IDs from vector search to scope visual results to.
+                       If None or empty, returns empty results.
+
+        Returns:
+            Dict with:
+                figure_results: list of matched figures (scoped to paper_ids)
+                table_results:  list of matched tables (scoped to paper_ids)
+                paper_visual_scores: {paper_id: float} mapping of visual relevance boosts
+        """
+        empty_result = {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
+        figure_results = []
+        table_results = []
+        paper_visual_scores: Dict[str, float] = {}
+
+        try:
+            if not paper_ids:
+                logger.debug("No paper_ids provided — skipping visual search")
+                return empty_result
+
+            if not self.clip_client and not self.embedding_client:
+                logger.debug("No CLIP or SciBERT client — skipping cross-modal visual search")
+                return empty_result
+
+            # Build the set of allowed paper IDs for filtering
+            allowed_pids = set(paper_ids)
+            # Search with a larger pool to have enough results after filtering
+            search_k = top_k * 3
+
+            # 1. CLIP text → image embedding search (cross-modal)
+            clip_text_embedding = None
+            if self.clip_client:
+                clip_text_embedding = await run_blocking(
+                    self.clip_client.generate_text_embedding, query
+                )
+
+            if clip_text_embedding:
+                # Search figures by CLIP text embedding against image_embedding field
+                try:
+                    clip_fig = await run_blocking(
+                        self.milvus_client.search_figures_by_image,
+                        clip_text_embedding, search_k
+                    )
+                    figure_results.extend(clip_fig)
+                except Exception as e:
+                    logger.debug(f"CLIP figure search failed: {e}")
+
+                # Search tables by CLIP text embedding against image_embedding field
+                try:
+                    clip_tab = await run_blocking(
+                        self.milvus_client.search_tables_by_image,
+                        clip_text_embedding, search_k
+                    )
+                    table_results.extend(clip_tab)
+                except Exception as e:
+                    logger.debug(f"CLIP table search failed: {e}")
+
+            # 2. SciBERT description embedding search (text-to-text within visual collections)
+            if self.embedding_client:
+                desc_embedding = None
+                if self.cache_manager:
+                    desc_embedding = self.cache_manager.get_embedding(query)
+                if desc_embedding is None:
+                    desc_embedding = await run_blocking(
+                        self.embedding_client.generate_text_embedding, query
+                    )
+                    if self.cache_manager and desc_embedding:
+                        self.cache_manager.cache_embedding(query, desc_embedding)
+
+                if desc_embedding:
+                    try:
+                        desc_fig = await run_blocking(
+                            self.milvus_client.search_figures_by_description,
+                            desc_embedding, search_k
+                        )
+                        # Merge CLIP + description results
+                        figure_results = self._merge_visual_results(figure_results, desc_fig)
+                    except Exception as e:
+                        logger.debug(f"Description figure search failed: {e}")
+
+                    try:
+                        desc_tab = await run_blocking(
+                            self.milvus_client.search_tables_by_description,
+                            desc_embedding, search_k
+                        )
+                        table_results = self._merge_visual_results(table_results, desc_tab)
+                    except Exception as e:
+                        logger.debug(f"Description table search failed: {e}")
+
+            # 3. Filter results to only keep figures/tables belonging to vector search papers
+            figure_results = [r for r in figure_results if r.get('paper_id') in allowed_pids]
+            table_results = [r for r in table_results if r.get('paper_id') in allowed_pids]
+
+            # 4. Build per-paper visual scores from matched visual evidence
+            for r in figure_results + table_results:
+                pid = r.get("paper_id")
+                score = r.get("similarity_score", 0.0)
+                if pid:
+                    # Aggregate: keep the max visual score per paper
+                    paper_visual_scores[pid] = max(paper_visual_scores.get(pid, 0.0), score)
+
+            logger.info(
+                f"Cross-modal visual search (scoped to {len(allowed_pids)} papers): "
+                f"{len(figure_results)} figures, {len(table_results)} tables, "
+                f"{len(paper_visual_scores)} papers with visual evidence"
+            )
+
+            return {
+                "figure_results": figure_results[:top_k],
+                "table_results": table_results[:top_k],
+                "paper_visual_scores": paper_visual_scores
+            }
+
+        except Exception as e:
+            logger.error(f"Cross-modal visual search error: {e}")
+            return empty_result
 
     # =========================================================================
     # IMAGE SEARCH METHODS

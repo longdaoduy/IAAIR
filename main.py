@@ -525,23 +525,32 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
     try:
         logger.info(f"Starting hybrid search for query: '{request.query}'")
 
-        vector_results = []
-
         fusion_start = datetime.now()
 
-        hybrid_results, template_info = await factory.retrieval_handler.execute_hybrid_search(
+        hybrid_results, template_info, vector_results, visual_data = await factory.retrieval_handler.execute_hybrid_search(
             query=request.query,
             template_cypher=request.graph_template,
             top_k=request.top_k
         )
 
         logger.info(f"Template used: {template_info}")
+        logger.info(f"Vector results from milvus-first: {len(vector_results)} results")
+
+        # Visual data is now collected inside _build_intelligent_cypher_query
+        # alongside vector search, with re-ranking applied to produce final paper IDs
+        visual_figures = visual_data.get('figure_results', [])
+        visual_tables = visual_data.get('table_results', [])
+        logger.info(
+            f"Cross-modal visual search: {len(visual_figures)} figures, "
+            f"{len(visual_tables)} tables"
+        )
 
         with factory.performance_monitor.track_operation('fusion'):
             fused_results = factory.result_fusion.fuse_results(
                 vector_results or [],
                 hybrid_results or [],
-                request.fusion_weights
+                request.fusion_weights,
+                visual_data=visual_data
             )
 
         fusion_time = (datetime.now() - fusion_start).total_seconds()
@@ -576,8 +585,18 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         fusion_stats = {
             'vector_results_count': len(vector_results or []),
             'graph_results_count': len(hybrid_results or []),
+            'visual_figures_count': len(visual_figures),
+            'visual_tables_count': len(visual_tables),
+            'papers_with_visual_evidence': len(visual_data.get('paper_visual_scores', {})),
             # 'fusion_method': routing_strategy.value,
             'fusion_weights': request.fusion_weights or factory.result_fusion.default_weights
+        }
+
+        visual_stats = {
+            'figures_found': len(visual_figures),
+            'tables_found': len(visual_tables),
+            'papers_with_visual_evidence': len(visual_data.get('paper_visual_scores', {})),
+            'cross_modal_search_enabled': bool(factory.retrieval_handler.clip_client),
         }
 
         # attribution_stats = {
@@ -607,9 +626,10 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             else:
                 factory.performance_monitor.record_cache_hit('ai_response', False)
                 with factory.performance_monitor.track_operation('ai_response'):
-                    # 1. Generate the raw synthesis
+                    # 1. Generate the raw synthesis (with visual evidence context)
                     ai_response = await factory.retrieval_handler.generate_ai_response(
-                        request.query, fused_results, template_info=template_info
+                        request.query, fused_results, template_info=template_info,
+                        visual_evidence=visual_data
                     )
 
                     # if ai_response:
@@ -637,6 +657,9 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         logger.info(f"Hybrid search completed. Found {len(fused_results)} results in {total_time:.2f}s")
 
+        # Combine all visual results for the response
+        all_visual_results = visual_figures + visual_tables
+
         return HybridSearchResponse(
             success=True,
             # message=f"Hybrid search completed using {routing_strategy.value} strategy",
@@ -650,6 +673,8 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             ai_response=ai_response,
             graph_template_used=template_info.get('template_key') or request.graph_template or None,
             fusion_stats=fusion_stats,
+            visual_results=all_visual_results,
+            visual_stats=visual_stats,
             # attribution_stats=attribution_stats
         )
 
@@ -1410,11 +1435,11 @@ async def list_supported_models():
         models.append({
             "model_name": name,
             **info,
-            "is_current": name == (services.deepseek_client.config.model_name if services.deepseek_client else None)
+            "is_current": name == (services.llms_client.config.model_name if services.llms_client else None)
         })
 
     return {
-        "current_model": services.deepseek_client.config.model_name if services.deepseek_client else None,
+        "current_model": services.llms_client.config.model_name if services.llms_client else None,
         "supported_models": models,
         "usage": {
             "env_var": "Set LLM_MODEL=<model_name> before starting the API",
@@ -1430,15 +1455,15 @@ async def switch_model(model_name: str, factory: ServiceFactory = Depends(get_se
     Args:
         model_name: HuggingFace model identifier (e.g. 'Qwen/Qwen2.5-3B-Instruct')
     """
-    if not factory.deepseek_client:
+    if not factory.llms_client:
         raise HTTPException(status_code=503, detail="LLM client not initialized")
 
-    old_model = factory.deepseek_client.config.model_name
+    old_model = factory.llms_client.config.model_name
     if old_model == model_name:
         return {"message": f"Already using {model_name}", "status": "no_change"}
 
     try:
-        result = factory.deepseek_client.reload_model(model_name)
+        result = factory.llms_client.reload_model(model_name)
         return {
             "status": "success",
             "message": result,
@@ -1454,11 +1479,11 @@ async def switch_model(model_name: str, factory: ServiceFactory = Depends(get_se
 @app.get("/models/stats")
 async def get_llm_stats(factory: ServiceFactory = Depends(get_services)):
     """Get LLM usage statistics (call counts, latency per purpose)."""
-    if not factory.deepseek_client:
+    if not factory.llms_client:
         raise HTTPException(status_code=503, detail="LLM client not initialized")
 
-    stats = factory.deepseek_client.get_llm_stats()
-    stats["current_model"] = factory.deepseek_client.config.model_name
+    stats = factory.llms_client.get_llm_stats()
+    stats["current_model"] = factory.llms_client.config.model_name
     return stats
 
 
