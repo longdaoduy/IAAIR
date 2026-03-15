@@ -13,7 +13,6 @@ import time
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import os
-from models.entities.retrievals.QueryType import QueryType
 from models.entities.evaluations.MockEvaluationResult import MockEvaluationResult
 from models.entities.evaluations.MockEvaluationSummary import MockEvaluationSummary
 
@@ -93,6 +92,8 @@ class MockDataEvaluator:
                     ai_response = await self.service_factory.retrieval_handler.generate_ai_response(
                         query=question,
                         search_results=search_results,
+                        template_info=_template_info,
+                        visual_evidence=_visual_data,
                     )
                     ai_generation_time = time.time() - ai_start_time
 

@@ -1306,8 +1306,8 @@ Return ONLY the JSON object, nothing else."""
                         return refined_cypher, parameters, "raw_cypher", empty_visual, []
             else:
                 template_key = await self._select_template_with_ai(paraphrased_query, extracted)
-            if template_key == 'search_by_keywords':
-                template_key = 'search_by_paper_ids'
+            # if template_key == 'search_by_keywords':
+            #     template_key = 'search_by_paper_ids'
             logger.info(f"Selected template: {template_key}")
 
             # Step 3: Multi-modal vector search for keyword queries
@@ -1361,7 +1361,8 @@ Return ONLY the JSON object, nothing else."""
             return cypher_query, parameters, template_key, visual_data, keywords
 
         except Exception as e:
-            logger.error(f"Error in intelligent Cypher generation: {e}")
+            import traceback
+            logger.error(f"Error in intelligent Cypher generation: {e}\n{traceback.format_exc()}")
             paraphrased_query = await self._paraphrase_query_as_description(query)
 
             # Ultimate fallback — milvus-first then paper IDs lookup
