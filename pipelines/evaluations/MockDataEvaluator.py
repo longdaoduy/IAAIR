@@ -57,7 +57,7 @@ class MockDataEvaluator:
             expected_papers = expected_evidence.get('paper_ids', [])
 
             # Use semantic search to find similar papers
-            search_results, _template_info, _vector_results, _visual_data = await self.service_factory.retrieval_handler.execute_hybrid_search(
+            search_results, _template_info, _visual_data = await self.service_factory.retrieval_handler.execute_hybrid_search(
                 query=question,
                 top_k=10,
             )
