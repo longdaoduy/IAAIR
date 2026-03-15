@@ -75,6 +75,108 @@ class HybridRetrievalHandler:
             logger.error(f"Vector search error: {e}")
             return []
 
+    async def execute_multimodal_vector_search(self, query: str, keywords: List[str],
+                                                top_k: int) -> tuple:
+        """Multi-modal vector search: SciBERT + CLIP cross-modal + re-ranking.
+
+        Combines text-based vector search with cross-modal visual search to produce
+        a single, re-ranked list of paper IDs. This improves ranking quality by
+        boosting papers that have both textual and visual relevance.
+
+        Flow:
+        1. Run SciBERT vector search per keyword → collect paper scores
+        2. Run CLIP cross-modal visual search scoped to discovered papers
+        3. Re-rank paper IDs by combining vector similarity + visual scores
+        4. Return re-ranked paper IDs and visual evidence metadata
+
+        Args:
+            query: Original natural language search query
+            keywords: Extracted keywords for vector search
+            top_k: Number of top results to return
+
+        Returns:
+            (sorted_paper_ids, visual_data) tuple where:
+                sorted_paper_ids: Re-ranked list of paper IDs (best first)
+                visual_data: Dict with figure_results, table_results, paper_visual_scores
+        """
+        empty_visual = {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
+
+        try:
+            # ── Step 1: Vector search (SciBERT) per keyword ──
+            all_vector_scores = {}   # paper_id → best distance (lower = better)
+            all_vector_results = []
+
+            for keyword in keywords:
+                results = await self.execute_vector_search(keyword, top_k)
+                all_vector_results.extend(results)
+
+                for paper in results:
+                    p_id = paper.get('paper_id')
+                    dist = paper.get('distance', 0.0)
+                    if p_id not in all_vector_scores or dist < all_vector_scores[p_id]:
+                        all_vector_scores[p_id] = dist
+
+            if not all_vector_scores:
+                logger.warning("Multi-modal vector search: no results from SciBERT")
+                return [], empty_visual
+
+            # ── Step 2: Cross-modal visual search scoped to vector search papers ──
+            vector_paper_ids = list(all_vector_scores.keys())
+            visual_data = await self.search_visual_by_text(query, top_k, paper_ids=vector_paper_ids)
+            paper_visual_scores = visual_data.get('paper_visual_scores', {})
+            logger.info(
+                f"Visual search (scoped to {len(vector_paper_ids)} papers): "
+                f"{len(paper_visual_scores)} with visual evidence, "
+                f"{len(visual_data.get('figure_results', []))} figures, "
+                f"{len(visual_data.get('table_results', []))} tables"
+            )
+
+            # ── Step 3: Re-rank by combining vector + visual scores ──
+            # Normalize vector distances to [0, 1] similarity (1 = best)
+            max_dist = max(all_vector_scores.values()) if all_vector_scores else 1.0
+            min_dist = min(all_vector_scores.values()) if all_vector_scores else 0.0
+            dist_range = max_dist - min_dist if max_dist > min_dist else 1.0
+
+            combined_scores = {}  # paper_id → combined score (higher = better)
+            vector_weight = 0.7
+            visual_rerank_weight = 0.3
+
+            for pid, dist in all_vector_scores.items():
+                vec_sim = 1.0 - ((dist - min_dist) / dist_range)  # normalize to similarity
+                vis_score = paper_visual_scores.get(pid, 0.0)
+                combined_scores[pid] = vector_weight * vec_sim + visual_rerank_weight * vis_score
+
+            # Sort by combined score (descending) and take top_k
+            sorted_ids = sorted(combined_scores, key=combined_scores.get, reverse=True)[:top_k]
+
+            # Store multimodal scores in visual_data so downstream can use them
+            visual_data['multimodal_scores'] = combined_scores
+
+            # Store deduplicated vector results for fallback when graph returns 0
+            seen_ids = set()
+            deduped_vector_results = []
+            for r in all_vector_results:
+                pid = r.get('paper_id')
+                if pid and pid not in seen_ids and pid in set(sorted_ids):
+                    seen_ids.add(pid)
+                    deduped_vector_results.append(r)
+            # Sort fallback results by combined_scores to preserve re-ranked order
+            deduped_vector_results.sort(
+                key=lambda r: combined_scores.get(r.get('paper_id'), 0), reverse=True
+            )
+            visual_data['vector_results'] = deduped_vector_results
+
+            logger.info(
+                f"Re-ranked paper IDs: {len(sorted_ids)} "
+                f"(vector: {len(all_vector_scores)}, visual boost on: {len(paper_visual_scores)})"
+            )
+
+            return sorted_ids, visual_data
+
+        except Exception as e:
+            logger.error(f"Multi-modal vector search error: {e}")
+            return [], empty_visual
+
     async def search_similar_papers(self, query_text: str, top_k: int = 10, use_hybrid: bool = True) -> List[Dict]:
         """Search for similar papers using hybrid search (dense + sparse) or dense-only search.
 
@@ -135,11 +237,11 @@ class HybridRetrievalHandler:
         """Execute neo4j search using Cypher query with intelligent query parsing and caching.
 
         Returns:
-            (results, template_info, vector_results, visual_data) tuple where template_info
+            (results, template_info, visual_data) tuple where template_info
             is a dict with 'template_key' and 'description' of the neo4j template used,
-            vector_results is a list of milvus search results collected during the
-            vector-first path, and visual_data is a dict with figure_results, table_results,
-            and paper_visual_scores from cross-modal visual search.
+            and visual_data is a dict with figure_results, table_results,
+            and paper_visual_scores from cross-modal visual search (used for display only,
+            ranking is already applied during the vector search step).
         """
         if self.performance_monitor:
             with self.performance_monitor.track_operation('graph_search'):
@@ -377,11 +479,10 @@ class HybridRetrievalHandler:
         """Internal neo4j search implementation with caching.
 
         Returns:
-            (results, template_info, vector_results, visual_data) tuple where template_info
+            (results, template_info, visual_data) tuple where template_info
             is a dict with 'template_key' and 'description' of the neo4j template used,
-            vector_results is a list of milvus search results collected during the
-            vector-first path, and visual_data is a dict with figure_results, table_results,
-            and paper_visual_scores from cross-modal visual search.
+            and visual_data is a dict with figure_results, table_results,
+            and paper_visual_scores (for display/evidence only — ranking already applied).
         """
         template_info = {"template_key": None, "description": None}
         empty_visual = {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
@@ -396,17 +497,17 @@ class HybridRetrievalHandler:
                         self.performance_monitor.record_cache_hit('search', True)
                         self.performance_monitor.record_result_count('neo4j', len(cached_results))
                     logger.debug(f"Graph search cache hit for: {query[:50]}...")
-                    return cached_results, template_info, [], empty_visual
+                    return cached_results, template_info, empty_visual
 
             if self.performance_monitor:
                 self.performance_monitor.record_cache_hit('search', False)
 
             if not self.graph_handler:
                 logger.error("Graph handler not initialized")
-                return [], template_info, [], empty_visual
+                return [], template_info, empty_visual
 
             # Parse the query intelligently based on patterns
-            cypher_query, parameters, template_key, vector_results, visual_data = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
+            cypher_query, parameters, template_key, visual_data, keywords = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
 
             # Build template info
             template_desc = self.GRAPH_TEMPLATES.get(template_key, {}).get('description', template_key)
@@ -421,6 +522,21 @@ class HybridRetrievalHandler:
             results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
             logger.info(f"Graph search returned {len(results)} results")
 
+            # Fallback: if graph returned 0 results but multimodal vector search
+            # found papers, use the vector results directly so the user still
+            # gets results (with basic metadata from Milvus instead of rich
+            # Neo4j metadata like authors, venue, citations).
+            if not results and visual_data.get('vector_results'):
+                if not visual_data.get('vector_results'):
+                    sorted_ids, visual_data = await self.execute_multimodal_vector_search(
+                        query, keywords, top_k
+                    )
+                logger.warning(
+                    f"Graph returned 0 results — falling back to "
+                    f"{len(visual_data['vector_results'])} vector search results"
+                )
+                results = visual_data['vector_results']
+
             # Cache results
             if self.cache_manager and results:
                 self.cache_manager.cache_search_results(
@@ -430,10 +546,10 @@ class HybridRetrievalHandler:
             if self.performance_monitor:
                 self.performance_monitor.record_result_count('neo4j', len(results))
 
-            return results, template_info, vector_results, visual_data
+            return results, template_info, visual_data
         except Exception as e:
             logger.error(f"Graph search error: {e}")
-            return [], template_info, [], empty_visual
+            return [], template_info, empty_visual
 
     @staticmethod
     def _extract_author_names(query: str) -> List[str]:
@@ -505,84 +621,11 @@ class HybridRetrievalHandler:
             keywords.append(query.strip())
 
         return list(set(keywords))  # Remove duplicates
-
-    @staticmethod
-    def _is_vague_entity_name(name: str) -> bool:
-        """Check if a venue or institution name is a vague/generic descriptor.
-
-        Phrases like "top medical journals", "leading conferences", "major universities"
-        are qualitative descriptors — not actual entity names that can be matched
-        in the database. This method returns True for such vague names.
-
-        Args:
-            name: The venue or institution name to check
-
-        Returns:
-            True if the name is too vague/generic to be a real entity
-        """
-        name_lower = name.lower().strip()
-
-        # Vague qualifier words that indicate a generic descriptor, not a real name
-        vague_qualifiers = {
-            'top', 'leading', 'major', 'prestigious', 'high-impact', 'high impact',
-            'best', 'good', 'notable', 'prominent', 'renowned', 'well-known',
-            'well known', 'famous', 'important', 'significant', 'reputable',
-            'premier', 'elite', 'key', 'various', 'several', 'many',
-            'international', 'relevant', 'popular', 'mainstream',
-        }
-
-        # Generic category words (not specific names)
-        generic_categories = {
-            'journals', 'journal', 'conferences', 'conference', 'venues', 'venue',
-            'publications', 'publication', 'outlets', 'outlet',
-            'universities', 'university', 'institutions', 'institution',
-            'labs', 'lab', 'laboratories', 'laboratory',
-            'organizations', 'organization', 'companies', 'company',
-            'research groups', 'research labs', 'research centers',
-        }
-
-        # Check if name is just a combination of qualifiers + generic categories
-        # e.g. "top medical journals", "leading research universities"
-        words = name_lower.split()
-
-        # If any word is a vague qualifier and any word/phrase is a generic category → vague
-        has_qualifier = any(q in name_lower for q in vague_qualifiers)
-        has_category = any(c in name_lower for c in generic_categories)
-
-        if has_qualifier and has_category:
-            return True
-
-        # Also reject names that are purely generic categories (even without qualifiers)
-        # e.g. "medical journals", "computer science conferences"
-        if has_category and len(words) <= 4:
-            # Check if all non-category words are adjectives/modifiers rather than proper names
-            # A real venue name like "Nature Medicine" won't have generic categories
-            non_category_words = [w for w in words if w not in
-                                  {'journals', 'journal', 'conferences', 'conference',
-                                   'venues', 'venue', 'universities', 'university',
-                                   'institutions', 'institution', 'labs', 'lab',
-                                   'publications', 'publication', 'outlets', 'outlet',
-                                   'organizations', 'organization', 'laboratories', 'laboratory'}]
-            # If remaining words are all common adjectives (not proper nouns), it's vague
-            common_modifiers = {
-                'medical', 'scientific', 'academic', 'clinical', 'biomedical',
-                'computer', 'science', 'engineering', 'biological', 'chemical',
-                'physical', 'social', 'environmental', 'educational',
-                'top', 'leading', 'major', 'good', 'best', 'high', 'impact',
-                'peer', 'reviewed', 'peer-reviewed', 'open', 'access',
-                'research', 'technical', 'general', 'specialized', 'interdisciplinary',
-            }
-            if all(w in common_modifiers for w in non_category_words):
-                return True
-
-        return False
-
     # =========================================================================
     # GRAPH TEMPLATE LIBRARY — Loaded from data/graph_templates.json
     # =========================================================================
 
     _graph_templates_cache: Optional[Dict] = None
-
     @classmethod
     def _load_graph_templates(cls) -> Dict:
         """Load neo4j query templates from data/graph_templates.json.
@@ -936,11 +979,19 @@ Rules:
    NEVER use vague/generic descriptors as venue — these are NOT valid venues:
    "top journals", "high-impact journals", "medical journals", "leading conferences",
    "prestigious venues", "top medical journals", "major conferences", "good journals".
-   If the query mentions a category of venues (e.g. "medical journals") without naming a specific one, set venue to null and incorporate the descriptor into keywords instead.
-7. "institution" MUST be a SPECIFIC, real institution name (e.g. "Stanford University", "Google DeepMind", "MIT").
+   If the query mentions a category of venues (e.g. "medicine journals", "machine learning venues") without naming a specific one,
+   set venue to null and extract ONLY the subject/topic words into keywords — strip out generic category words
+   (journals, journal, conferences, conference, venues, venue, publications, outlets) and vague qualifiers
+   (top, leading, major, prestigious, high-impact, best, good, notable, prominent, renowned).
+   Examples: "medicine journals" → keyword "medicine"; "machine learning conferences" → keyword "machine learning";
+   "top medical journals" → keyword "medical"; "high-impact AI venues" → keyword "AI".
+7. "institution" MUST be a SPECIFIC, real institution name (e.g. "Stanford", "Google DeepMind", "MIT").
    NEVER use vague/generic descriptors as institution — these are NOT valid institutions:
    "top universities", "leading research labs", "major institutions".
-   If no specific institution is named, set institution to null.
+   If no specific institution is named, set institution to null and extract ONLY the subject/topic words into keywords —
+   strip out generic category words (universities, university, institutions, institution, labs, laboratory, organizations)
+   and vague qualifiers (top, leading, major, prestigious, best, renowned).
+   Examples: "biomedical research labs" → keyword "biomedical"; "top engineering universities" → keyword "engineering".
 8. Set intent flags (wants_citations, wants_coauthors, wants_top_cited) based on the query's intent
 
 Examples:
@@ -960,10 +1011,16 @@ Query: "Papers published in Nature about protein folding"
 {{"paper_ids": [], "author_names": [], "keywords": ["protein folding"], "year": null, "year_from": null, "year_to": null, "venue": "Nature", "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
 
 Query: "Cancer papers published in high-impact medical journals"
-{{"paper_ids": [], "author_names": [], "keywords": ["cancer", "high-impact medical journals"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+{{"paper_ids": [], "author_names": [], "keywords": ["cancer", "medical"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
 
-Query: "Deep learning research from top universities"
-{{"paper_ids": [], "author_names": [], "keywords": ["deep learning"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+Query: "Papers published in medicine journals"
+{{"paper_ids": [], "author_names": [], "keywords": ["medicine"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "Machine learning papers from top AI conferences"
+{{"paper_ids": [], "author_names": [], "keywords": ["machine learning", "AI"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "Deep learning research from top engineering universities"
+{{"paper_ids": [], "author_names": [], "keywords": ["deep learning", "engineering"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
 
 Query: "Papers about CRISPR published in Cell"
 {{"paper_ids": [], "author_names": [], "keywords": ["CRISPR"], "year": null, "year_from": null, "year_to": null, "venue": "Cell", "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
@@ -1032,21 +1089,13 @@ Return ONLY the JSON object, nothing else."""
             venue = ai_result.get('venue')
             if venue and isinstance(venue, str) and len(venue.strip()) > 1:
                 venue_clean = venue.strip()
-                if self._is_vague_entity_name(venue_clean):
-                    logger.info(f"Discarded vague venue '{venue_clean}' — moving to keywords")
-                    extracted.setdefault('keywords', []).append(venue_clean)
-                else:
-                    extracted['venue'] = venue_clean
+                extracted['venue'] = venue_clean
 
             # Institution — reject vague/generic descriptors
             institution = ai_result.get('institution')
             if institution and isinstance(institution, str) and len(institution.strip()) > 1:
                 inst_clean = institution.strip()
-                if self._is_vague_entity_name(inst_clean):
-                    logger.info(f"Discarded vague institution '{inst_clean}' — moving to keywords")
-                    extracted.setdefault('keywords', []).append(inst_clean)
-                else:
-                    extracted['institution'] = inst_clean
+                extracted['institution'] = inst_clean
 
             # Intent flags
             if ai_result.get('wants_citations') is True:
@@ -1125,11 +1174,7 @@ Return ONLY the JSON object, nothing else."""
         )
         if venue_match:
             venue_name = venue_match.group(1).strip()
-            if self._is_vague_entity_name(venue_name):
-                logger.info(f"Rule-based: discarded vague venue '{venue_name}'")
-                extracted.setdefault('keywords', []).append(venue_name)
-            else:
-                extracted['venue'] = venue_name
+            extracted['venue'] = venue_name
 
         # 5. Institution — reject vague/generic descriptors
         inst_match = re.search(
@@ -1138,11 +1183,7 @@ Return ONLY the JSON object, nothing else."""
         )
         if inst_match and not extracted.get('venue'):  # avoid conflict with venue
             inst_name = inst_match.group(1).strip()
-            if self._is_vague_entity_name(inst_name):
-                logger.info(f"Rule-based: discarded vague institution '{inst_name}'")
-                extracted.setdefault('keywords', []).append(inst_name)
-            else:
-                extracted['institution'] = inst_name
+            extracted['institution'] = inst_name
 
         # 6. Intent flags
         if re.search(r'\bcit(?:e|ed|ation|ing)\b', query_lower):
@@ -1209,19 +1250,17 @@ Return ONLY the JSON object, nothing else."""
         1. Check Cypher cache
         2. Extract entities from query (paper IDs, authors, keywords, years, etc.)
         3. AI agent selects the best template (fallback: rule-based selection)
-        4. If template is keyword-only → multi-modal search:
-           a. Run milvus vector search (SciBERT) for textual similarity
-           b. Run cross-modal visual search (CLIP + SciBERT) for figure/table similarity
-           c. Re-rank and merge paper IDs from both sources
-           d. Use final ranked paper IDs for the Cypher query
+        4. If template needs paper IDs → run multi-modal vector search
+           (SciBERT + CLIP cross-modal + re-ranking) to produce ranked paper IDs
         5. Fill template parameters from extracted entities
         6. Cache and return
 
         Returns:
-            (cypher_query, parameters, template_key, vector_results, visual_data) tuple
-            where vector_results is a list of dicts from milvus search (may be empty)
-            and visual_data is a dict with figure_results, table_results, paper_visual_scores
+            (cypher_query, parameters, template_key, visual_data) tuple
+            where visual_data is a dict with figure_results, table_results,
+            paper_visual_scores (for display/evidence — ranking already applied)
         """
+        empty_visual = {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
         try:
             # Check Cypher cache first
             if self.cache_manager:
@@ -1229,7 +1268,7 @@ Return ONLY the JSON object, nothing else."""
                 if cached is not None:
                     cypher_query, parameters = cached
                     logger.info(f"Cypher cache HIT for: {query[:50]}...")
-                    return cypher_query, parameters, "cached", [], {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
+                    return cypher_query, parameters, "cached", empty_visual, []
 
             paraphrased_query = await self._paraphrase_query_as_description(query)
 
@@ -1259,88 +1298,35 @@ Return ONLY the JSON object, nothing else."""
                         )
                         if self.cache_manager:
                             self.cache_manager.cache_cypher(query, top_k, refined_cypher, parameters)
-                        return refined_cypher, parameters, "raw_cypher", [], {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
+                        return refined_cypher, parameters, "raw_cypher", empty_visual, []
             else:
                 template_key = await self._select_template_with_ai(paraphrased_query, extracted)
+            if template_key == 'search_by_keywords':
+                template_key = 'search_by_paper_ids'
             logger.info(f"Selected template: {template_key}")
 
-            # Step 3: Vector-first for keyword queries
-            # Only run keyword → milvus search when the selected template
-            # requires $paper_ids but none were extracted from the query.
-            # Templates with their own structured filters (author, venue, year,
-            # keywords, etc.) don't need this expensive round-trip.
+            # Step 3: Multi-modal vector search for keyword queries
+            # Only run when the selected template requires $paper_ids but none
+            # were extracted from the query. The multi-modal search combines
+            # SciBERT vector search + CLIP cross-modal search + re-ranking
+            # to produce the best-ranked paper IDs.
             template_cypher_text = self.GRAPH_TEMPLATES.get(template_key, {}).get('cypher', '')
             needs_paper_ids = '$paper_ids' in template_cypher_text
             has_paper_ids = bool(extracted.get('paper_ids'))
 
-            # Collect vector results and visual data from multi-modal search
-            collected_vector_results = []
-            visual_data = {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
+            visual_data = empty_visual
+            keywords = extracted.get('keywords', [])
 
             if (needs_paper_ids and not has_paper_ids) or template_key == 'search_by_keywords':
                 if template_key == 'search_by_keywords':
                     template_key = 'search_by_paper_ids'
-                keywords = extracted.get('keywords', [])
 
-                # ── Step 3a: Vector search (SciBERT) ──
-                all_vector_scores = {}   # paper_id → best distance (lower = better)
-                all_vector_results = []
-
-                for keyword in keywords:
-                    results = await self.execute_vector_search(keyword, top_k)
-                    all_vector_results.extend(results)
-
-                    for paper in results:
-                        p_id = paper.get('paper_id')
-                        dist = paper.get('distance', 0.0)
-                        if p_id not in all_vector_scores or dist < all_vector_scores[p_id]:
-                            all_vector_scores[p_id] = dist
-
-                # Deduplicate vector results by paper_id, keeping best distance
-                seen_ids = set()
-                for r in sorted(all_vector_results, key=lambda x: x.get('distance', 0.0)):
-                    pid = r.get('paper_id')
-                    if pid and pid not in seen_ids:
-                        seen_ids.add(pid)
-                        collected_vector_results.append(r)
-                collected_vector_results = collected_vector_results[:top_k]
-
-                # ── Step 3b: Cross-modal visual search scoped to vector search papers ──
-                vector_paper_ids = list(all_vector_scores.keys())
-                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=vector_paper_ids)
-                paper_visual_scores = visual_data.get('paper_visual_scores', {})
-                logger.info(
-                    f"Visual search (scoped to {len(vector_paper_ids)} papers): "
-                    f"{len(paper_visual_scores)} with visual evidence, "
-                    f"{len(visual_data.get('figure_results', []))} figures, "
-                    f"{len(visual_data.get('table_results', []))} tables"
+                # Run multi-modal vector search (SciBERT + CLIP + re-ranking)
+                sorted_ids, visual_data = await self.execute_multimodal_vector_search(
+                    query, keywords, top_k
                 )
 
-                # ── Step 3c: Re-rank vector results by combining vector + visual scores ──
-                # Normalize vector distances to [0, 1] similarity (1 = best)
-                max_dist = max(all_vector_scores.values()) if all_vector_scores else 1.0
-                min_dist = min(all_vector_scores.values()) if all_vector_scores else 0.0
-                dist_range = max_dist - min_dist if max_dist > min_dist else 1.0
-
-                combined_scores = {}  # paper_id → combined score (higher = better)
-                vector_weight = 0.7
-                visual_rerank_weight = 0.3
-
-                # Re-rank papers found by vector search, boosted by visual evidence
-                for pid, dist in all_vector_scores.items():
-                    vec_sim = 1.0 - ((dist - min_dist) / dist_range)  # normalize to similarity
-                    vis_score = paper_visual_scores.get(pid, 0.0)
-                    combined_scores[pid] = vector_weight * vec_sim + visual_rerank_weight * vis_score
-
-                # Sort by combined score (descending) and take top_k
-                sorted_ids = sorted(combined_scores, key=combined_scores.get, reverse=True)[:top_k]
-
-                logger.info(
-                    f"Re-ranked paper IDs: {len(sorted_ids)} "
-                    f"(vector: {len(all_vector_scores)}, visual boost on: {len(paper_visual_scores)})"
-                )
-
-                # Extend the extracted list
+                # Inject re-ranked paper IDs into extracted entities for the Cypher query
                 extracted.setdefault('paper_ids', []).extend(sorted_ids)
                 logger.info(f"Multi-modal search: injected {len(sorted_ids)} re-ranked paper IDs for template '{template_key}'")
             else:
@@ -1367,21 +1353,20 @@ Return ONLY the JSON object, nothing else."""
             if self.cache_manager:
                 self.cache_manager.cache_cypher(paraphrased_query, top_k, cypher_query, parameters)
 
-            return cypher_query, parameters, template_key, collected_vector_results, visual_data
+            return cypher_query, parameters, template_key, visual_data, keywords
 
         except Exception as e:
             logger.error(f"Error in intelligent Cypher generation: {e}")
             paraphrased_query = await self._paraphrase_query_as_description(query)
 
-            empty_visual = {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
             # Ultimate fallback — milvus-first then paper IDs lookup
             paper_ids = await self._vector_first_paper_ids(paraphrased_query, top_k) if self.milvus_client else None
             if paper_ids:
                 return self.GRAPH_TEMPLATES['search_by_paper_ids']['cypher'].strip(), \
-                    {"paper_ids": paper_ids, "limit": top_k}, "search_by_paper_ids", [], empty_visual
+                    {"paper_ids": paper_ids, "limit": top_k}, "search_by_paper_ids", empty_visual, []
             keywords = self._extract_keywords(paraphrased_query)
             return self.GRAPH_TEMPLATES['search_by_keywords']['cypher'].strip(), \
-                {"keywords": keywords or [paraphrased_query], "limit": top_k}, "search_by_keywords", [], empty_visual
+                {"keywords": keywords or [paraphrased_query], "limit": top_k}, "search_by_keywords", empty_visual, keywords
 
     async def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
         """Run milvus search to extract relevant paper IDs for neo4j enrichment.
@@ -1865,6 +1850,17 @@ Answer:"""
                         logger.debug(f"Description table search failed: {e}")
 
             # 3. Filter results to only keep figures/tables belonging to vector search papers
+            # Debug: log paper_ids from visual results vs allowed paper_ids
+            visual_fig_pids = set(r.get('paper_id') for r in figure_results if r.get('paper_id'))
+            visual_tab_pids = set(r.get('paper_id') for r in table_results if r.get('paper_id'))
+            logger.info(
+                f"Visual filter debug — "
+                f"allowed_pids ({len(allowed_pids)}): {list(allowed_pids)[:5]}, "
+                f"figure paper_ids ({len(visual_fig_pids)}): {list(visual_fig_pids)[:5]}, "
+                f"table paper_ids ({len(visual_tab_pids)}): {list(visual_tab_pids)[:5]}, "
+                f"intersection figs: {visual_fig_pids & allowed_pids}, "
+                f"intersection tabs: {visual_tab_pids & allowed_pids}"
+            )
             figure_results = [r for r in figure_results if r.get('paper_id') in allowed_pids]
             table_results = [r for r in table_results if r.get('paper_id') in allowed_pids]
 

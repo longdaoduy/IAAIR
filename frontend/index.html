@@ -495,15 +495,6 @@
 
                 <div class="search-options">
                     <div class="option-group">
-                        <label>Strategy</label>
-                        <select id="routingStrategy">
-                            <option value="adaptive">Adaptive</option>
-                            <option value="vector_first">Vector First</option>
-                            <option value="graph_first">Graph First</option>
-                            <option value="parallel">Parallel</option>
-                        </select>
-                    </div>
-                    <div class="option-group">
                         <label>Top K</label>
                         <select id="topK">
                             <option value="5">5</option>
@@ -516,13 +507,6 @@
                         <label>AI Response</label>
                         <label class="toggle">
                             <input type="checkbox" id="enableAI" checked>
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="option-group">
-                        <label>Reranking</label>
-                        <label class="toggle">
-                            <input type="checkbox" id="enableRerank" checked>
                             <span class="slider"></span>
                         </label>
                     </div>
@@ -917,14 +901,10 @@ async function doSearch() {
     document.getElementById('searchBtn').disabled = true;
 
     try {
-        const strategy = document.getElementById('routingStrategy').value;
         const body = {
             query,
             top_k: parseInt(document.getElementById('topK').value),
-            routing_strategy: strategy,
-            enable_ai_response: document.getElementById('enableAI').checked,
-            enable_reranking: document.getElementById('enableRerank').checked,
-            enable_attribution: true
+            enable_ai_response: document.getElementById('enableAI').checked
         };
 
         // Attach neo4j template if a template is selected (works with any strategy)
@@ -964,6 +944,7 @@ function renderSearchResults(d) {
     let html = '';
 
     const vs = d.visual_stats || {};
+    const fs = d.fusion_stats || {};
     const hasFigs = (vs.figures_found || 0) > 0;
     const hasTabs = (vs.tables_found || 0) > 0;
     const hasVisual = hasFigs || hasTabs;
@@ -972,7 +953,8 @@ function renderSearchResults(d) {
     html += `<div class="results-header">
         <h3>${d.results_found} results found</h3>
         <div class="results-meta">
-            ${d.graph_template_used ? `<span class="meta-pill">🕸️ Template</span>` : ''}
+            ${d.graph_template_used ? `<span class="meta-pill">🕸️ ${escHtml(d.graph_template_used)}</span>` : ''}
+            ${fs.hybrid_results_count ? `<span class="meta-pill">🔀 ${fs.hybrid_results_count} hybrid</span>` : ''}
             <span class="meta-pill green">⏱ ${d.search_time_seconds?.toFixed(2) || '?'}s</span>
             ${d.response_generation_time_seconds ? `<span class="meta-pill amber">🤖 AI: ${d.response_generation_time_seconds.toFixed(2)}s</span>` : ''}
             ${hasVisual ? `<span class="meta-pill" style="background:rgba(99,102,241,0.15);color:var(--accent-light);border-color:rgba(99,102,241,0.3)">🖼️ ${vs.figures_found || 0} figures · 📊 ${vs.tables_found || 0} tables</span>` : ''}
@@ -1044,8 +1026,10 @@ function renderSearchResults(d) {
                     ${p.cited_by_count ? `<span class="paper-meta-item">📚 Cited: ${p.cited_by_count}</span>` : ''}
                     ${p.doi ? `<span class="paper-meta-item"><a href="https://doi.org/${escHtml(p.doi)}" target="_blank" rel="noopener noreferrer" style="color:var(--text-dim);text-decoration:none" onclick="event.stopPropagation()">🔗 ${escHtml(p.doi)}</a></span>` : ''}
                     ${p.paper_id ? `<span class="paper-meta-item">📄 ${escHtml(p.paper_id)}</span>` : ''}
-                    ${p.vector_score != null ? `<span class="paper-meta-item">Vec: ${p.vector_score.toFixed(3)}</span>` : ''}
-                    ${p.graph_score != null ? `<span class="paper-meta-item">Graph: ${p.graph_score.toFixed(3)}</span>` : ''}
+                    ${(p.source_path && p.source_path.length) ? `<span class="paper-meta-item" style="color:var(--accent-light)">🔀 ${p.source_path.join(' → ')}</span>` : ''}
+                    ${(p.confidence_scores && p.confidence_scores.hybrid_confidence != null) ? `<span class="paper-meta-item">🎯 Hybrid: ${p.confidence_scores.hybrid_confidence.toFixed(3)}</span>` : ''}
+                    ${(p.confidence_scores && p.confidence_scores.multimodal_confidence > 0) ? `<span class="paper-meta-item">🧠 Multimodal: ${p.confidence_scores.multimodal_confidence.toFixed(3)}</span>` : ''}
+                    ${(p.confidence_scores && p.confidence_scores.graph_confidence > 0) ? `<span class="paper-meta-item">🕸️ Graph: ${p.confidence_scores.graph_confidence.toFixed(3)}</span>` : ''}
                     ${pVisual > 0 ? `<span class="paper-meta-item" style="color:var(--accent-light)">🖼️ Visual: ${pVisual.toFixed(3)}</span>` : ''}
                     ${hasVisualEvidence ? `<span class="paper-meta-item" style="color:var(--accent-light)">${pFigs > 0 ? pFigs + ' fig' + (pFigs > 1 ? 's' : '') : ''}${pFigs > 0 && pTabs > 0 ? ' · ' : ''}${pTabs > 0 ? pTabs + ' table' + (pTabs > 1 ? 's' : '') : ''}</span>` : ''}
                 </div>

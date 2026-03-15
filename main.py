@@ -527,7 +527,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         fusion_start = datetime.now()
 
-        hybrid_results, template_info, vector_results, visual_data = await factory.retrieval_handler.execute_hybrid_search(
+        hybrid_results, template_info, visual_data = await factory.retrieval_handler.execute_hybrid_search(
             query=request.query,
             template_cypher=request.graph_template,
             top_k=request.top_k
@@ -536,19 +536,18 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         logger.info(f"Template used: {template_info}")
         logger.info(f"Hybrid results (graph+vector combined): {len(hybrid_results or [])} results")
 
-        # Visual data is now collected inside _build_intelligent_cypher_query
-        # alongside vector search, with re-ranking applied to produce final paper IDs
+        # Visual data is collected during multi-modal vector search (SciBERT + CLIP + re-ranking)
+        # and passed through for display/evidence purposes — ranking is already applied
         visual_figures = visual_data.get('figure_results', [])
         visual_tables = visual_data.get('table_results', [])
         logger.info(
-            f"Cross-modal visual search: {len(visual_figures)} figures, "
+            f"Cross-modal visual evidence: {len(visual_figures)} figures, "
             f"{len(visual_tables)} tables"
         )
 
         with factory.performance_monitor.track_operation('fusion'):
             fused_results = factory.result_fusion.fuse_results(
                 hybrid_results or [],
-                request.fusion_weights,
                 visual_data=visual_data
             )
 
@@ -586,7 +585,6 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             'visual_figures_count': len(visual_figures),
             'visual_tables_count': len(visual_tables),
             'papers_with_visual_evidence': len(visual_data.get('paper_visual_scores', {})),
-            'fusion_weights': request.fusion_weights or factory.result_fusion.default_weights
         }
 
         visual_stats = {
