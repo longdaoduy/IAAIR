@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class LLMClient:
     """Service for generating SciBERT embeddings from academic papers."""
 
-    def __init__(self, config: Optional[LLMConfig] = None):
+    def __init__(self, config: Optional[LLMConfig] = None, model_name = None):
         """Initialize the SciBERT embedding service.
 
         Args:
@@ -29,6 +29,7 @@ class LLMClient:
         self.config = config or LLMConfig.from_env()
         self.tokenizer = None
         self.model = None
+        self.model_name = model_name or self.config.model_name
         self.device = None
         
         # LLM call tracking
@@ -47,19 +48,19 @@ class LLMClient:
         self._load_model()
 
     def _load_model(self):
-        logger.info(f"Loading model: {self.config.model_name}")
+        logger.info(f"Loading model: {self.model_name}")
         self.config.validate_model()
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
         self.model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name,
+            self.model_name,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             device_map="auto"
         )
 
         self.model.eval()
-        logger.info(f"✅ Model loaded: {self.config.model_name} on {self.model.device}")
+        logger.info(f"✅ Model loaded: {self.model_name} on {self.model.device}")
 
     def reload_model(self, model_name: str) -> str:
         """Hot-swap the LLM model at runtime.
@@ -70,7 +71,7 @@ class LLMClient:
         Returns:
             Status message
         """
-        old_name = self.config.model_name
+        old_name = self.model_name
         logger.info(f"🔄 Switching LLM: {old_name} → {model_name}")
         
         # Free old model memory

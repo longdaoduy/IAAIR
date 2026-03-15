@@ -32,8 +32,8 @@ class HybridRetrievalHandler:
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
-        self.answer_agent = LLMClient()
-        self.template_agent = LLMClient()
+        self.answer_agent = LLMClient(model_name="Qwen/Qwen2.5-0.5B-Instruct")
+        self.template_agent = LLMClient(model_name="Qwen/Qwen2.5-0.5B-Instruct")
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
         self.clip_client = clip_client
@@ -1060,7 +1060,7 @@ Respond with ONLY the template name, nothing else."""
                     return cypher_query, parameters, "cached", []
 
             # Step 1: Extract entities from the query
-            para_query = self._paraphrase_query_as_description(query)
+            para_query = await self._paraphrase_query_as_description(query)
 
             extracted = self._extract_all_entities(para_query)
             logger.info(f"Extracted entities: {extracted}")
