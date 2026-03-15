@@ -32,6 +32,7 @@ class HybridRetrievalHandler:
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
+        self.answer_agent = LLMClient()
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
         self.clip_client = clip_client
@@ -1415,38 +1416,38 @@ Return ONLY the JSON object, nothing else."""
             logger.error(f"Vector-first search failed: {e}")
             return []
 
-    async def _execute_graph_refinement(self, paper_ids: List[str], top_k: int) -> List[Dict]:
-        """Refine milvus results using neo4j relationships."""
-        try:
-            if not self.graph_handler:
-                logger.error("Graph handler not initialized")
-                return []
-
-            # Find related papers through citations and collaborations
-            cypher_query = """
-                MATCH (p:Paper)
-                WHERE p.id IN $paper_ids
-                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                       p.doi as doi, p.publication_date as publication_date,
-                       p.cited_by_count as cited_by_count,
-                       collect(DISTINCT a.name) as authors,
-                       v.name as venue
-                ORDER BY p.id
-            """
-
-            logger.info(paper_ids)
-
-            results = await run_blocking(self.graph_handler.execute_query, cypher_query, {
-                "paper_ids": paper_ids,
-                "top_k": top_k
-            })
-
-            return results
-        except Exception as e:
-            logger.error(f"Graph refinement error: {e}")
-            return []
+    # async def _execute_graph_refinement(self, paper_ids: List[str], top_k: int) -> List[Dict]:
+    #     """Refine milvus results using neo4j relationships."""
+    #     try:
+    #         if not self.graph_handler:
+    #             logger.error("Graph handler not initialized")
+    #             return []
+    #
+    #         # Find related papers through citations and collaborations
+    #         cypher_query = """
+    #             MATCH (p:Paper)
+    #             WHERE p.id IN $paper_ids
+    #             OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
+    #             OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
+    #             RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
+    #                    p.doi as doi, p.publication_date as publication_date,
+    #                    p.cited_by_count as cited_by_count,
+    #                    collect(DISTINCT a.name) as authors,
+    #                    v.name as venue
+    #             ORDER BY p.id
+    #         """
+    #
+    #         logger.info(paper_ids)
+    #
+    #         results = await run_blocking(self.graph_handler.execute_query, cypher_query, {
+    #             "paper_ids": paper_ids,
+    #             "top_k": top_k
+    #         })
+    #
+    #         return results
+    #     except Exception as e:
+    #         logger.error(f"Graph refinement error: {e}")
+    #         return []
 
     async def generate_ai_response(
             self,
@@ -1466,7 +1467,7 @@ Return ONLY the JSON object, nothing else."""
                              and 'paper_visual_scores' from cross-modal visual search
         """
         try:
-            if not self.ai_agent:
+            if not self.answer_agent:
                 logger.info("AI Agent is not available for response generation")
                 return None
 
@@ -1555,7 +1556,7 @@ Answer:"""
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
-                self.ai_agent.generate_content,
+                self.answer_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
                 purpose='answer_synthesis'
@@ -1890,146 +1891,146 @@ Answer:"""
         except Exception as e:
             logger.error(f"Cross-modal visual search error: {e}")
             return empty_result
-
-    # =========================================================================
-    # IMAGE SEARCH METHODS
-    # =========================================================================
-
-    async def search_by_image(self, image_embedding: List[float], top_k: int = 10,
-                              search_figures: bool = True, search_tables: bool = True,
-                              text_query: Optional[str] = None) -> Dict:
-        """Search figures and tables collections by image embedding.
-
-        Args:
-            image_embedding: CLIP image embedding milvus
-            top_k: Number of results per collection
-            search_figures: Whether to search figures collection
-            search_tables: Whether to search tables collection
-            text_query: Optional text query for hybrid image+text search
-
-        Returns:
-            Dict with figure_results, table_results, and related_papers
-        """
-        figure_results = []
-        table_results = []
-
-        try:
-            # Search figures collection — offload to thread pool
-            if search_figures:
-                figure_results = await run_blocking(
-                    self.milvus_client.search_figures_by_image,
-                    image_embedding, top_k
-                )
-
-            # Search tables collection — offload to thread pool
-            if search_tables:
-                table_results = await run_blocking(
-                    self.milvus_client.search_tables_by_image,
-                    image_embedding, top_k
-                )
-
-            # If text query provided, also search by description and merge results
-            if text_query and self.embedding_client:
-                text_embedding = await run_blocking(
-                    self.embedding_client.generate_text_embedding, text_query
-                )
-                if text_embedding:
-                    if search_figures:
-                        text_fig_results = await run_blocking(
-                            self.milvus_client.search_figures_by_description,
-                            text_embedding, top_k
-                        )
-                        figure_results = self._merge_visual_results(figure_results, text_fig_results)
-
-                    if search_tables:
-                        text_tab_results = await run_blocking(
-                            self.milvus_client.search_tables_by_description,
-                            text_embedding, top_k
-                        )
-                        table_results = self._merge_visual_results(table_results, text_tab_results)
-
-            # Collect related paper IDs from visual results
-            paper_ids = set()
-            for r in figure_results + table_results:
-                if r.get("paper_id"):
-                    paper_ids.add(r["paper_id"])
-
-            # Fetch related paper details — prefer Neo4j for full metadata
-            related_papers = []
-            paper_ids_list = list(paper_ids)[:20]
-
-            if paper_ids_list and self.graph_handler:
-                try:
-                    related_papers = await self._execute_graph_refinement(paper_ids_list, len(paper_ids_list))
-                    logger.info(f"Fetched {len(related_papers)} related papers from Neo4j")
-                except Exception as e:
-                    logger.warning(f"Neo4j paper enrichment failed, falling back to Milvus: {e}")
-                    related_papers = []
-
-            # Fallback to Milvus if Neo4j returned nothing
-            if not related_papers and paper_ids_list and self.milvus_client.collection:
-                for pid in paper_ids_list:
-                    try:
-                        paper_results = await run_blocking(
-                            self.milvus_client.collection.query,
-                            expr=f'id == "{pid}"',
-                            output_fields=["id", "title", "abstract"]
-                        )
-                        if paper_results:
-                            p = paper_results[0]
-                            related_papers.append({
-                                "paper_id": p.get("id", ""),
-                                "title": p.get("title", ""),
-                                "abstract": p.get("abstract", ""),
-                                "authors": [],
-                                "venue": None,
-                                "doi": None,
-                                "publication_date": None,
-                                "cited_by_count": 0
-                            })
-                    except Exception as e:
-                        logger.debug(f"Could not fetch paper {pid}: {e}")
-
-            # Attach visual match counts per paper
-            paper_visual_counts = {}
-            for r in figure_results + table_results:
-                pid = r.get("paper_id")
-                if pid:
-                    paper_visual_counts.setdefault(pid, {"figures": 0, "tables": 0})
-                    if r.get("collection") == "figures" or r.get("search_type", "").startswith("figure"):
-                        paper_visual_counts[pid]["figures"] += 1
-                    else:
-                        paper_visual_counts[pid]["tables"] += 1
-
-            for paper in related_papers:
-                pid = paper.get("paper_id", paper.get("id", ""))
-                counts = paper_visual_counts.get(pid, {"figures": 0, "tables": 0})
-                paper["matched_figures"] = counts["figures"]
-                paper["matched_tables"] = counts["tables"]
-                # Add a relevance score based on visual match density
-                paper.setdefault("relevance_score", 0.0)
-                if paper["relevance_score"] == 0:
-                    paper["relevance_score"] = min(1.0, (counts["figures"] + counts["tables"]) * 0.15)
-
-            # Sort papers by number of visual matches
-            related_papers.sort(
-                key=lambda p: p.get("matched_figures", 0) + p.get("matched_tables", 0),
-                reverse=True
-            )
-            logger.info(related_papers)
-            return {
-                "figure_results": figure_results[:top_k],
-                "table_results": table_results[:top_k],
-                "related_papers": related_papers
-            }
-
-        except Exception as e:
-            logger.error(f"Image search error: {e}")
-            return {
-                "figure_results": figure_results,
-                "table_results": table_results,
-                "related_papers": []
-            }
+    #
+    # # =========================================================================
+    # # IMAGE SEARCH METHODS
+    # # =========================================================================
+    #
+    # async def search_by_image(self, image_embedding: List[float], top_k: int = 10,
+    #                           search_figures: bool = True, search_tables: bool = True,
+    #                           text_query: Optional[str] = None) -> Dict:
+    #     """Search figures and tables collections by image embedding.
+    #
+    #     Args:
+    #         image_embedding: CLIP image embedding milvus
+    #         top_k: Number of results per collection
+    #         search_figures: Whether to search figures collection
+    #         search_tables: Whether to search tables collection
+    #         text_query: Optional text query for hybrid image+text search
+    #
+    #     Returns:
+    #         Dict with figure_results, table_results, and related_papers
+    #     """
+    #     figure_results = []
+    #     table_results = []
+    #
+    #     try:
+    #         # Search figures collection — offload to thread pool
+    #         if search_figures:
+    #             figure_results = await run_blocking(
+    #                 self.milvus_client.search_figures_by_image,
+    #                 image_embedding, top_k
+    #             )
+    #
+    #         # Search tables collection — offload to thread pool
+    #         if search_tables:
+    #             table_results = await run_blocking(
+    #                 self.milvus_client.search_tables_by_image,
+    #                 image_embedding, top_k
+    #             )
+    #
+    #         # If text query provided, also search by description and merge results
+    #         if text_query and self.embedding_client:
+    #             text_embedding = await run_blocking(
+    #                 self.embedding_client.generate_text_embedding, text_query
+    #             )
+    #             if text_embedding:
+    #                 if search_figures:
+    #                     text_fig_results = await run_blocking(
+    #                         self.milvus_client.search_figures_by_description,
+    #                         text_embedding, top_k
+    #                     )
+    #                     figure_results = self._merge_visual_results(figure_results, text_fig_results)
+    #
+    #                 if search_tables:
+    #                     text_tab_results = await run_blocking(
+    #                         self.milvus_client.search_tables_by_description,
+    #                         text_embedding, top_k
+    #                     )
+    #                     table_results = self._merge_visual_results(table_results, text_tab_results)
+    #
+    #         # Collect related paper IDs from visual results
+    #         paper_ids = set()
+    #         for r in figure_results + table_results:
+    #             if r.get("paper_id"):
+    #                 paper_ids.add(r["paper_id"])
+    #
+    #         # Fetch related paper details — prefer Neo4j for full metadata
+    #         related_papers = []
+    #         paper_ids_list = list(paper_ids)[:20]
+    #
+    #         # if paper_ids_list and self.graph_handler:
+    #         #     try:
+    #         #         related_papers = await self._execute_graph_refinement(paper_ids_list, len(paper_ids_list))
+    #         #         logger.info(f"Fetched {len(related_papers)} related papers from Neo4j")
+    #         #     except Exception as e:
+    #         #         logger.warning(f"Neo4j paper enrichment failed, falling back to Milvus: {e}")
+    #         #         related_papers = []
+    #
+    #         # Fallback to Milvus if Neo4j returned nothing
+    #         if not related_papers and paper_ids_list and self.milvus_client.collection:
+    #             for pid in paper_ids_list:
+    #                 try:
+    #                     paper_results = await run_blocking(
+    #                         self.milvus_client.collection.query,
+    #                         expr=f'id == "{pid}"',
+    #                         output_fields=["id", "title", "abstract"]
+    #                     )
+    #                     if paper_results:
+    #                         p = paper_results[0]
+    #                         related_papers.append({
+    #                             "paper_id": p.get("id", ""),
+    #                             "title": p.get("title", ""),
+    #                             "abstract": p.get("abstract", ""),
+    #                             "authors": [],
+    #                             "venue": None,
+    #                             "doi": None,
+    #                             "publication_date": None,
+    #                             "cited_by_count": 0
+    #                         })
+    #                 except Exception as e:
+    #                     logger.debug(f"Could not fetch paper {pid}: {e}")
+    #
+    #         # Attach visual match counts per paper
+    #         paper_visual_counts = {}
+    #         for r in figure_results + table_results:
+    #             pid = r.get("paper_id")
+    #             if pid:
+    #                 paper_visual_counts.setdefault(pid, {"figures": 0, "tables": 0})
+    #                 if r.get("collection") == "figures" or r.get("search_type", "").startswith("figure"):
+    #                     paper_visual_counts[pid]["figures"] += 1
+    #                 else:
+    #                     paper_visual_counts[pid]["tables"] += 1
+    #
+    #         for paper in related_papers:
+    #             pid = paper.get("paper_id", paper.get("id", ""))
+    #             counts = paper_visual_counts.get(pid, {"figures": 0, "tables": 0})
+    #             paper["matched_figures"] = counts["figures"]
+    #             paper["matched_tables"] = counts["tables"]
+    #             # Add a relevance score based on visual match density
+    #             paper.setdefault("relevance_score", 0.0)
+    #             if paper["relevance_score"] == 0:
+    #                 paper["relevance_score"] = min(1.0, (counts["figures"] + counts["tables"]) * 0.15)
+    #
+    #         # Sort papers by number of visual matches
+    #         related_papers.sort(
+    #             key=lambda p: p.get("matched_figures", 0) + p.get("matched_tables", 0),
+    #             reverse=True
+    #         )
+    #         logger.info(related_papers)
+    #         return {
+    #             "figure_results": figure_results[:top_k],
+    #             "table_results": table_results[:top_k],
+    #             "related_papers": related_papers
+    #         }
+    #
+    #     except Exception as e:
+    #         logger.error(f"Image search error: {e}")
+    #         return {
+    #             "figure_results": figure_results,
+    #             "table_results": table_results,
+    #             "related_papers": []
+    #         }
 
     def _merge_visual_results(self, image_results: List[Dict], text_results: List[Dict],
                               image_weight: float = 0.6, text_weight: float = 0.4) -> List[Dict]:

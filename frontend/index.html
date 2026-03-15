@@ -555,91 +555,91 @@
                 </div>
             </div>
 
-            <!-- ═══ Image Search Panel ═══ -->
-            <div class="panel" id="panel-imagesearch">
-                <div class="search-hero">
-                    <h2>Visual Search</h2>
-                    <p>Upload an image to find similar figures and tables in academic papers</p>
-                </div>
+<!--            &lt;!&ndash; ═══ Image Search Panel ═══ &ndash;&gt;-->
+<!--            <div class="panel" id="panel-imagesearch">-->
+<!--                <div class="search-hero">-->
+<!--                    <h2>Visual Search</h2>-->
+<!--                    <p>Upload an image to find similar figures and tables in academic papers</p>-->
+<!--                </div>-->
 
-                <div class="image-upload-area" id="imageDropZone">
-                    <input type="file" id="imageFileInput" accept="image/*" onchange="handleImageSelect(event)">
-                    <div class="upload-icon">🖼️</div>
-                    <div class="upload-text">Drop an image here or click to upload</div>
-                    <div class="upload-hint">Supports PNG, JPG, WEBP • Max 10MB</div>
-                </div>
+<!--                <div class="image-upload-area" id="imageDropZone">-->
+<!--                    <input type="file" id="imageFileInput" accept="image/*" onchange="handleImageSelect(event)">-->
+<!--                    <div class="upload-icon">🖼️</div>-->
+<!--                    <div class="upload-text">Drop an image here or click to upload</div>-->
+<!--                    <div class="upload-hint">Supports PNG, JPG, WEBP • Max 10MB</div>-->
+<!--                </div>-->
 
-                <div class="image-preview-container" id="imagePreview">
-                    <img id="imagePreviewImg" src="" alt="Preview">
-                    <div class="image-preview-info">
-                        <div class="name" id="imagePreviewName">—</div>
-                        <div class="size" id="imagePreviewSize">—</div>
-                    </div>
-                    <button class="image-preview-remove" onclick="clearImageUpload()">✕ Remove</button>
-                </div>
+<!--                <div class="image-preview-container" id="imagePreview">-->
+<!--                    <img id="imagePreviewImg" src="" alt="Preview">-->
+<!--                    <div class="image-preview-info">-->
+<!--                        <div class="name" id="imagePreviewName">—</div>-->
+<!--                        <div class="size" id="imagePreviewSize">—</div>-->
+<!--                    </div>-->
+<!--                    <button class="image-preview-remove" onclick="clearImageUpload()">✕ Remove</button>-->
+<!--                </div>-->
 
-                <div class="image-search-fields">
-                    <div class="image-field-group">
-                        <div class="field-label"><span class="field-icon">📝</span> Description</div>
-                        <div class="field-hint">Describe what's in the image for hybrid image+text search. Leave empty for image-only search.</div>
-                        <textarea id="imageDescription" rows="2" placeholder="e.g. A bar chart comparing model accuracy across different datasets..."></textarea>
-                    </div>
-                    <div class="image-field-group">
-                        <div class="field-label"><span class="field-icon">❓</span> Query</div>
-                        <div class="field-hint">Ask a question about the image — the AI agent will analyze the search results and answer.</div>
-                        <textarea id="imageQuery" rows="2" placeholder="e.g. What methods achieve the best performance in this comparison?"></textarea>
-                    </div>
-                </div>
+<!--                <div class="image-search-fields">-->
+<!--                    <div class="image-field-group">-->
+<!--                        <div class="field-label"><span class="field-icon">📝</span> Description</div>-->
+<!--                        <div class="field-hint">Describe what's in the image for hybrid image+text search. Leave empty for image-only search.</div>-->
+<!--                        <textarea id="imageDescription" rows="2" placeholder="e.g. A bar chart comparing model accuracy across different datasets..."></textarea>-->
+<!--                    </div>-->
+<!--                    <div class="image-field-group">-->
+<!--                        <div class="field-label"><span class="field-icon">❓</span> Query</div>-->
+<!--                        <div class="field-hint">Ask a question about the image — the AI agent will analyze the search results and answer.</div>-->
+<!--                        <textarea id="imageQuery" rows="2" placeholder="e.g. What methods achieve the best performance in this comparison?"></textarea>-->
+<!--                    </div>-->
+<!--                </div>-->
 
-                <div class="image-search-actions">
-                    <div class="search-options" style="margin:0;flex:1">
-                        <div class="option-group">
-                            <label>Top K</label>
-                            <select id="imageTopK">
-                                <option value="5">5</option>
-                                <option value="10" selected>10</option>
-                                <option value="20">20</option>
-                            </select>
-                        </div>
-                        <div class="option-group">
-                            <label>Papers</label>
-                            <label class="toggle">
-                                <input type="checkbox" id="showPapers" checked>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="option-group">
-                            <label>Figures</label>
-                            <label class="toggle">
-                                <input type="checkbox" id="searchFigures" checked>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="option-group">
-                            <label>Tables</label>
-                            <label class="toggle">
-                                <input type="checkbox" id="searchTables" checked>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                    </div>
-                    <button class="btn btn-primary" id="imageSearchBtn" onclick="doImageSearch()" disabled>
-                        🖼️ Search
-                    </button>
-                </div>
+<!--                <div class="image-search-actions">-->
+<!--                    <div class="search-options" style="margin:0;flex:1">-->
+<!--                        <div class="option-group">-->
+<!--                            <label>Top K</label>-->
+<!--                            <select id="imageTopK">-->
+<!--                                <option value="5">5</option>-->
+<!--                                <option value="10" selected>10</option>-->
+<!--                                <option value="20">20</option>-->
+<!--                            </select>-->
+<!--                        </div>-->
+<!--                        <div class="option-group">-->
+<!--                            <label>Papers</label>-->
+<!--                            <label class="toggle">-->
+<!--                                <input type="checkbox" id="showPapers" checked>-->
+<!--                                <span class="slider"></span>-->
+<!--                            </label>-->
+<!--                        </div>-->
+<!--                        <div class="option-group">-->
+<!--                            <label>Figures</label>-->
+<!--                            <label class="toggle">-->
+<!--                                <input type="checkbox" id="searchFigures" checked>-->
+<!--                                <span class="slider"></span>-->
+<!--                            </label>-->
+<!--                        </div>-->
+<!--                        <div class="option-group">-->
+<!--                            <label>Tables</label>-->
+<!--                            <label class="toggle">-->
+<!--                                <input type="checkbox" id="searchTables" checked>-->
+<!--                                <span class="slider"></span>-->
+<!--                            </label>-->
+<!--                        </div>-->
+<!--                    </div>-->
+<!--                    <button class="btn btn-primary" id="imageSearchBtn" onclick="doImageSearch()" disabled>-->
+<!--                        🖼️ Search-->
+<!--                    </button>-->
+<!--                </div>-->
 
-                <div id="imageSearchLoading" class="loading" style="display:none">
-                    <div class="spinner"></div>
-                    <div class="loading-text">Searching figures and tables by visual similarity...</div>
-                </div>
+<!--                <div id="imageSearchLoading" class="loading" style="display:none">-->
+<!--                    <div class="spinner"></div>-->
+<!--                    <div class="loading-text">Searching figures and tables by visual similarity...</div>-->
+<!--                </div>-->
 
-                <div id="imageSearchResults"></div>
+<!--                <div id="imageSearchResults"></div>-->
 
-                <div id="imageSearchEmpty" class="empty-state">
-                    <div class="icon">🖼️</div>
-                    <p>Upload an image to search for similar figures and tables</p>
-                </div>
-            </div>
+<!--                <div id="imageSearchEmpty" class="empty-state">-->
+<!--                    <div class="icon">🖼️</div>-->
+<!--                    <p>Upload an image to search for similar figures and tables</p>-->
+<!--                </div>-->
+<!--            </div>-->
 
             <!-- ═══ Graph Query Panel ═══ -->
             <div class="panel" id="panel-graph">

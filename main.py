@@ -685,274 +685,274 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         raise HTTPException(status_code=500, detail=f"Hybrid search failed: {str(e)}")
 
 
-# ===============================================================================
-# IMAGE SEARCH ENDPOINTS
-# ===============================================================================
-
-@app.post("/image-search")
-async def image_search(
-        file: UploadFile = File(...),
-        text_query: str = Form(None),
-        top_k: int = Form(10),
-        search_figures: bool = Form(True),
-        search_tables: bool = Form(True),
-        factory: ServiceFactory = Depends(get_services)
-):
-    """
-    Search for similar figures and tables using an uploaded image.
-
-    This endpoint:
-    1. Accepts an uploaded image (PNG, JPG, WEBP)
-    2. Generates a CLIP embedding from the image
-    3. Searches figures and tables collections by visual similarity
-    4. Optionally combines with text query for hybrid image+text search
-    5. Returns matching figures, tables, and their parent papers
-    """
-    start_time = datetime.now()
-
-    try:
-        # Validate CLIP client
-        if not factory.clip_client:
-            raise HTTPException(status_code=503, detail="CLIP model not initialized")
-
-        # Read and validate the uploaded image
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail="Empty file uploaded")
-
-        # Validate file type
-        allowed_types = {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"}
-        if file.content_type and file.content_type not in allowed_types:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported image type: {file.content_type}. Allowed: {', '.join(allowed_types)}"
-            )
-
-        # Convert to PIL Image
-        from PIL import Image as PILImage
-        image = PILImage.open(io.BytesIO(contents)).convert("RGB")
-
-        logger.info(f"Processing image search: {file.filename} ({image.size[0]}x{image.size[1]})")
-
-        # Generate CLIP embedding (with caching)
-        image_embedding = None
-        if factory.cache_manager:
-            image_embedding = factory.cache_manager.get_image_embedding(contents)
-
-        if image_embedding is None:
-            image_embedding = await run_blocking(
-                factory.clip_client.generate_image_embedding, image
-            )
-            if not image_embedding:
-                raise HTTPException(status_code=500, detail="Failed to generate image embedding")
-            if factory.cache_manager:
-                factory.cache_manager.cache_image_embedding(contents, image_embedding)
-
-        # Execute image search
-        results = await factory.retrieval_handler.search_by_image(
-            image_embedding=image_embedding,
-            top_k=top_k,
-            search_figures=search_figures,
-            search_tables=search_tables,
-            text_query=text_query
-        )
-
-        search_time = (datetime.now() - start_time).total_seconds()
-
-        figure_results = results.get("figure_results", [])
-        table_results = results.get("table_results", [])
-        related_papers = results.get("related_papers", [])
-
-        logger.info(
-            f"Image search completed: {len(figure_results)} figures, "
-            f"{len(table_results)} tables, {len(related_papers)} papers in {search_time:.2f}s"
-        )
-
-        return {
-            "success": True,
-            "message": f"Found {len(figure_results)} figures and {len(table_results)} tables from {len(related_papers)} papers",
-            "search_time_seconds": search_time,
-            "text_query": text_query,
-            "image_filename": file.filename,
-            "results_found": len(related_papers),
-            "results": related_papers,
-            "totals": {
-                "figures": len(figure_results),
-                "tables": len(table_results),
-                "related_papers": len(related_papers)
-            },
-            "figure_results": figure_results,
-            "table_results": table_results
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Image search error: {e}")
-        raise HTTPException(status_code=500, detail=f"Image search failed: {str(e)}")
-
-
-class ImageSearchBase64Request(BaseModel):
-    image_base64: str
-    text_query: Optional[str] = None
-    query: Optional[str] = None
-    top_k: int = 10
-    search_figures: bool = True
-    search_tables: bool = True
-
-
-@app.post("/image-search/base64")
-async def image_search_base64(
-        request: ImageSearchBase64Request,
-        factory: ServiceFactory = Depends(get_services)
-):
-    """
-    Search for similar figures and tables using a base64-encoded image.
-
-    Accepts JSON body with base64 image data — useful for frontend integration
-    where file upload forms are not convenient.
-    """
-    start_time = datetime.now()
-
-    image_base64 = request.image_base64
-    text_query = request.text_query
-    top_k = request.top_k
-    search_figures = request.search_figures
-    search_tables = request.search_tables
-
-    try:
-        if not factory.clip_client:
-            raise HTTPException(status_code=503, detail="CLIP model not initialized")
-
-        if not image_base64:
-            raise HTTPException(status_code=400, detail="image_base64 is required")
-
-        # Strip data URL prefix if present (e.g., "data:image/png;base64,...")
-        if "," in image_base64:
-            image_base64 = image_base64.split(",", 1)[1]
-
-        # Decode base64 to image
-        try:
-            image_bytes = base64.b64decode(image_base64)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid base64 image data")
-
-        from PIL import Image as PILImage
-        image = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
-
-        logger.info(f"Processing base64 image search ({image.size[0]}x{image.size[1]})")
-
-        # Generate CLIP embedding (with caching)
-        image_embedding = None
-        if factory.cache_manager:
-            image_embedding = factory.cache_manager.get_image_embedding(image_bytes)
-
-        if image_embedding is None:
-            image_embedding = await run_blocking(
-                factory.clip_client.generate_image_embedding, image
-            )
-            if not image_embedding:
-                raise HTTPException(status_code=500, detail="Failed to generate image embedding")
-            if factory.cache_manager:
-                factory.cache_manager.cache_image_embedding(image_bytes, image_embedding)
-
-        # Execute search
-        results = await factory.retrieval_handler.search_by_image(
-            image_embedding=image_embedding,
-            top_k=top_k,
-            search_figures=search_figures,
-            search_tables=search_tables,
-            text_query=text_query
-        )
-
-        search_time = (datetime.now() - start_time).total_seconds()
-
-        figure_results = results.get("figure_results", [])
-        table_results = results.get("table_results", [])
-        related_papers = results.get("related_papers", [])
-
-        # Generate AI response if query is provided
-        ai_response = None
-        response_generation_time = None
-        if request.query and request.query.strip() and related_papers:
-            response_start = datetime.now()
-            try:
-                if factory.retrieval_handler and hasattr(factory.retrieval_handler,
-                                                         'ai_agent') and factory.retrieval_handler.ai_agent:
-                    # Build context from image search results
-                    context_parts = []
-                    # Add figure descriptions
-                    for i, fig in enumerate(figure_results[:5]):
-                        desc = fig.get('description', 'No description')
-                        score = fig.get('similarity_score', 0)
-                        context_parts.append(f"Figure {i + 1} (similarity: {score:.2f}): {desc}")
-                    # Add table descriptions
-                    for i, tbl in enumerate(table_results[:5]):
-                        desc = tbl.get('description', 'No description')
-                        score = tbl.get('similarity_score', 0)
-                        context_parts.append(f"Table {i + 1} (similarity: {score:.2f}): {desc}")
-                    # Add paper info
-                    for i, p in enumerate(related_papers[:5]):
-                        title = p.get('title', 'Untitled')
-                        abstract = (p.get('abstract', '') or '')[:300]
-                        context_parts.append(f"Paper {i + 1}: {title}\nAbstract: {abstract}")
-
-                    visual_context = "\n\n".join(context_parts)
-                    description_note = f"\nImage description provided by user: {text_query}" if text_query else ""
-
-                    prompt = f"""Based on the visual search results from academic papers, answer this question: \"{request.query}\"
-{description_note}
-
-Search Results (figures, tables, and related papers):
-{visual_context}
-
-Instructions:
-- Answer the question based on the search results above
-- Reference specific figures, tables, or papers when relevant
-- Be concise and informative (3-5 sentences)
-- If the results don't contain enough information to answer, say so
-
-Answer:"""
-
-                    system_prompt = "You are a research assistant analyzing visual search results from academic papers. Be factual, concise, and reference specific results."
-                    ai_response = factory.retrieval_handler.ai_agent.generate_content(
-                        prompt=prompt,
-                        system_prompt=system_prompt,
-                        purpose='image_search_answer'
-                    )
-                else:
-                    logger.info("AI Agent not available for image search query response")
-            except Exception as ai_err:
-                logger.warning(f"AI response generation failed for image search: {ai_err}")
-                ai_response = None
-            response_generation_time = (datetime.now() - response_start).total_seconds()
-
-        search_time = (datetime.now() - start_time).total_seconds()
-
-        return {
-            "success": True,
-            "message": f"Found {len(figure_results)} figures and {len(table_results)} tables from {len(related_papers)} papers",
-            "search_time_seconds": search_time,
-            "text_query": text_query,
-            "query": request.query,
-            "ai_response": ai_response,
-            "response_generation_time_seconds": response_generation_time,
-            "results_found": len(related_papers),
-            "results": related_papers,
-            "totals": {
-                "figures": len(figure_results),
-                "tables": len(table_results),
-                "related_papers": len(related_papers)
-            },
-            "figure_results": figure_results,
-            "table_results": table_results
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Base64 image search error: {e}")
-        raise HTTPException(status_code=500, detail=f"Image search failed: {str(e)}")
+# # ===============================================================================
+# # IMAGE SEARCH ENDPOINTS
+# # ===============================================================================
+#
+# @app.post("/image-search")
+# async def image_search(
+#         file: UploadFile = File(...),
+#         text_query: str = Form(None),
+#         top_k: int = Form(10),
+#         search_figures: bool = Form(True),
+#         search_tables: bool = Form(True),
+#         factory: ServiceFactory = Depends(get_services)
+# ):
+#     """
+#     Search for similar figures and tables using an uploaded image.
+#
+#     This endpoint:
+#     1. Accepts an uploaded image (PNG, JPG, WEBP)
+#     2. Generates a CLIP embedding from the image
+#     3. Searches figures and tables collections by visual similarity
+#     4. Optionally combines with text query for hybrid image+text search
+#     5. Returns matching figures, tables, and their parent papers
+#     """
+#     start_time = datetime.now()
+#
+#     try:
+#         # Validate CLIP client
+#         if not factory.clip_client:
+#             raise HTTPException(status_code=503, detail="CLIP model not initialized")
+#
+#         # Read and validate the uploaded image
+#         contents = await file.read()
+#         if not contents:
+#             raise HTTPException(status_code=400, detail="Empty file uploaded")
+#
+#         # Validate file type
+#         allowed_types = {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"}
+#         if file.content_type and file.content_type not in allowed_types:
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail=f"Unsupported image type: {file.content_type}. Allowed: {', '.join(allowed_types)}"
+#             )
+#
+#         # Convert to PIL Image
+#         from PIL import Image as PILImage
+#         image = PILImage.open(io.BytesIO(contents)).convert("RGB")
+#
+#         logger.info(f"Processing image search: {file.filename} ({image.size[0]}x{image.size[1]})")
+#
+#         # Generate CLIP embedding (with caching)
+#         image_embedding = None
+#         if factory.cache_manager:
+#             image_embedding = factory.cache_manager.get_image_embedding(contents)
+#
+#         if image_embedding is None:
+#             image_embedding = await run_blocking(
+#                 factory.clip_client.generate_image_embedding, image
+#             )
+#             if not image_embedding:
+#                 raise HTTPException(status_code=500, detail="Failed to generate image embedding")
+#             if factory.cache_manager:
+#                 factory.cache_manager.cache_image_embedding(contents, image_embedding)
+#
+#         # Execute image search
+#         results = await factory.retrieval_handler.search_by_image(
+#             image_embedding=image_embedding,
+#             top_k=top_k,
+#             search_figures=search_figures,
+#             search_tables=search_tables,
+#             text_query=text_query
+#         )
+#
+#         search_time = (datetime.now() - start_time).total_seconds()
+#
+#         figure_results = results.get("figure_results", [])
+#         table_results = results.get("table_results", [])
+#         related_papers = results.get("related_papers", [])
+#
+#         logger.info(
+#             f"Image search completed: {len(figure_results)} figures, "
+#             f"{len(table_results)} tables, {len(related_papers)} papers in {search_time:.2f}s"
+#         )
+#
+#         return {
+#             "success": True,
+#             "message": f"Found {len(figure_results)} figures and {len(table_results)} tables from {len(related_papers)} papers",
+#             "search_time_seconds": search_time,
+#             "text_query": text_query,
+#             "image_filename": file.filename,
+#             "results_found": len(related_papers),
+#             "results": related_papers,
+#             "totals": {
+#                 "figures": len(figure_results),
+#                 "tables": len(table_results),
+#                 "related_papers": len(related_papers)
+#             },
+#             "figure_results": figure_results,
+#             "table_results": table_results
+#         }
+#
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Image search error: {e}")
+#         raise HTTPException(status_code=500, detail=f"Image search failed: {str(e)}")
+#
+#
+# class ImageSearchBase64Request(BaseModel):
+#     image_base64: str
+#     text_query: Optional[str] = None
+#     query: Optional[str] = None
+#     top_k: int = 10
+#     search_figures: bool = True
+#     search_tables: bool = True
+#
+#
+# @app.post("/image-search/base64")
+# async def image_search_base64(
+#         request: ImageSearchBase64Request,
+#         factory: ServiceFactory = Depends(get_services)
+# ):
+#     """
+#     Search for similar figures and tables using a base64-encoded image.
+#
+#     Accepts JSON body with base64 image data — useful for frontend integration
+#     where file upload forms are not convenient.
+#     """
+#     start_time = datetime.now()
+#
+#     image_base64 = request.image_base64
+#     text_query = request.text_query
+#     top_k = request.top_k
+#     search_figures = request.search_figures
+#     search_tables = request.search_tables
+#
+#     try:
+#         if not factory.clip_client:
+#             raise HTTPException(status_code=503, detail="CLIP model not initialized")
+#
+#         if not image_base64:
+#             raise HTTPException(status_code=400, detail="image_base64 is required")
+#
+#         # Strip data URL prefix if present (e.g., "data:image/png;base64,...")
+#         if "," in image_base64:
+#             image_base64 = image_base64.split(",", 1)[1]
+#
+#         # Decode base64 to image
+#         try:
+#             image_bytes = base64.b64decode(image_base64)
+#         except Exception:
+#             raise HTTPException(status_code=400, detail="Invalid base64 image data")
+#
+#         from PIL import Image as PILImage
+#         image = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+#
+#         logger.info(f"Processing base64 image search ({image.size[0]}x{image.size[1]})")
+#
+#         # Generate CLIP embedding (with caching)
+#         image_embedding = None
+#         if factory.cache_manager:
+#             image_embedding = factory.cache_manager.get_image_embedding(image_bytes)
+#
+#         if image_embedding is None:
+#             image_embedding = await run_blocking(
+#                 factory.clip_client.generate_image_embedding, image
+#             )
+#             if not image_embedding:
+#                 raise HTTPException(status_code=500, detail="Failed to generate image embedding")
+#             if factory.cache_manager:
+#                 factory.cache_manager.cache_image_embedding(image_bytes, image_embedding)
+#
+#         # Execute search
+#         results = await factory.retrieval_handler.search_by_image(
+#             image_embedding=image_embedding,
+#             top_k=top_k,
+#             search_figures=search_figures,
+#             search_tables=search_tables,
+#             text_query=text_query
+#         )
+#
+#         search_time = (datetime.now() - start_time).total_seconds()
+#
+#         figure_results = results.get("figure_results", [])
+#         table_results = results.get("table_results", [])
+#         related_papers = results.get("related_papers", [])
+#
+#         # Generate AI response if query is provided
+#         ai_response = None
+#         response_generation_time = None
+#         if request.query and request.query.strip() and related_papers:
+#             response_start = datetime.now()
+#             try:
+#                 if factory.retrieval_handler and hasattr(factory.retrieval_handler,
+#                                                          'ai_agent') and factory.retrieval_handler.ai_agent:
+#                     # Build context from image search results
+#                     context_parts = []
+#                     # Add figure descriptions
+#                     for i, fig in enumerate(figure_results[:5]):
+#                         desc = fig.get('description', 'No description')
+#                         score = fig.get('similarity_score', 0)
+#                         context_parts.append(f"Figure {i + 1} (similarity: {score:.2f}): {desc}")
+#                     # Add table descriptions
+#                     for i, tbl in enumerate(table_results[:5]):
+#                         desc = tbl.get('description', 'No description')
+#                         score = tbl.get('similarity_score', 0)
+#                         context_parts.append(f"Table {i + 1} (similarity: {score:.2f}): {desc}")
+#                     # Add paper info
+#                     for i, p in enumerate(related_papers[:5]):
+#                         title = p.get('title', 'Untitled')
+#                         abstract = (p.get('abstract', '') or '')[:300]
+#                         context_parts.append(f"Paper {i + 1}: {title}\nAbstract: {abstract}")
+#
+#                     visual_context = "\n\n".join(context_parts)
+#                     description_note = f"\nImage description provided by user: {text_query}" if text_query else ""
+#
+#                     prompt = f"""Based on the visual search results from academic papers, answer this question: \"{request.query}\"
+# {description_note}
+#
+# Search Results (figures, tables, and related papers):
+# {visual_context}
+#
+# Instructions:
+# - Answer the question based on the search results above
+# - Reference specific figures, tables, or papers when relevant
+# - Be concise and informative (3-5 sentences)
+# - If the results don't contain enough information to answer, say so
+#
+# Answer:"""
+#
+#                     system_prompt = "You are a research assistant analyzing visual search results from academic papers. Be factual, concise, and reference specific results."
+#                     ai_response = factory.retrieval_handler.ai_agent.generate_content(
+#                         prompt=prompt,
+#                         system_prompt=system_prompt,
+#                         purpose='image_search_answer'
+#                     )
+#                 else:
+#                     logger.info("AI Agent not available for image search query response")
+#             except Exception as ai_err:
+#                 logger.warning(f"AI response generation failed for image search: {ai_err}")
+#                 ai_response = None
+#             response_generation_time = (datetime.now() - response_start).total_seconds()
+#
+#         search_time = (datetime.now() - start_time).total_seconds()
+#
+#         return {
+#             "success": True,
+#             "message": f"Found {len(figure_results)} figures and {len(table_results)} tables from {len(related_papers)} papers",
+#             "search_time_seconds": search_time,
+#             "text_query": text_query,
+#             "query": request.query,
+#             "ai_response": ai_response,
+#             "response_generation_time_seconds": response_generation_time,
+#             "results_found": len(related_papers),
+#             "results": related_papers,
+#             "totals": {
+#                 "figures": len(figure_results),
+#                 "tables": len(table_results),
+#                 "related_papers": len(related_papers)
+#             },
+#             "figure_results": figure_results,
+#             "table_results": table_results
+#         }
+#
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Base64 image search error: {e}")
+#         raise HTTPException(status_code=500, detail=f"Image search failed: {str(e)}")
 
 
 # ===============================================================================
