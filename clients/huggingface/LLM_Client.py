@@ -35,7 +35,15 @@ class LLMClient:
         self._llm_call_count = 0
         self._llm_call_log = []  # list of {purpose, timestamp, duration_ms}
         self._llm_total_time = 0.0  # cumulative seconds
-        
+
+        # Prometheus integration (optional — works without it)
+        self._prometheus = None
+        try:
+            from clients.prometheus.PrometheusClient import get_prometheus_integration
+            self._prometheus = get_prometheus_integration()
+        except Exception:
+            pass
+
         self._load_model()
 
     def _load_model(self):
@@ -187,6 +195,11 @@ class LLMClient:
                 'timestamp': _time.strftime('%H:%M:%S')
             })
             logger.info(f"LLM call #{call_number} completed | purpose={purpose} | {duration:.2f}s | {len(generated_ids)} tokens")
+
+            # Push to Prometheus: AI call count, duration, tokens generated
+            if self._prometheus:
+                self._prometheus.record_ai_call(purpose, duration, len(generated_ids))
+
             return response
 
         except Exception as e:
@@ -201,6 +214,11 @@ class LLMClient:
                 'timestamp': _time.strftime('%H:%M:%S')
             })
             logger.error(f"LLM call #{call_number} FAILED | purpose={purpose} | {duration:.2f}s | {e}", exc_info=True)
+
+            # Push failed call to Prometheus (0 tokens)
+            if self._prometheus:
+                self._prometheus.record_ai_call(purpose, duration, 0)
+
             return None
     
     def get_llm_stats(self) -> dict:

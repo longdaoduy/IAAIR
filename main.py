@@ -58,81 +58,11 @@ services = ServiceFactory()
 
 
 class RequestCounterMiddleware(BaseHTTPMiddleware):
-    """Middleware to count and track all API requests."""
+    """Lightweight middleware — actual metrics are recorded by PerformanceMonitor."""
 
     async def dispatch(self, request: Request, call_next: Callable):
-        # Extract endpoint details
-        endpoint = request.url.path
-        method = request.method
-
-        # Start timing
-        start_time = time.time()
-
-        # Track request start
-        if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
-            services.prometheus_monitor.metrics.request_count.labels(
-                endpoint=endpoint,
-                method=method,
-                routing_strategy="unknown",
-                query_type="unknown"
-            ).inc()
-
-            # Track active requests
-            services.prometheus_monitor.metrics.active_requests.inc()
-
-        try:
-            # Process request
-            response = await call_next(request)
-
-            # Calculate duration
-            duration = time.time() - start_time
-
-            # Track success metrics
-            if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
-                services.prometheus_monitor.metrics.request_duration.labels(
-                    endpoint=endpoint,
-                    method=method,
-                    status_code=str(response.status_code)
-                ).observe(duration)
-
-                # Track endpoint success
-                services.prometheus_monitor.metrics.endpoint_requests.labels(
-                    endpoint=endpoint,
-                    method=method,
-                    status="success"
-                ).inc()
-
-            return response
-
-        except Exception as e:
-            # Track error metrics
-            duration = time.time() - start_time
-
-            if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
-                services.prometheus_monitor.metrics.request_duration.labels(
-                    endpoint=endpoint,
-                    method=method,
-                    status_code="500"
-                ).observe(duration)
-
-                # Track endpoint errors
-                services.prometheus_monitor.metrics.endpoint_requests.labels(
-                    endpoint=endpoint,
-                    method=method,
-                    status="error"
-                ).inc()
-
-                services.prometheus_monitor.metrics.error_count.labels(
-                    component="api",
-                    error_type=type(e).__name__
-                ).inc()
-
-            raise
-
-        finally:
-            # Decrement active requests
-            if hasattr(services, 'prometheus_monitor') and services.prometheus_monitor:
-                services.prometheus_monitor.metrics.active_requests.dec()
+        response = await call_next(request)
+        return response
 
 
 @asynccontextmanager
@@ -240,55 +170,21 @@ async def root():
 
 @app.get("/api/stats")
 async def api_endpoint_statistics(factory: ServiceFactory = Depends(get_services)):
-    """Get detailed statistics for all API endpoints."""
+    """Get Prometheus metrics summary."""
     try:
-        if not (factory.performance_monitor and factory.performance_monitor.prometheus_integration):
-            return {
-                "error": "Prometheus monitoring not available",
-                "message": "Enable monitoring with ServiceFactory.setup_monitoring()"
-            }
+        prom = factory.performance_monitor.prometheus_integration
+        if not prom:
+            return {"error": "Prometheus monitoring not available"}
 
-        # Get endpoint statistics
-        prometheus_metrics = factory.performance_monitor.prometheus_integration.metrics
-        endpoint_stats = prometheus_metrics.get_endpoint_statistics()
-
-        # Sort by total request count
-        sorted_stats = sorted(
-            endpoint_stats.values(),
-            key=lambda x: x['total_count'],
-            reverse=True
-        )
-
-        # Calculate summary statistics
-        total_requests = sum(s['total_count'] for s in sorted_stats)
-        total_successes = sum(s['success_count'] for s in sorted_stats)
-        total_errors = sum(s['error_count'] for s in sorted_stats)
-
+        # Expose the raw Prometheus text — Grafana scrapes /metrics directly
         return {
             "timestamp": datetime.now().isoformat(),
             "monitoring": {
                 "status": "enabled",
-                "total_endpoints_tracked": len(sorted_stats),
-                "metrics_endpoint": "/metrics",
+                "metrics_endpoint": f"http://localhost:{prom.port}/metrics",
                 "grafana_dashboard": "http://localhost:3000"
             },
-            "summary": {
-                "total_requests": total_requests,
-                "total_successes": total_successes,
-                "total_errors": total_errors,
-                "overall_success_rate": round(total_successes / max(1, total_requests), 4),
-                "overall_error_rate": round(total_errors / max(1, total_requests), 4)
-            },
-            "top_endpoints": {
-                "most_used": sorted_stats[0] if sorted_stats else None,
-                "top_5": sorted_stats[:5]
-            },
-            "endpoint_details": sorted_stats,
-            "insights": {
-                "busiest_endpoint": sorted_stats[0]['endpoint'] if sorted_stats else None,
-                "endpoints_with_errors": len([s for s in sorted_stats if s['error_count'] > 0]),
-                "perfect_endpoints": len([s for s in sorted_stats if s['error_count'] == 0 and s['total_count'] > 0])
-            }
+            "message": "Scrape /metrics for Prometheus exposition format"
         }
 
     except Exception as e:
@@ -525,6 +421,9 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
     try:
         logger.info(f"Starting hybrid search for query: '{request.query}'")
 
+        # Start Prometheus search tracking
+        factory.performance_monitor.start_search_tracking()
+
         fusion_start = datetime.now()
 
         hybrid_results, template_info, visual_data = await factory.retrieval_handler.execute_hybrid_search(
@@ -647,8 +546,11 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
             response_generation_time = (datetime.now() - response_start).total_seconds()
 
-        # Finish performance tracking
-        factory.performance_monitor.finish_query_tracking()
+        # Finish performance tracking — push search duration, result count, template to Prometheus
+        factory.performance_monitor.finish_search_tracking(
+            result_count=len(fused_results),
+            template_key=template_info.get('template_key')
+        )
 
         logger.info(f"Hybrid search completed. Found {len(fused_results)} results in {total_time:.2f}s")
 
@@ -675,7 +577,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
     except Exception as e:
         # Make sure to finish tracking even on error
-        factory.performance_monitor.finish_query_tracking()
+        factory.performance_monitor.finish_search_tracking()
         logger.error(f"Error during hybrid search: {e}")
         raise HTTPException(status_code=500, detail=f"Hybrid search failed: {str(e)}")
 
@@ -1270,46 +1172,19 @@ async def run_scimmir_benchmark(
 # ===============================================================================
 
 @app.get("/performance/stats")
-async def get_performance_stats(recent_queries: int = 100, factory: ServiceFactory = Depends(get_services)):
-    """Get detailed performance statistics and bottleneck analysis."""
+async def get_performance_stats(factory: ServiceFactory = Depends(get_services)):
+    """Get cache performance statistics."""
     try:
-        metrics = factory.performance_monitor.get_performance_metrics(recent_queries)
-        analysis = factory.performance_monitor.get_bottleneck_analysis(recent_queries)
         cache_stats = factory.cache_manager.get_cache_stats()
+
+        # Push latest cache sizes to Prometheus
+        factory.performance_monitor.update_cache_metrics(cache_stats)
 
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
-            "performance_metrics": {
-                "total_queries": metrics.total_queries,
-                "avg_response_time": round(metrics.avg_total_time, 3),
-                "slow_queries_count": len(metrics.slow_queries),
-                "breakdown": {
-                    "embedding": round(metrics.avg_embedding_time, 3),
-                    "vector_search": round(metrics.avg_vector_search_time, 3),
-                    "graph_search": round(metrics.avg_graph_search_time, 3),
-                    "fusion": round(metrics.avg_fusion_time, 3),
-                    "reranking": round(metrics.avg_reranking_time, 3),
-                    "ai_response": round(metrics.avg_ai_response_time, 3)
-                },
-                "routing_breakdown": metrics.routing_breakdown
-            },
-            "bottleneck_analysis": analysis,
             "cache_performance": cache_stats,
-            "recent_slow_queries": [
-                {
-                    "query": sq.query[:100] + "..." if len(sq.query) > 100 else sq.query,
-                    "total_time": round(sq.total_time, 2),
-                    "routing_strategy": sq.routing_strategy,
-                    "primary_bottleneck": max([
-                        ("embedding", sq.embedding_time),
-                        ("vector_search", sq.vector_search_time),
-                        ("graph_search", sq.graph_search_time),
-                        ("ai_response", sq.ai_response_time)
-                    ], key=lambda x: x[1])[0] if sq.total_time > 0 else "unknown"
-                }
-                for sq in metrics.slow_queries[:5]
-            ]
+            "note": "Detailed search/AI metrics available via Prometheus at /metrics"
         }
 
     except Exception as e:
@@ -1319,14 +1194,16 @@ async def get_performance_stats(recent_queries: int = 100, factory: ServiceFacto
 
 @app.get("/performance/report")
 async def export_performance_report(factory: ServiceFactory = Depends(get_services)):
-    """Export detailed performance report in markdown format."""
+    """Get Prometheus metrics in text format."""
     try:
-        report = factory.performance_monitor.export_performance_report()
+        prom = factory.performance_monitor.prometheus_integration
+        if not prom:
+            return {"error": "Prometheus monitoring not available"}
 
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
-            "report": report
+            "metrics_text": prom.metrics.get_metrics()
         }
 
     except Exception as e:
@@ -1483,11 +1360,39 @@ async def get_llm_stats(factory: ServiceFactory = Depends(get_services)):
 
 
 # ===============================================================================
+# NGROK TUNNEL SETUP
+# ===============================================================================
+
+def start_ngrok(port: int = 8000):
+    """Start ngrok tunnel and return public URL."""
+    try:
+        from pyngrok import ngrok
+
+        ngrok.set_auth_token("3ApO0xfxobpgobKXjS3fsAiLDy7_5fyBT8kZyQUKz9Jf8HikS")
+
+        # Clean up old tunnels
+        for t in ngrok.get_tunnels():
+            ngrok.disconnect(t.public_url)
+
+        public_url = ngrok.connect(port, domain="dressily-duskish-felisha.ngrok-free.dev")
+        logger.info(f"🚀 ngrok public URL: {public_url}")
+        print(f"🚀 Public URL: {public_url}")
+        return public_url
+    except Exception as e:
+        logger.warning(f"ngrok tunnel failed: {e}")
+        print(f"⚠️  ngrok failed: {e} — running on localhost only")
+        return None
+
+
+# ===============================================================================
 # MAIN ENTRY POINT
 # ===============================================================================
 
 if __name__ == "__main__":
     import sys
+
+    # Start ngrok tunnel before uvicorn
+    start_ngrok(8000)
 
     if "--production" in sys.argv:
         # Production: multi-worker, no reload
