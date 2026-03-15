@@ -1315,7 +1315,7 @@ Return ONLY the JSON object, nothing else."""
             paraphrased_query = await self._paraphrase_query_as_description(query)
 
             # Step 1: Extract entities from the query (AI-first, rule-based fallback)
-            extracted = await self._extract_all_entities(paraphrased_query)
+            extracted = self._extract_all_entities(paraphrased_query)
             logger.info(f"Extracted entities: {extracted}")
 
             # Step 2: AI agent selects the best template
@@ -1343,8 +1343,8 @@ Return ONLY the JSON object, nothing else."""
                         return refined_cypher, parameters, "raw_cypher", empty_visual, []
             else:
                 template_key = await self._select_template_with_ai(paraphrased_query, extracted)
-            # if template_key == 'search_by_keywords':
-            #     template_key = 'search_by_paper_ids'
+            if template_key == 'search_by_keywords':
+                template_key = 'search_by_paper_ids'
             logger.info(f"Selected template: {template_key}")
 
             # Step 3: Multi-modal vector search for keyword queries
