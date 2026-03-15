@@ -947,47 +947,43 @@ Respond with ONLY the template name, nothing else."""
         Returns:
             Dict with extracted entities, or None if AI extraction fails
         """
-        prompt = f"""You are an entity extractor for an academic paper search system.
-Extract structured entities from the user's query. Return a valid JSON object.
+        prompt = f"""Extract entities from the query. Return ONLY a JSON object.
 
-User query: "{query}"
+CRITICAL: Extract ONLY words that literally appear in the query. NEVER invent, infer, or add words not present in the query.
 
-Extract the following fields (use null or empty list [] if not found):
+Query: "{query}"
+
+JSON schema:
 {{
-  "paper_ids": ["W12345", ...],       // OpenAlex paper IDs starting with W followed by digits
-  "author_names": ["First Last", ...], // Full author names (first + last name minimum)
-  "keywords": ["keyword1", ...],       // Research topics, concepts, methods (NOT author names, venues, or years)
-  "year": "2023",                       // Specific year if mentioned (e.g. "papers in 2023")
-  "year_from": "2020",                  // Start year for ranges (e.g. "since 2020", "after 2020")
-  "year_to": "2024",                    // End year for ranges (e.g. "before 2024", "until 2024")
-  "venue": "Nature",                    // Journal, conference, or venue name
-  "institution": "Stanford University", // University or research institution
-  "wants_citations": false,             // true if asking about citations or citing relationships
-  "wants_coauthors": false,             // true if asking about co-authorship or collaboration
-  "wants_top_cited": false              // true if asking for most cited / top / most influential papers
+  "paper_ids": [],
+  "author_names": [],
+  "keywords": [],
+  "year": null,
+  "year_from": null,
+  "year_to": null,
+  "venue": null,
+  "institution": null,
+  "wants_citations": false,
+  "wants_coauthors": false,
+  "wants_top_cited": false
 }}
 
 Rules:
-1. "paper_ids" are always in the format W followed by digits (e.g. W1775749144)
-2. "author_names" must have at least first and last name (e.g. "Kaiming He", not just "He")
-3. "keywords" are research topics/concepts — do NOT include author names, venue names, years, or common words
-4. For year ranges: "since 2020" → year_from="2020", year_to="2099"; "before 2024" → year_from="1900", year_to="2024"
-5. For a single year: "in 2023" → year="2023" (leave year_from and year_to as null)
-6. "venue" MUST be a SPECIFIC, real journal/conference name (e.g. "Nature", "NeurIPS", "Analytical Biochemistry", "The Lancet").
-   If no specific venue is named, extract the keywords to search the venue name.
-   Examples: "medicine journals" → keyword "medicine"; "machine learning conferences" → keyword "machine learning";
-   "top medical journals" → keyword "medical"; "high-impact AI venues" → keyword "AI".
-7. "institution" MUST be a SPECIFIC, real institution name (e.g. "Stanford", "Google DeepMind", "MIT").
-   If no specific institution is named, extract the keywords to search the institution name.
-   Examples: "biomedical research labs" → keyword "biomedical"; "top engineering universities" → keyword "engineering".
-8. Set intent flags (wants_citations, wants_coauthors, wants_top_cited) based on the query's intent
+1. ONLY extract words/phrases that literally appear in the query. Do NOT add synonyms, related terms, or inferred concepts.
+2. "paper_ids": format W followed by digits (e.g. W1775749144). Extract exactly as written.
+3. "author_names": full names with first + last name minimum. Extract exactly as written in the query.
+4. "keywords": individual meaningful nouns that appear in the query — research subjects, objects, methods, techniques. One word per item. Do NOT include adjectives, verbs, stop words, author names, venue names, or years.
+5. "venue": extract ONLY if a specific journal/conference name literally appears in the query (e.g. "Nature", "NeurIPS"). Set null if no specific venue name is written.
+6. "institution": extract ONLY if a specific institution name literally appears in the query (e.g. "Stanford", "MIT"). Set null if no specific institution name is written.
+7. "year": for single year like "in 2023" → year="2023"
+8. "year_from"/"year_to": for ranges like "since 2020" → year_from="2020", year_to="2099"
+9. Intent flags: set true ONLY if the query explicitly asks about citations/co-authors/top-cited.
 
-Examples:
 Query: "Find papers by Kaiming He about deep learning since 2020"
-{{"paper_ids": [], "author_names": ["Kaiming He"], "keywords": ["deep learning"], "year": null, "year_from": "2020", "year_to": "2099", "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+{{"paper_ids": [], "author_names": ["Kaiming He"], "keywords": ["learning"], "year": null, "year_from": "2020", "year_to": "2099", "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
 
 Query: "What are the most cited papers about transformer architectures?"
-{{"paper_ids": [], "author_names": [], "keywords": ["transformer architectures"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": true}}
+{{"paper_ids": [], "author_names": [], "keywords": ["transformer", "architectures"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": true}}
 
 Query: "Papers co-authored by Georg Kresse and J Furthmuller"
 {{"paper_ids": [], "author_names": ["Georg Kresse", "J Furthmuller"], "keywords": [], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": true, "wants_top_cited": false}}
@@ -995,13 +991,28 @@ Query: "Papers co-authored by Georg Kresse and J Furthmuller"
 Query: "Find papers that cite W2128635872"
 {{"paper_ids": ["W2128635872"], "author_names": [], "keywords": [], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": true, "wants_coauthors": false, "wants_top_cited": false}}
 
+Query: "Papers about protein quantification methods"
+{{"paper_ids": [], "author_names": [], "keywords": ["protein", "quantification", "methods"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "Papers published in Nature"
+{{"paper_ids": [], "author_names": [], "keywords": [], "year": null, "year_from": null, "year_to": null, "venue": "Nature", "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "Papers from Stanford University"
+{{"paper_ids": [], "author_names": [], "keywords": [], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": "Stanford University", "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "machine learning papers in top journals"
+{{"paper_ids": [], "author_names": [], "keywords": ["machine", "learning"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
+Query: "bioinformatics algorithms"
+{{"paper_ids": [], "author_names": [], "keywords": ["bioinformatics", "algorithms"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
+
 Return ONLY the JSON object, nothing else."""
 
         try:
             response = await run_blocking(
                 self.ai_agent.generate_content,
                 prompt=prompt,
-                system_prompt="You are a precise entity extractor. Return only valid JSON.",
+                system_prompt="Extract ONLY entities that literally appear in the query. Never invent or infer. Return valid JSON.",
                 purpose='entity_extraction'
             )
 
@@ -1019,53 +1030,75 @@ Return ONLY the JSON object, nothing else."""
             ai_result = json.loads(cleaned)
 
             # Validate and normalize the AI output
+            # Anti-hallucination: every extracted value must appear in the query
             extracted = {}
+            query_lower = query.lower()
 
-            # Paper IDs
+            # Paper IDs — must appear in query
             pids = ai_result.get('paper_ids', [])
             if pids and isinstance(pids, list):
-                # Validate format: must match W followed by digits
-                valid_pids = [p for p in pids if isinstance(p, str) and re.match(r'^W\d+$', p)]
+                valid_pids = [p for p in pids
+                              if isinstance(p, str) and re.match(r'^W\d+$', p)
+                              and p.lower() in query_lower]
                 if valid_pids:
                     extracted['paper_ids'] = valid_pids
 
-            # Author names
+            # Author names — each name must appear in query
             authors = ai_result.get('author_names', [])
             if authors and isinstance(authors, list):
-                valid_authors = [a for a in authors if isinstance(a, str) and len(a.split()) >= 2]
+                valid_authors = [a for a in authors
+                                 if isinstance(a, str) and len(a.split()) >= 2
+                                 and a.lower() in query_lower]
                 if valid_authors:
                     extracted['author_names'] = valid_authors
 
-            # Keywords
             kws = ai_result.get('keywords', [])
             if kws and isinstance(kws, list):
-                valid_kws = [k for k in kws if isinstance(k, str) and len(k.strip()) > 1]
+                individual_words = []
+                for k in kws:
+                    if isinstance(k, str):
+                        for word in k.strip().split():
+                            word = word.strip().lower()
+                            if (word in query_lower):  # must appear in query
+                                individual_words.append(word)
+                seen = set()
+                valid_kws = []
+                for w in individual_words:
+                    if w not in seen:
+                        seen.add(w)
+                        valid_kws.append(w)
                 if valid_kws:
                     extracted['keywords'] = valid_kws
 
-            # Year (single)
+            # Year (single) — must appear in query
             year = ai_result.get('year')
-            if year and isinstance(year, str) and re.match(r'^\d{4}$', year):
+            if year and isinstance(year, str) and re.match(r'^\d{4}$', year) and year in query:
                 extracted['year'] = year
 
-            # Year range
+            # Year range — year_from must appear in query
             year_from = ai_result.get('year_from')
             year_to = ai_result.get('year_to')
-            if year_from and isinstance(year_from, str) and re.match(r'^\d{4}$', year_from):
+            if year_from and isinstance(year_from, str) and re.match(r'^\d{4}$', year_from) and year_from in query:
                 extracted['year_from'] = year_from
                 extracted['year_to'] = year_to if (year_to and isinstance(year_to, str) and re.match(r'^\d{4}$', year_to)) else '2099'
 
-            # Venue — reject vague/generic descriptors
+            # Venue — must literally appear in query
             venue = ai_result.get('venue')
             if venue and isinstance(venue, str) and len(venue.strip()) > 1:
                 venue_clean = venue.strip()
-                extracted['venue'] = venue_clean
+                if venue_clean.lower() in query_lower:
+                    extracted['venue'] = venue_clean
+                else:
+                    logger.info(f"Rejected hallucinated venue: '{venue_clean}' not in query")
 
-            # Institution — reject vague/generic descriptors
+            # Institution — must literally appear in query
             institution = ai_result.get('institution')
             if institution and isinstance(institution, str) and len(institution.strip()) > 1:
                 inst_clean = institution.strip()
-                extracted['institution'] = inst_clean
+                if inst_clean.lower() in query_lower:
+                    extracted['institution'] = inst_clean
+                else:
+                    logger.info(f"Rejected hallucinated institution: '{inst_clean}' not in query")
 
             # Intent flags
             if ai_result.get('wants_citations') is True:
