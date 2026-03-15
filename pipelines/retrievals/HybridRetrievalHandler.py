@@ -505,7 +505,12 @@ class HybridRetrievalHandler:
                         self.performance_monitor.record_cache_hit('search', True)
                         self.performance_monitor.record_result_count('neo4j', len(cached_results))
                     logger.debug(f"Graph search cache hit for: {query[:50]}...")
-                    return cached_results, template_info, empty_visual
+                    # Still run visual search on cached paper IDs so figures/tables show up
+                    cached_pids = [r.get('paper_id') for r in cached_results if r.get('paper_id')]
+                    visual_data = empty_visual
+                    if cached_pids:
+                        visual_data = await self.search_visual_by_text(query, top_k, paper_ids=cached_pids)
+                    return cached_results, template_info, visual_data
 
             if self.performance_monitor:
                 self.performance_monitor.record_cache_hit('search', False)
