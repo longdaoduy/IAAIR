@@ -4,8 +4,8 @@ import asyncio
 # Import handlers
 from pipelines.ingestions.IngestionHandler import IngestionHandler
 from pipelines.ingestions.GraphNeo4jHandler import GraphNeo4jHandler
-from clients.graph.Neo4jClient import Neo4jClient
-from clients.vector.MilvusClient import MilvusClient
+from clients.neo4j.Neo4jClient import Neo4jClient
+from clients.milvus.MilvusClient import MilvusClient
 from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.huggingface.LLM_Client import LLMClient
 from clients.huggingface.CLIPClient import CLIPClient

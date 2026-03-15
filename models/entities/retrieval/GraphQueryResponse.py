@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field, validator
 from enum import Enum
 
 class GraphQueryResponse(BaseModel):
-    """Response model for graph queries."""
+    """Response model for neo4j queries."""
     success: bool
     message: str
     query_time_seconds: float

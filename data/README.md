@@ -16,7 +16,7 @@ The few-shot learning examples for query routing are now stored in a structured 
       "query_type": "STRUCTURAL",
       "routing": "GRAPH_FIRST",
       "confidence": 0.95,
-      "reasoning": "Specific paper ID with author lookup - requires graph traversal for exact match"
+      "reasoning": "Specific paper ID with author lookup - requires neo4j traversal for exact match"
     }
   ],
   "metadata": {
@@ -79,11 +79,11 @@ Description: Few-shot learning examples for query routing classification
 
  1. Query: "who is the author of paper have id = W2036113194"
     Type: STRUCTURAL    Strategy: GRAPH_FIRST    Confidence: 0.95
-    Reasoning: Specific paper ID with author lookup - requires graph traversal for exact match
+    Reasoning: Specific paper ID with author lookup - requires neo4j traversal for exact match
 
  2. Query: "papers about machine learning in healthcare"
     Type: SEMANTIC      Strategy: VECTOR_FIRST   Confidence: 0.9
-    Reasoning: Conceptual topic search - vector embeddings capture semantic similarity best
+    Reasoning: Conceptual topic search - milvus embeddings capture semantic similarity best
 ```
 
 ## Loading Mechanism

@@ -14,7 +14,7 @@ class ResultFusion:
 
     def fuse_results(self, vector_results: List[Dict], graph_results: List[Dict],
                      fusion_weights: Optional[Dict[str, float]] = None) -> List[SearchResult]:
-        """Fuse results from vector and graph search."""
+        """Fuse results from milvus and neo4j search."""
         weights = fusion_weights or self.default_weights
 
         # Create result index by paper_id
@@ -50,7 +50,7 @@ class ResultFusion:
             if paper_id in all_results:
                 # ENHANCEMENT: Fill in missing info from Graph (metadata enrichment)
                 existing = all_results[paper_id]
-                # If vector search was missing metadata, use the graph's richer data
+                # If milvus search was missing metadata, use the neo4j's richer data
                 existing['authors'] = existing.get('authors') or result.get('authors', [])
                 existing['venue'] = existing.get('venue') or result.get('venue')
                 existing['doi'] = existing.get('doi') or result.get('doi')

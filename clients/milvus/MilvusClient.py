@@ -159,27 +159,27 @@ class MilvusClient:
                 schema=schema
             )
 
-            # Create index for dense vector similarity search
+            # Create index for dense milvus similarity search
             dense_index_params = {
                 "metric_type": self.config.metric_type,
                 "index_type": self.config.index_type,
                 "params": {"nlist": self.config.nlist}
             }
 
-            # Create index for sparse vector search
+            # Create index for sparse milvus search
             sparse_index_params = {
                 "metric_type": "IP",  # Inner Product for sparse vectors
                 "index_type": "SPARSE_INVERTED_INDEX",
                 "params": {"drop_ratio_build": 0.2}
             }
 
-            print(f"🔍 Creating dense vector index with params: {dense_index_params}")
+            print(f"🔍 Creating dense milvus index with params: {dense_index_params}")
             self.collection.create_index(
                 field_name="dense_embedding",
                 index_params=dense_index_params
             )
 
-            print(f"🔍 Creating sparse vector index with params: {sparse_index_params}")
+            print(f"🔍 Creating sparse milvus index with params: {sparse_index_params}")
             self.collection.create_index(
                 field_name="sparse_embedding",
                 index_params=sparse_index_params
@@ -239,7 +239,7 @@ class MilvusClient:
                 schema=schema
             )
 
-            # Create indexes for vector fields
+            # Create indexes for milvus fields
             # Index for description embedding (dense)
             desc_index_params = {
                 "metric_type": "COSINE",
@@ -329,7 +329,7 @@ class MilvusClient:
                 schema=schema
             )
 
-            # Create indexes for vector fields
+            # Create indexes for milvus fields
             # Index for description embedding (dense)
             desc_index_params = {
                 "metric_type": "COSINE",
@@ -766,7 +766,7 @@ class MilvusClient:
             return False
 
     def _dense_search(self, query_embedding: List[float], top_k: int) -> List[Dict]:
-        """Perform dense vector search only.
+        """Perform dense milvus search only.
         
         Args:
             query_embedding: Dense query embedding
@@ -885,7 +885,7 @@ class MilvusClient:
         """Search figures collection using an image embedding (CLIP).
 
         Args:
-            image_embedding: CLIP image embedding vector
+            image_embedding: CLIP image embedding milvus
             top_k: Number of results to return
 
         Returns:
@@ -936,7 +936,7 @@ class MilvusClient:
         """Search tables collection using an image embedding (CLIP).
 
         Args:
-            image_embedding: CLIP image embedding vector
+            image_embedding: CLIP image embedding milvus
             top_k: Number of results to return
 
         Returns:
@@ -987,7 +987,7 @@ class MilvusClient:
         """Search figures collection using a text description embedding (SciBERT).
 
         Args:
-            description_embedding: SciBERT text embedding vector
+            description_embedding: SciBERT text embedding milvus
             top_k: Number of results to return
 
         Returns:
@@ -1038,7 +1038,7 @@ class MilvusClient:
         """Search tables collection using a text description embedding (SciBERT).
 
         Args:
-            description_embedding: SciBERT text embedding vector
+            description_embedding: SciBERT text embedding milvus
             top_k: Number of results to return
 
         Returns:

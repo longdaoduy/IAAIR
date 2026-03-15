@@ -833,7 +833,7 @@ async function checkHealth() {
 
 // ── Graph Template for Hybrid Search ──
 let selectedGraphTemplate = null;
-let graphSearchTemplates = []; // AI graph templates loaded from server
+let graphSearchTemplates = []; // AI neo4j templates loaded from server
 
 // Built-in templates kept for Graph Query panel only
 const BUILTIN_TEMPLATES = {
@@ -927,7 +927,7 @@ async function doSearch() {
             enable_attribution: true
         };
 
-        // Attach graph template if a template is selected (works with any strategy)
+        // Attach neo4j template if a template is selected (works with any strategy)
         if (selectedGraphTemplate) {
             const t = graphSearchTemplates.find(x => x.key === selectedGraphTemplate);
             if (t) body.graph_template = t.cypher;

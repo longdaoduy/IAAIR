@@ -47,7 +47,7 @@ SUPPORTED_MODELS: Dict[str, Dict] = {
 
 
 @dataclass
-class DeepseekConfig:
+class LLMConfig:
     """LLM model configuration."""
     model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
     model_provider: str = "huggingface"  # "huggingface", "openai", "sentence-transformers"
@@ -58,7 +58,7 @@ class DeepseekConfig:
     device: str = "auto"  # "cpu", "cuda", "auto"
 
     @classmethod
-    def from_env(cls) -> 'DeepseekConfig':
+    def from_env(cls) -> 'LLMConfig':
         return cls(
             model_name=os.getenv("LLM_MODEL", os.getenv("EMBEDDING_MODEL", cls.model_name)),
             batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", cls.batch_size)),

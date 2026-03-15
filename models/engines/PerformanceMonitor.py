@@ -61,7 +61,7 @@ class PerformanceMonitor:
 
         # Initialize Prometheus integration
         self.prometheus_integration = None
-        from models.engines.PrometheusMonitor import get_prometheus_integration, initialize_prometheus
+        from clients.prometheus.PrometheusClient import get_prometheus_integration, initialize_prometheus
         self.prometheus_integration = get_prometheus_integration()
         if self.prometheus_integration is None:
             self.prometheus_integration = initialize_prometheus()
@@ -307,7 +307,7 @@ class PerformanceMonitor:
             recommendations.append("High embedding time - implement embedding caching")
 
         if breakdown_percentages['vector_search'] > 30:
-            recommendations.append("High vector search time - optimize Milvus parameters (reduce nprobe, ef)")
+            recommendations.append("High milvus search time - optimize Milvus parameters (reduce nprobe, ef)")
 
         if breakdown_percentages['reranking'] > 25:
             recommendations.append("High reranking time - reduce candidates or implement selective reranking")
@@ -372,7 +372,7 @@ class PerformanceMonitor:
                 report += f"**Strategy:** {sq.routing_strategy}\n"
                 report += f"**Breakdown:** "
                 report += f"embed:{sq.embedding_time:.2f}s, "
-                report += f"vector:{sq.vector_search_time:.2f}s, "
+                report += f"milvus:{sq.vector_search_time:.2f}s, "
                 report += f"graph:{sq.graph_search_time:.2f}s, "
                 report += f"ai:{sq.ai_response_time:.2f}s\n"
 

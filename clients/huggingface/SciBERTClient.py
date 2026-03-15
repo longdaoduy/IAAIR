@@ -61,7 +61,7 @@ class SciBERTClient:
             text: Input text
 
         Returns:
-            Embedding vector as list of floats
+            Embedding milvus as list of floats
         """
         inputs = self.tokenizer(
             text,

@@ -43,8 +43,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "IAAIR slow vector search"
-          description: "95th percentile vector search time is {{ $value }}s"
+          summary: "IAAIR slow milvus search"
+          description: "95th percentile milvus search time is {{ $value }}s"
 
       - alert: HighActiveRequests
         expr: iaair_active_requests > 20

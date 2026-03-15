@@ -8,7 +8,7 @@ from pipelines.ingestions.PDFProcessingHandler import PDFProcessingHandler
 from clients.huggingface.CLIPClient import CLIPClient
 from clients.huggingface.LLM_Client import LLMClient
 from clients.huggingface.SciBERTClient import SciBERTClient
-from clients.vector.MilvusClient import MilvusClient
+from clients.milvus.MilvusClient import MilvusClient
 
 
 class IngestionHandler():

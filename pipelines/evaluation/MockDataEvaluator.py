@@ -2,7 +2,7 @@
 Mock Data Evaluation Pipeline
 
 This module evaluates the system's performance on the mock evaluation dataset
-containing 50 questions (25 graph-based, 25 semantic-based) derived from
+containing 50 questions (25 neo4j-based, 25 semantic-based) derived from
 enriched OpenAlex papers data.
 """
 
@@ -24,7 +24,7 @@ class MockEvaluationResult:
     """Results from mock data evaluation."""
     question_id: str
     question: str
-    question_type: str  # 'graph' or 'semantic'
+    question_type: str  # 'neo4j' or 'semantic'
     category: str
     success: bool
     response_time: float
@@ -69,7 +69,7 @@ class MockEvaluationSummary:
 
 
 class MockDataEvaluator:
-    """Evaluator for mock data questions testing both graph and semantic search."""
+    """Evaluator for mock data questions testing both neo4j and semantic search."""
 
     def __init__(self, service_factory):
         self.service_factory = service_factory
@@ -96,7 +96,7 @@ class MockDataEvaluator:
             return []
 
     async def evaluate_semantic_question(self, question_data: Dict) -> MockEvaluationResult:
-        """Evaluate a semantic question using vector similarity search."""
+        """Evaluate a semantic question using milvus similarity search."""
         start_time = time.time()
         question_id = question_data['id']
         question = question_data['question']
@@ -142,7 +142,7 @@ class MockDataEvaluator:
                     ai_response = await self.service_factory.retrieval_handler.generate_ai_response(
                         query=question,
                         search_results=search_results,
-                        query_type=QueryType.STRUCTURAL if question_data['type'] == 'graph' else QueryType.SEMANTIC,
+                        query_type=QueryType.STRUCTURAL if question_data['type'] == 'neo4j' else QueryType.SEMANTIC,
                     )
                     ai_generation_time = time.time() - ai_start_time
 
@@ -221,7 +221,7 @@ class MockDataEvaluator:
             )
 
     async def _evaluate_as_semantic_fallback(self, question_data: Dict, start_time: float) -> MockEvaluationResult:
-        """Fallback evaluation using semantic search for graph questions."""
+        """Fallback evaluation using semantic search for neo4j questions."""
         question_id = question_data['id']
         question = question_data['question']
         expected_evidence = question_data['expected_evidence']
@@ -250,7 +250,7 @@ class MockDataEvaluator:
             return MockEvaluationResult(
                 question_id=question_id,
                 question=question,
-                question_type='graph',
+                question_type='neo4j',
                 category=question_data['category'],
                 success=True,
                 response_time=response_time,
@@ -266,7 +266,7 @@ class MockDataEvaluator:
             return MockEvaluationResult(
                 question_id=question_id,
                 question=question,
-                question_type='graph',
+                question_type='neo4j',
                 category=question_data['category'],
                 success=False,
                 response_time=response_time,
@@ -558,7 +558,7 @@ class MockDataEvaluator:
             avg_dcg_at_5 = avg_dcg_at_10 = avg_ndcg_at_5 = avg_ndcg_at_10 = 0.0
 
         # Performance by type
-        graph_results = [r for r in successful_results if r.question_type == 'graph']
+        graph_results = [r for r in successful_results if r.question_type == 'neo4j']
         semantic_results = [r for r in successful_results if r.question_type == 'semantic']
 
         graph_performance = {}
@@ -569,7 +569,7 @@ class MockDataEvaluator:
                 'recall': sum(r.recall for r in graph_results) / len(graph_results),
                 'f1': sum(r.f1_score for r in graph_results) / len(graph_results),
                 'avg_response_time': sum(r.response_time for r in graph_results) / len(graph_results),
-                'success_rate': len(graph_results) / len([r for r in results if r.question_type == 'graph']),
+                'success_rate': len(graph_results) / len([r for r in results if r.question_type == 'neo4j']),
                 'dcg_at_5': sum(r.dcg_at_5 for r in graph_dcg_results) / len(
                     graph_dcg_results) if graph_dcg_results else 0.0,
                 'dcg_at_10': sum(r.dcg_at_10 for r in graph_dcg_results) / len(

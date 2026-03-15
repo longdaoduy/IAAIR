@@ -1,7 +1,7 @@
 """
 Retrieval Handler for unified search operations.
 
-This module provides functionality to execute vector and graph searches,
+This module provides functionality to execute milvus and neo4j searches,
 with intelligent query routing and AI response generation.
 """
 
@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import json
-from clients.vector.MilvusClient import MilvusClient
+from clients.milvus.MilvusClient import MilvusClient
 from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
 from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.huggingface.LLM_Client import LLMClient
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class HybridRetrievalHandler:
-    """Unified handler for vector and graph-based retrieval operations."""
+    """Unified handler for milvus and neo4j-based retrieval operations."""
 
     def __init__(self, vector_db: Optional[MilvusClient], graph_db: GraphQueryHandler,
                  ai_agent: Optional[LLMClient], embedder: SciBERTClient,
@@ -37,7 +37,7 @@ class HybridRetrievalHandler:
         self.clip_client = clip_client
 
     async def execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
-        """Execute vector search with performance tracking."""
+        """Execute milvus search with performance tracking."""
         if self.performance_monitor:
             with self.performance_monitor.track_operation('vector_search'):
                 return await self._execute_vector_search_internal(query, top_k)
@@ -45,17 +45,17 @@ class HybridRetrievalHandler:
             return await self._execute_vector_search_internal(query, top_k)
 
     async def _execute_vector_search_internal(self, query: str, top_k: int) -> List[Dict]:
-        """Internal vector search implementation."""
+        """Internal milvus search implementation."""
         try:
             # Check cache first
             if self.cache_manager:
                 cached_results = self.cache_manager.get_search_results(
-                    query, top_k, use_hybrid=True, routing_strategy="vector"
+                    query, top_k, use_hybrid=True, routing_strategy="milvus"
                 )
                 if cached_results is not None:
                     if self.performance_monitor:
                         self.performance_monitor.record_cache_hit('search', True)
-                        self.performance_monitor.record_result_count('vector', len(cached_results))
+                        self.performance_monitor.record_result_count('milvus', len(cached_results))
                     logger.debug(f"Vector search cache hit for: {query[:50]}...")
                     return cached_results
 
@@ -71,11 +71,11 @@ class HybridRetrievalHandler:
             # Cache results
             if self.cache_manager and results:
                 self.cache_manager.cache_search_results(
-                    query, results, top_k, use_hybrid=True, routing_strategy="vector"
+                    query, results, top_k, use_hybrid=True, routing_strategy="milvus"
                 )
 
             if self.performance_monitor:
-                self.performance_monitor.record_result_count('vector', len(results or []))
+                self.performance_monitor.record_result_count('milvus', len(results or []))
 
             return results or []
         except Exception as e:
@@ -139,11 +139,11 @@ class HybridRetrievalHandler:
             return []
 
     async def execute_hybrid_search(self, query: str, top_k: int, template_cypher: str = None) -> tuple:
-        """Execute graph search using Cypher query with intelligent query parsing and caching.
+        """Execute neo4j search using Cypher query with intelligent query parsing and caching.
 
         Returns:
             (results, template_info) tuple where template_info is a dict with
-            'template_key' and 'description' of the graph template used.
+            'template_key' and 'description' of the neo4j template used.
         """
         if self.performance_monitor:
             with self.performance_monitor.track_operation('graph_search'):
@@ -270,7 +270,7 @@ class HybridRetrievalHandler:
         # Ensure all $param references in the template have values in the parameters dict.
         # Templates like coauthor_network have $author_names baked into their Cypher, but
         # _refine_template_with_conditions may not have extracted them from the query
-        # (e.g. when the query is purely keyword/topic-based and vector-first injected paper_ids).
+        # (e.g. when the query is purely keyword/topic-based and milvus-first injected paper_ids).
         default_params = self._build_default_params(refined_cypher, top_k)
         for param, default_val in default_params.items():
             if param not in parameters:
@@ -377,23 +377,23 @@ class HybridRetrievalHandler:
         return params
 
     async def _execute_hybrid_search_internal(self, query: str, top_k: int, template_cypher: str = None) -> tuple:
-        """Internal graph search implementation with caching.
+        """Internal neo4j search implementation with caching.
 
         Returns:
             (results, template_info) tuple where template_info is a dict with
-            'template_key' and 'description' of the graph template used.
+            'template_key' and 'description' of the neo4j template used.
         """
         template_info = {"template_key": None, "description": None}
         try:
             # Check cache first
             if self.cache_manager:
                 cached_results = self.cache_manager.get_search_results(
-                    query, top_k, use_hybrid=False, routing_strategy="graph"
+                    query, top_k, use_hybrid=False, routing_strategy="neo4j"
                 )
                 if cached_results is not None:
                     if self.performance_monitor:
                         self.performance_monitor.record_cache_hit('search', True)
-                        self.performance_monitor.record_result_count('graph', len(cached_results))
+                        self.performance_monitor.record_result_count('neo4j', len(cached_results))
                     logger.debug(f"Graph search cache hit for: {query[:50]}...")
                     return cached_results, template_info
 
@@ -423,11 +423,11 @@ class HybridRetrievalHandler:
             # Cache results
             if self.cache_manager and results:
                 self.cache_manager.cache_search_results(
-                    query, results, top_k, use_hybrid=False, routing_strategy="graph"
+                    query, results, top_k, use_hybrid=False, routing_strategy="neo4j"
                 )
 
             if self.performance_monitor:
-                self.performance_monitor.record_result_count('graph', len(results))
+                self.performance_monitor.record_result_count('neo4j', len(results))
 
             return results, template_info
         except Exception as e:
@@ -513,7 +513,7 @@ class HybridRetrievalHandler:
 
     @classmethod
     def _load_graph_templates(cls) -> Dict:
-        """Load graph query templates from data/graph_templates.json.
+        """Load neo4j query templates from data/graph_templates.json.
 
         Templates are cached after first load for performance.
         Returns the template dictionary.
@@ -528,12 +528,12 @@ class HybridRetrievalHandler:
         try:
             with open(templates_path, 'r', encoding='utf-8') as f:
                 cls._graph_templates_cache = json.load(f)
-            logger.info(f"Loaded {len(cls._graph_templates_cache)} graph templates from {templates_path}")
+            logger.info(f"Loaded {len(cls._graph_templates_cache)} neo4j templates from {templates_path}")
         except FileNotFoundError:
             logger.error(f"Graph templates file not found: {templates_path}")
             cls._graph_templates_cache = {}
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in graph templates file: {e}")
+            logger.error(f"Invalid JSON in neo4j templates file: {e}")
             cls._graph_templates_cache = {}
 
         return cls._graph_templates_cache
@@ -546,7 +546,7 @@ class HybridRetrievalHandler:
 
     @property
     def GRAPH_TEMPLATES(self) -> Dict:
-        """Access graph templates (loaded from data/graph_templates.json)."""
+        """Access neo4j templates (loaded from data/graph_templates.json)."""
         return self._load_graph_templates()
 
     # =========================================================================
@@ -554,7 +554,7 @@ class HybridRetrievalHandler:
     # =========================================================================
 
     async def _select_template_with_ai(self, query: str, extracted: Dict) -> str:
-        """Use AI agent to select the best graph template for the user's query.
+        """Use AI agent to select the best neo4j template for the user's query.
 
         Args:
             query: User's natural language query
@@ -849,7 +849,7 @@ Respond with ONLY the template name, nothing else."""
         return {"author_names": extracted.get('author_names', []), "limit": top_k}
 
     # =========================================================================
-    # BUILD INTELLIGENT CYPHER — Main entry point for graph search
+    # BUILD INTELLIGENT CYPHER — Main entry point for neo4j search
     # =========================================================================
 
     async def _build_intelligent_cypher_query(self, query: str, top_k: int, template_cypher: str = None) -> tuple:
@@ -859,8 +859,8 @@ Respond with ONLY the template name, nothing else."""
         1. Check Cypher cache
         2. Extract entities from query (paper IDs, authors, keywords, years, etc.)
         3. AI agent selects the best template (fallback: rule-based selection)
-        4. If template is keyword-only → vector-first: run vector search to get
-           relevant paper IDs, then use search_by_paper_ids for rich graph metadata
+        4. If template is keyword-only → milvus-first: run milvus search to get
+           relevant paper IDs, then use search_by_paper_ids for rich neo4j metadata
         5. Fill template parameters from extracted entities
         6. Cache and return
 
@@ -908,7 +908,7 @@ Respond with ONLY the template name, nothing else."""
             logger.info(f"Selected template: {template_key}")
 
             # Step 3: Vector-first for keyword queries
-            # Only run keyword → vector search when the selected template
+            # Only run keyword → milvus search when the selected template
             # requires $paper_ids but none were extracted from the query.
             # Templates with their own structured filters (author, venue, year,
             # keywords, etc.) don't need this expensive round-trip.
@@ -938,10 +938,10 @@ Respond with ONLY the template name, nothing else."""
                 logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for template '{template_key}'")
             else:
                 if has_paper_ids:
-                    logger.info(f"Skipping keyword vector search — paper IDs already extracted from query")
+                    logger.info(f"Skipping keyword milvus search — paper IDs already extracted from query")
                 else:
                     logger.info(
-                        f"Skipping keyword vector search — template '{template_key}' uses its own filters (no $paper_ids needed)")
+                        f"Skipping keyword milvus search — template '{template_key}' uses its own filters (no $paper_ids needed)")
 
             template = self.GRAPH_TEMPLATES[template_key]
             logger.info(f"Final template: {template_key} — {template['description']}")
@@ -960,7 +960,7 @@ Respond with ONLY the template name, nothing else."""
 
         except Exception as e:
             logger.error(f"Error in intelligent Cypher generation: {e}")
-            # Ultimate fallback — vector-first then paper IDs lookup
+            # Ultimate fallback — milvus-first then paper IDs lookup
             paper_ids = await self._vector_first_paper_ids(query, top_k) if self.milvus_client else None
             if paper_ids:
                 return self.GRAPH_TEMPLATES['search_by_paper_ids']['cypher'].strip(), \
@@ -970,10 +970,10 @@ Respond with ONLY the template name, nothing else."""
                 {"keywords": keywords or [query], "limit": top_k}, "search_by_keywords"
 
     async def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
-        """Run vector search to extract relevant paper IDs for graph enrichment.
+        """Run milvus search to extract relevant paper IDs for neo4j enrichment.
 
-        This is the core of the vector-first strategy: use semantic similarity
-        to find relevant papers, then pass their IDs to a graph template for
+        This is the core of the milvus-first strategy: use semantic similarity
+        to find relevant papers, then pass their IDs to a neo4j template for
         rich metadata (authors, venues, citations, etc.).
 
         Args:
@@ -990,12 +990,12 @@ Respond with ONLY the template name, nothing else."""
                 use_hybrid=True
             )
             if not vector_results:
-                logger.warning("Vector-first: no results from vector search")
+                logger.warning("Vector-first: no results from milvus search")
                 return []
 
             paper_ids = [r.get('paper_id') for r in vector_results]
 
-            logger.info(f"Vector-first: extracted {len(paper_ids)} paper IDs from vector search")
+            logger.info(f"Vector-first: extracted {len(paper_ids)} paper IDs from milvus search")
             return paper_ids
 
         except Exception as e:
@@ -1003,7 +1003,7 @@ Respond with ONLY the template name, nothing else."""
             return []
 
     async def _execute_graph_refinement(self, paper_ids: List[str], top_k: int) -> List[Dict]:
-        """Refine vector results using graph relationships."""
+        """Refine milvus results using neo4j relationships."""
         try:
             if not self.graph_handler:
                 logger.error("Graph handler not initialized")
@@ -1041,13 +1041,13 @@ Respond with ONLY the template name, nothing else."""
             search_results: List,
             template_info: Optional[Dict] = None,
     ) -> Optional[str]:
-        """Generate AI response from vector and graph searches.
+        """Generate AI response from milvus and neo4j searches.
 
         Args:
             query: The user's natural language query
             search_results: List of search result objects or dicts
             template_info: Optional dict with 'template_key' and 'description'
-                           of the graph template used for retrieval
+                           of the neo4j template used for retrieval
         """
         try:
             if not self.ai_agent:
@@ -1126,7 +1126,7 @@ Answer:"""
             return None
 
     def _get_template_specific_instructions(self, template_info: Optional[Dict] = None) -> str:
-        """Return tailored generation instructions based on the graph template used."""
+        """Return tailored generation instructions based on the neo4j template used."""
         if not template_info or not template_info.get("template_key"):
             return (
                 "- Answer directly in 3-5 sentences\n"
@@ -1216,7 +1216,7 @@ Answer:"""
 
         for claim in claims:
             # Step 2: Evidence Alignment
-            # Compare the claim against the 'top k' abstracts and graph metadata
+            # Compare the claim against the 'top k' abstracts and neo4j metadata
             logic_prompt = f"""
             Claim: {claim}
             Evidence: {self._format_papers_for_prompt(context_papers)}
@@ -1316,7 +1316,7 @@ Answer:"""
         """Search figures and tables collections by image embedding.
 
         Args:
-            image_embedding: CLIP image embedding vector
+            image_embedding: CLIP image embedding milvus
             top_k: Number of results per collection
             search_figures: Whether to search figures collection
             search_tables: Whether to search tables collection

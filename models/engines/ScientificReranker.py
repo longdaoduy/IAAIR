@@ -120,7 +120,7 @@ class ScientificReranker:
                 logger.debug("Skipping reranking - high confidence results")
                 return True
         
-        # Skip for obvious structural queries (graph results are usually well-ordered)
+        # Skip for obvious structural queries (neo4j results are usually well-ordered)
         query_lower = query.lower()
         structural_indicators = [
             'paper id', 'author', 'cited by', 'published in', 

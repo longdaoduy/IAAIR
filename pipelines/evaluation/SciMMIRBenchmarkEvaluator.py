@@ -15,7 +15,7 @@ from PIL import Image
 import random
 from clients.huggingface.CLIPClient import CLIPClient
 from clients.huggingface.SciBERTClient import SciBERTClient
-from clients.vector.MilvusClient import MilvusClient
+from clients.milvus.MilvusClient import MilvusClient
 import pandas as pd
 import io
 import requests
@@ -62,10 +62,6 @@ class SciMMIRBenchmarkResult:
 
     # Subset-specific results (like CLIP-BERT evaluation) - must be after non-default fields
     subset_results: Optional[Dict[str, Dict[str, float]]] = None  # e.g., "figure_result": {"text2img_mrr": 0.12, ...}
-
-    # Category-specific results
-    # by_category: Dict[str, Dict[str, float]] = None
-    # by_domain: Dict[str, Dict[str, float]] = None
 
 
 class SciMMIRDataLoader:

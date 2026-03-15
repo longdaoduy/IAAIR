@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from typing import Dict, List, Optional
-from clients.graph.Neo4jClient import Neo4jClient
+from clients.neo4j.Neo4jClient import Neo4jClient
 
 logger = logging.getLogger(__name__)
 

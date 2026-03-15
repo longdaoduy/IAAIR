@@ -25,7 +25,7 @@ import re
 from models.schemas.nodes import Figure, Table, Paper
 from clients.huggingface.CLIPClient import CLIPClient
 from clients.huggingface.SciBERTClient import SciBERTClient
-from clients.vector.MilvusClient import MilvusClient
+from clients.milvus.MilvusClient import MilvusClient
 
 
 # ─── Pre-compiled regexes (module-level for zero per-call cost) ──────
@@ -1318,7 +1318,7 @@ class PDFProcessingHandler:
                 # Only upload figures that have at least one type of embedding
                 if figure.description_embedding is not None or figure.image_embedding is not None:
                     # Generate sparse embedding for description if available
-                    sparse_description_embedding = {0: 0.001}  # Default minimal sparse vector
+                    sparse_description_embedding = {0: 0.001}  # Default minimal sparse milvus
                     if figure.description and self.milvus_client.is_tfidf_fitted:
                         sparse_description_embedding = self.milvus_client.generate_sparse_embedding(figure.description)
 

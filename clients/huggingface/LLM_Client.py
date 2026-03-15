@@ -9,9 +9,10 @@ provides configurable embedding generation.
 import torch
 from typing import List, Optional
 
-from models.configurators.DeepseekConfig import DeepseekConfig
+from models.configurators.LLMConfig import LLMConfig
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import logging
+import time as _time
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +20,13 @@ logger = logging.getLogger(__name__)
 class LLMClient:
     """Service for generating SciBERT embeddings from academic papers."""
 
-    def __init__(self, config: Optional[DeepseekConfig] = None):
+    def __init__(self, config: Optional[LLMConfig] = None):
         """Initialize the SciBERT embedding service.
 
         Args:
             config: SciBERT configuration. If None, loads from environment.
         """
-        self.config = config or DeepseekConfig.from_env()
+        self.config = config or LLMConfig.from_env()
         self.tokenizer = None
         self.model = None
         self.device = None
@@ -91,7 +92,7 @@ class LLMClient:
             text: Input text
 
         Returns:
-            Embedding vector as list of floats
+            Embedding milvus as list of floats
         """
         inputs = self.tokenizer(
             text,
@@ -132,7 +133,6 @@ class LLMClient:
             max_tokens: Override max_new_tokens for this call. If None, uses
                         purpose-based default from PURPOSE_TOKEN_LIMITS.
         """
-        import time as _time
         call_start = _time.time()
         self._llm_call_count += 1
         call_number = self._llm_call_count

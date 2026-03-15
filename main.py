@@ -191,7 +191,7 @@ async def root():
     return {
         "name": "IAAIR Unified API",
         "version": "2.0.0",
-        "description": "Unified API for academic paper ingestion, graph queries, and semantic search",
+        "description": "Unified API for academic paper ingestion, neo4j queries, and semantic search",
         "frontend": "Visit /ui for the web interface",
         "endpoints": {
             "ingestion": {
@@ -205,7 +205,7 @@ async def root():
                 "/image-search/base64": "POST - Search figures/tables using base64-encoded image"
             },
             "graph_queries": {
-                "/graph/query": "POST - Execute custom Cypher queries"
+                "/neo4j/query": "POST - Execute custom Cypher queries"
             },
             "evaluation": {
                 "/evaluation/comprehensive": "POST - Run comprehensive evaluation suite",
@@ -232,7 +232,7 @@ async def root():
         },
         "performance_optimizations": {
             "caching": "Query embeddings, search results, and AI responses cached",
-            "intelligent_routing": "Smart query routing to avoid unnecessary vector/graph calls",
+            "intelligent_routing": "Smart query routing to avoid unnecessary milvus/neo4j calls",
             "selective_reranking": "Reranking only when beneficial with limited candidates",
             "optimized_search": "Tuned Milvus parameters for speed vs accuracy trade-off",
             "latency_monitoring": "Real-time performance tracking and bottleneck analysis"
@@ -516,7 +516,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
     This endpoint implements:
     1. Query classification and adaptive routing with smart optimization
-    2. Vector-first, graph-first, or parallel search strategies
+    2. Vector-first, neo4j-first, or parallel search strategies
     3. Result fusion with configurable weights
     4. Selective scientific domain-aware reranking (only when beneficial)
     5. Source attribution and provenance tracking
@@ -972,7 +972,7 @@ async def execute_custom_query(request: GraphQueryRequest, factory: ServiceFacto
 
 @app.get("/graph/ai-templates")
 async def list_graph_ai_templates():
-    """List AI graph query templates from data/graph_templates.json."""
+    """List AI neo4j query templates from data/graph_templates.json."""
     try:
         templates_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'graph_templates.json')
         with open(templates_path, 'r', encoding='utf-8') as f:
@@ -1002,7 +1002,7 @@ async def list_graph_ai_templates():
     except FileNotFoundError:
         return {"success": False, "templates": [], "error": "graph_templates.json not found"}
     except Exception as e:
-        logger.error(f"Failed to load AI graph templates: {e}")
+        logger.error(f"Failed to load AI neo4j templates: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1090,7 +1090,7 @@ async def evaluate_mock_data(
     """Evaluate system performance on mock evaluation dataset.
 
     This endpoint runs evaluation on the 50-question mock dataset covering:
-    - 25 graph questions (authors, citations, venues)
+    - 25 neo4j questions (authors, citations, venues)
     - 25 semantic questions (topics, methods, findings)
 
     Args:
@@ -1168,7 +1168,7 @@ async def evaluate_mock_data(
                 }
             },
             "performance_by_type": {
-                "graph": summary.graph_performance,
+                "neo4j": summary.graph_performance,
                 "semantic": summary.semantic_performance
             },
             "category_breakdown": summary.category_breakdown,
@@ -1451,7 +1451,7 @@ async def get_prometheus_metrics(factory: ServiceFactory = Depends(get_services)
 @app.get("/models/list")
 async def list_supported_models():
     """List all supported LLM models with their specifications."""
-    from models.configurators.DeepseekConfig import SUPPORTED_MODELS
+    from models.configurators.LLMConfig import SUPPORTED_MODELS
 
     models = []
     for name, info in SUPPORTED_MODELS.items():

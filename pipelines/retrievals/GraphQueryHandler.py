@@ -7,13 +7,13 @@ backward-compatible interface for the retrieval pipeline.
 
 from typing import Dict, List, Optional
 import logging
-from clients.graph.Neo4jClient import Neo4jClient
+from clients.neo4j.Neo4jClient import Neo4jClient
 
 class GraphQueryHandler:
     """Handler that delegates Cypher query execution to Neo4jClient."""
     
     def __init__(self, neo4j_client: Optional[Neo4jClient] = None):
-        """Initialize the graph query handler.
+        """Initialize the neo4j query handler.
         
         Args:
             neo4j_client: Shared Neo4jClient instance. If None, creates a new one.
