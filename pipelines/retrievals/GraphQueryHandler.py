@@ -2,7 +2,7 @@
 Graph Query Handler for Neo4j Cypher queries.
 
 This module delegates query execution to Neo4jClient, providing a
-backward-compatible interface for the retrieval pipeline.
+backward-compatible interface for the retrievals pipeline.
 """
 
 from typing import Dict, List, Optional

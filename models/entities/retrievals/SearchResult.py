@@ -1,6 +1,6 @@
 from typing import List, Dict, Optional
 from pydantic import BaseModel, Field
-from models.entities.retrieval.AttributionSpan import AttributionSpan
+from models.entities.retrievals.AttributionSpan import AttributionSpan
 
 
 class SearchResult(BaseModel):

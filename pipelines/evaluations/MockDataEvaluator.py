@@ -1,7 +1,7 @@
 """
 Mock Data Evaluation Pipeline
 
-This module evaluates the system's performance on the mock evaluation dataset
+This module evaluates the system's performance on the mock evaluations dataset
 containing 50 questions (25 neo4j-based, 25 semantic-based) derived from
 enriched OpenAlex papers data.
 """
@@ -11,62 +11,13 @@ import logging
 import math
 import time
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
 from datetime import datetime
 import os
-from models.entities.retrieval.QueryType import QueryType
+from models.entities.retrievals.QueryType import QueryType
+from models.entities.evaluations.MockEvaluationResult import MockEvaluationResult
+from models.entities.evaluations.MockEvaluationSummary import MockEvaluationSummary
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class MockEvaluationResult:
-    """Results from mock data evaluation."""
-    question_id: str
-    question: str
-    question_type: str  # 'neo4j' or 'semantic'
-    category: str
-    success: bool
-    response_time: float
-    retrieved_papers: List[str]
-    expected_papers: List[str]
-    precision: float
-    recall: float
-    f1_score: float
-    ai_response: Optional[str] = None
-    expected_ai_response: Optional[str] = None
-    ai_response_similarity: Optional[float] = None
-    ai_generation_time: Optional[float] = None
-    error_message: Optional[str] = None
-    similarity_scores: Optional[List[float]] = None
-    dcg_at_5: Optional[float] = None
-    dcg_at_10: Optional[float] = None
-    ndcg_at_5: Optional[float] = None
-    ndcg_at_10: Optional[float] = None
-    verification_labels: Optional[List[str]] = None
-
-
-@dataclass
-class MockEvaluationSummary:
-    """Summary of mock evaluation results."""
-    total_questions: int
-    successful_questions: int
-    failed_questions: int
-    avg_response_time: float
-    overall_precision: float
-    overall_recall: float
-    overall_f1: float
-    avg_ai_response_similarity: float
-    avg_ai_generation_time: float
-    ai_response_success_rate: float
-    avg_dcg_at_5: float
-    avg_dcg_at_10: float
-    avg_ndcg_at_5: float
-    avg_ndcg_at_10: float
-    graph_performance: Dict[str, float]
-    semantic_performance: Dict[str, float]
-    category_breakdown: Dict[str, Dict[str, float]]
-
 
 class MockDataEvaluator:
     """Evaluator for mock data questions testing both neo4j and semantic search."""
@@ -76,7 +27,7 @@ class MockDataEvaluator:
         self.results = []
 
     def load_mock_data(self, mock_data_path: str = None) -> List[Dict]:
-        """Load mock evaluation questions from JSON file."""
+        """Load mock evaluations questions from JSON file."""
         if not mock_data_path:
             # Default path relative to current file
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -88,7 +39,7 @@ class MockDataEvaluator:
                 data = json.load(f)
                 questions = data.get('evaluation_questions', [])
 
-            logger.info(f"Loaded {len(questions)} mock evaluation questions from {mock_data_path}")
+            logger.info(f"Loaded {len(questions)} mock evaluations questions from {mock_data_path}")
             return questions
 
         except Exception as e:
@@ -128,7 +79,7 @@ class MockDataEvaluator:
             ndcg_at_5 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 5)
             ndcg_at_10 = self._calculate_ndcg_at_k(retrieved_papers, expected_papers, 10)
 
-            # Generate AI response using the retrieval handler's generate_ai_response function
+            # Generate AI response using the retrievals handler's generate_ai_response function
             ai_response = None
             ai_generation_time = 0.0
             ai_response_similarity = 0.0
@@ -221,7 +172,7 @@ class MockDataEvaluator:
             )
 
     async def _evaluate_as_semantic_fallback(self, question_data: Dict, start_time: float) -> MockEvaluationResult:
-        """Fallback evaluation using semantic search for neo4j questions."""
+        """Fallback evaluations using semantic search for neo4j questions."""
         question_id = question_data['id']
         question = question_data['question']
         expected_evidence = question_data['expected_evidence']
@@ -383,7 +334,7 @@ class MockDataEvaluator:
         return dcg / idcg if idcg > 0 else 0.0
 
     async def run_evaluation(self, limit: Optional[int] = None) -> List[MockEvaluationResult]:
-        """Run evaluation on all mock questions."""
+        """Run evaluations on all mock questions."""
         questions = self.load_mock_data()
 
         if not questions:
@@ -393,7 +344,7 @@ class MockDataEvaluator:
         if limit:
             questions = questions[:limit]
 
-        logger.info(f"Starting evaluation on {len(questions)} questions")
+        logger.info(f"Starting evaluations on {len(questions)} questions")
 
         results = []
 
@@ -514,7 +465,7 @@ class MockDataEvaluator:
         return csv_file
 
     def generate_summary(self, results: List[MockEvaluationResult]) -> MockEvaluationSummary:
-        """Generate evaluation summary from results."""
+        """Generate evaluations summary from results."""
         if not results:
             return MockEvaluationSummary(0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, {}, {}, {})
 
@@ -640,7 +591,7 @@ class MockDataEvaluator:
 
     def generate_detailed_report(self, results: List[MockEvaluationResult],
                                  summary: MockEvaluationSummary) -> str:
-        """Generate detailed evaluation report."""
+        """Generate detailed evaluations report."""
         report = []
         report.append("# Mock Data Evaluation Report")
         report.append(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -730,7 +681,7 @@ class MockDataEvaluator:
     def save_results(self, results: List[MockEvaluationResult],
                      summary: MockEvaluationSummary,
                      output_dir: str = "./data") -> Dict[str, str]:
-        """Save evaluation results and report to files."""
+        """Save evaluations results and report to files."""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
         # Save detailed results as JSON

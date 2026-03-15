@@ -1,6 +1,6 @@
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
-from models.entities.retrieval.SearchResult import SearchResult
+from models.entities.retrievals.SearchResult import SearchResult
 
 class HybridSearchResponse(BaseModel):
     """Response model for hybrid search."""

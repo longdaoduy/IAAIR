@@ -1,4 +1,4 @@
-from models.entities.retrieval.QueryType import QueryType
+from models.entities.retrievals.QueryType import QueryType
 from typing import Tuple
 import re
 

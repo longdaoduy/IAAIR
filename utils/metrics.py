@@ -19,7 +19,7 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
 
 
 def calculate_retrieval_metrics(ranks: List[int]) -> Dict[str, float]:
-    """Calculate standard retrieval metrics from ranks."""
+    """Calculate standard retrievals metrics from ranks."""
     if not ranks:
         return {'mrr': 0.0, 'recall_at_1': 0.0, 'recall_at_5': 0.0, 'recall_at_10': 0.0}
 

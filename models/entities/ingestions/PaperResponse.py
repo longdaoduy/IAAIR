@@ -2,7 +2,7 @@ from typing import List, Dict, Optional, Any, Union
 from pydantic import BaseModel, Field, validator
 
 class PaperResponse(BaseModel):
-    """Response model for paper ingestion."""
+    """Response model for paper ingestions."""
     success: bool
     message: str
     papers_processed: int

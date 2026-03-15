@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class HybridRetrievalHandler:
-    """Unified handler for milvus and neo4j-based retrieval operations."""
+    """Unified handler for milvus and neo4j-based retrievals operations."""
 
     def __init__(self, vector_db: Optional[MilvusClient], graph_db: GraphQueryHandler,
                  ai_agent: Optional[LLMClient], embedder: SciBERTClient,
@@ -1047,7 +1047,7 @@ Respond with ONLY the template name, nothing else."""
             query: The user's natural language query
             search_results: List of search result objects or dicts
             template_info: Optional dict with 'template_key' and 'description'
-                           of the neo4j template used for retrieval
+                           of the neo4j template used for retrievals
         """
         try:
             if not self.ai_agent:

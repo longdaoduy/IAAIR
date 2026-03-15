@@ -20,7 +20,7 @@ class Neo4jClient:
     """
     Optimized Neo4j Client for scientific literature graphs.
     Uses batch UNWIND operations and dynamic property mapping for high performance.
-    Provides both async (ingestion) and sync (query) interfaces.
+    Provides both async (ingestions) and sync (query) interfaces.
     """
 
     def __init__(self):
@@ -152,7 +152,7 @@ class Neo4jClient:
                                        venue: Venue = None, citations: List[str] = None,
                                        institutions: List[Institution] = None,
                                        figures: List[Figure] = None, tables: List[Table] = None):
-        """Orchestrates the atomic ingestion of a paper and all related entities."""
+        """Orchestrates the atomic ingestions of a paper and all related entities."""
         async with self.driver.session() as session:
             try:
                 await session.execute_write(

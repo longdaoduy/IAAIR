@@ -10,7 +10,7 @@ import requests
 import time
 import json
 from typing import Dict, List, Optional
-from utils.similarity import compute_confidence
+from utils.metrics import compute_confidence
 from models.configurators.SemanticScholarConfig import SemanticScholarConfig
 from tqdm import tqdm
 

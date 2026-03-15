@@ -1,1 +1,1 @@
-from . import similarity
+from . import metrics

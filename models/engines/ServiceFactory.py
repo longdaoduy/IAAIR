@@ -17,12 +17,10 @@ from models.engines.ResultFusion import ResultFusion
 from models.engines.ScientificReranker import ScientificReranker
 from models.engines.CacheManager import CacheManager
 from models.engines.PerformanceMonitor import PerformanceMonitor
-from pipelines.evaluation.SciMMIRBenchmarkEvaluator import (
-    SciMMIRBenchmarkResult,
-    SciMMIRResultAnalyzer,
-    SciMMIRDataLoader,
-    SciMMIRBenchmarkRunner
-)
+from pipelines.evaluations.SciMMIRBenchmarkEvaluator import SciMMIRBenchmarkRunner
+from pipelines.evaluations.SciMMIRDataLoader import SciMMIRDataLoader
+from pipelines.evaluations.SciMMIRResultAnalyzer import SciMMIRResultAnalyzer
+from models.entities.evaluations.SciMMIRBenchmarkResult import SciMMIRBenchmarkResult
 
 logger = logging.getLogger(__name__)
 
@@ -72,12 +70,12 @@ class ServiceFactory:
             report_path: str = "./data/scimmir_benchmark_report.md",
     ) -> SciMMIRBenchmarkResult:
         """
-        Complete SciMMIR benchmark evaluation workflow with memory management.
+        Complete SciMMIR benchmark evaluations workflow with memory management.
 
         Args:
             limit_samples: Number of test samples to evaluate (default: 50 for memory efficiency)
             cache_dir: Directory to cache SciMMIR dataset (ignored if use_streaming=True)
-            report_path: Path to save evaluation report
+            report_path: Path to save evaluations report
             use_streaming: Use streaming mode to avoid downloading entire dataset
             use_mock: Use mock samples for quick testing (no download required)
             memory_efficient: Use memory-efficient loading (default: True, caps at 100 samples)

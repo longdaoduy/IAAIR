@@ -1,4 +1,4 @@
-from models.entities.retrieval.SearchResult import SearchResult
+from models.entities.retrievals.SearchResult import SearchResult
 from typing import Dict, List, Optional
 
 

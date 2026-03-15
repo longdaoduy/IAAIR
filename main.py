@@ -21,17 +21,15 @@ from pydantic import BaseModel
 import logging
 
 # Import handlers
-from models.entities.ingestion.PaperRequest import PaperRequest
-from models.entities.ingestion.PaperResponse import PaperResponse
-from models.entities.retrieval.HybridSearchRequest import HybridSearchRequest
-from models.entities.retrieval.GraphQueryRequest import GraphQueryRequest
-from models.entities.retrieval.GraphQueryResponse import GraphQueryResponse
+from models.entities.ingestions.PaperRequest import PaperRequest
+from models.entities.ingestions.PaperResponse import PaperResponse
+from models.entities.retrievals.HybridSearchRequest import HybridSearchRequest
+from models.entities.retrievals.GraphQueryRequest import GraphQueryRequest
+from models.entities.retrievals.GraphQueryResponse import GraphQueryResponse
 
-# Import evaluation components
-from pipelines.evaluation.SciMMIRBenchmarkEvaluator import (
-    SciMMIRResultAnalyzer
-)
-from models.entities.retrieval.HybridSearchResponse import HybridSearchResponse
+# Import evaluations components
+from pipelines.evaluations.SciMMIRResultAnalyzer import SciMMIRResultAnalyzer
+from models.entities.retrievals.HybridSearchResponse import HybridSearchResponse
 
 import uvicorn
 import base64
@@ -50,7 +48,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from models.engines.ServiceFactory import ServiceFactory
-from pipelines.evaluation.MockDataEvaluator import MockDataEvaluator
+from pipelines.evaluations.MockDataEvaluator import MockDataEvaluator
 from utils.async_utils import run_blocking
 import time
 from typing import Callable
@@ -191,10 +189,10 @@ async def root():
     return {
         "name": "IAAIR Unified API",
         "version": "2.0.0",
-        "description": "Unified API for academic paper ingestion, neo4j queries, and semantic search",
+        "description": "Unified API for academic paper ingestions, neo4j queries, and semantic search",
         "frontend": "Visit /ui for the web interface",
         "endpoints": {
-            "ingestion": {
+            "ingestions": {
                 "/pull-papers": "POST - Pull papers from OpenAlex and process through pipeline",
                 "/download/{filename}": "GET - Download generated JSON files"
             },
@@ -207,14 +205,14 @@ async def root():
             "graph_queries": {
                 "/neo4j/query": "POST - Execute custom Cypher queries"
             },
-            "evaluation": {
-                "/evaluation/comprehensive": "POST - Run comprehensive evaluation suite",
-                "/evaluation/retrieval-quality": "POST - Evaluate retrieval quality with nDCG@k",
-                "/evaluation/attribution-fidelity": "POST - Evaluate attribution accuracy",
-                "/evaluation/verification": "POST - Run SciFact claim verification",
-                "/evaluation/regression-test": "POST - Run performance regression testing",
-                "/evaluation/mock-data": "POST - Evaluate system on 50-question mock dataset",
-                "/evaluation/scimmir-benchmark": "POST - Run SciMMIR multi-modal benchmark evaluation"
+            "evaluations": {
+                "/evaluations/comprehensive": "POST - Run comprehensive evaluations suite",
+                "/evaluations/retrievals-quality": "POST - Evaluate retrievals quality with nDCG@k",
+                "/evaluations/attribution-fidelity": "POST - Evaluate attribution accuracy",
+                "/evaluations/verification": "POST - Run SciFact claim verification",
+                "/evaluations/regression-test": "POST - Run performance regression testing",
+                "/evaluations/mock-data": "POST - Evaluate system on 50-question mock dataset",
+                "/evaluations/scimmir-benchmark": "POST - Run SciMMIR multi-modal benchmark evaluations"
             },
             "performance": {
                 "/performance/stats": "GET - Get performance statistics and bottleneck analysis",
@@ -310,7 +308,7 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "services": {
             "api": "running",
-            "ingestion": "available",
+            "ingestions": "available",
             "graph_queries": "available",
             "semantic_search": "available"
         }
@@ -336,7 +334,7 @@ async def pull_papers(request: PaperRequest, factory: ServiceFactory = Depends(g
     timestamp = datetime.now()
 
     try:
-        logger.info(f"Starting paper ingestion for {request.num_papers} papers")
+        logger.info(f"Starting paper ingestions for {request.num_papers} papers")
 
         # Step 1: Pull papers from OpenAlex
         logger.info("Step 1: Pulling papers from OpenAlex...")
@@ -393,7 +391,7 @@ async def pull_papers(request: PaperRequest, factory: ServiceFactory = Depends(g
         # Create response filename
         json_filename = f"enriched_openalex_papers_{timestamp.strftime('%Y%m%d_%H%M%S')}.json"
 
-        logger.info(f"Paper ingestion completed successfully. Processed {len(enriched_papers)} papers")
+        logger.info(f"Paper ingestions completed successfully. Processed {len(enriched_papers)} papers")
 
         return PaperResponse(
             success=True,
@@ -407,7 +405,7 @@ async def pull_papers(request: PaperRequest, factory: ServiceFactory = Depends(g
         )
 
     except Exception as e:
-        logger.error(f"Error during paper ingestion: {e}")
+        logger.error(f"Error during paper ingestions: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -1087,9 +1085,9 @@ async def evaluate_mock_data(
         save_results: bool = True,
         factory: ServiceFactory = Depends(get_services)
 ):
-    """Evaluate system performance on mock evaluation dataset.
+    """Evaluate system performance on mock evaluations dataset.
 
-    This endpoint runs evaluation on the 50-question mock dataset covering:
+    This endpoint runs evaluations on the 50-question mock dataset covering:
     - 25 neo4j questions (authors, citations, venues)
     - 25 semantic questions (topics, methods, findings)
 
@@ -1098,17 +1096,17 @@ async def evaluate_mock_data(
         save_results: Save detailed results and report to files
     """
     try:
-        logger.info("Starting mock data evaluation")
+        logger.info("Starting mock data evaluations")
         start_time = datetime.now()
 
         # Initialize evaluator
         evaluator = MockDataEvaluator(factory)
 
-        # Run evaluation
+        # Run evaluations
         results = await evaluator.run_evaluation(limit=limit_questions)
 
         if not results:
-            raise HTTPException(status_code=500, detail="No evaluation results generated")
+            raise HTTPException(status_code=500, detail="No evaluations results generated")
 
         # Generate summary
         summary = evaluator.generate_summary(results)
@@ -1178,8 +1176,8 @@ async def evaluate_mock_data(
         }
 
     except Exception as e:
-        logger.error(f"Mock data evaluation error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Mock evaluation failed: {str(e)}")
+        logger.error(f"Mock data evaluations error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Mock evaluations failed: {str(e)}")
 
 @app.post("/evaluation/scimmir-benchmark")
 async def run_scimmir_benchmark(
@@ -1189,7 +1187,7 @@ async def run_scimmir_benchmark(
         use_mock: bool = False,
         factory: ServiceFactory = Depends(get_services)
 ):
-    """Run SciMMIR multi-modal benchmark evaluation.
+    """Run SciMMIR multi-modal benchmark evaluations.
 
     Args:
         limit_samples: Number of samples to evaluate (default: 50 for quick testing)

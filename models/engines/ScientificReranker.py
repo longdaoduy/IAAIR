@@ -1,7 +1,7 @@
 from typing import List
 import logging
 import torch
-from models.entities.retrieval.SearchResult import SearchResult
+from models.entities.retrievals.SearchResult import SearchResult
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 logger = logging.getLogger(__name__)
