@@ -684,19 +684,26 @@ class HybridRetrievalHandler:
             # Fallback: strip special characters only
             return re.sub(r'[?!.;:]+', '', query).strip()
 
-        paraphrase_prompt = f"""Rephrase the following user query into a short, clean description.
-Remove all special characters such as ? ! ... ; : and question marks.
-Keep the same meaning. Do NOT answer the query — only rephrase it.
-Output ONLY the rephrased description, nothing else.
+        paraphrase_prompt = f"""Normalize the following user query by fixing grammar and spelling errors, and removing special characters such as ? ! ... ; : and question marks.
+Do NOT change the meaning, structure, or key words of the query.
+Do NOT rephrase, reword, or substitute any nouns (especially venue names, topics, or entity names).
+Do NOT add, remove, or replace any important words — only fix grammar and remove special characters.
+Output ONLY the cleaned query, nothing else.
+
+Examples:
+"Find the papers publish in journals medicine" → "Find the papers published in journals medicine"
+"what papers about deep learning?" → "papers about deep learning"
+"papers publish in Nature about protein?" → "papers published in Nature about protein"
+"who are the authors of W1234!!" → "who are the authors of W1234"
 
 User query: "{query}"
-Rephrased description:"""
+Cleaned query:"""
 
         try:
             response = await run_blocking(
                 self.ai_agent.generate_content,
                 prompt=paraphrase_prompt,
-                system_prompt="You rephrase queries into clean descriptions. Output only the rephrased text.",
+                system_prompt="You normalize queries by fixing grammar and removing special characters. Never change key words or meaning. Output only the cleaned text.",
                 purpose='query_paraphrase'
             )
             if response:
@@ -992,6 +999,10 @@ Rules:
    and vague qualifiers (top, leading, major, prestigious, best, renowned).
    Examples: "biomedical research labs" → keyword "biomedical"; "top engineering universities" → keyword "engineering".
 8. Set intent flags (wants_citations, wants_coauthors, wants_top_cited) based on the query's intent
+9. CRITICAL: The "venue" value MUST appear as a substring in the user's query. NEVER invent or hallucinate a venue name that the user did not mention.
+   For example, if the user says "papers in medicine journals", the word "Nature" does NOT appear in the query, so venue must be null.
+   Only set venue when the user explicitly names a specific journal/conference (e.g. "published in Nature", "from NeurIPS").
+10. CRITICAL: The "institution" value MUST appear as a substring in the user's query. NEVER invent or infer an institution name that the user did not mention.
 
 Examples:
 Query: "Find papers by Kaiming He about deep learning since 2020"
