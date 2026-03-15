@@ -530,19 +530,25 @@ class HybridRetrievalHandler:
             results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
             logger.info(f"Graph search returned {len(results)} results")
 
-            # Fallback: if graph returned 0 results but multimodal vector search
-            # found papers, use the vector results directly so the user still
-            # gets results (with basic metadata from Milvus instead of rich
-            # Neo4j metadata like authors, venue, citations).
-            if len(results) < top_k:
+            # Fallback: if graph returned fewer than top_k results,
+            # supplement with multimodal vector search results so the user
+            # still gets results (with basic metadata from Milvus instead of
+            # rich Neo4j metadata like authors, venue, citations).
+            visual_data = empty_visual
+            graph_paper_ids = [r.get('paper_id') for r in results]
+
+            if len(results) > 0:
+                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
+            if len(results) < top_k and template_key == 'search_by_keywords':
                 sorted_ids, visual_data = await self.execute_multimodal_vector_search(
                     query, keywords, top_k - len(results)
                 )
+                vector_fallback = visual_data.get('vector_results', [])
                 logger.warning(
-                    f"Graph returned 0 results — falling back to "
-                    f"{len(visual_data['vector_results'])} vector search results"
+                    f"Graph returned {len(results)} results — falling back to "
+                    f"{len(vector_fallback)} vector search results"
                 )
-                results.extend(visual_data['vector_results'])
+                results.extend(vector_fallback)
 
             # Cache results
             if self.cache_manager and results:
@@ -1284,7 +1290,7 @@ Answer:"""
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
-                self.answer_agent.generate_content,
+                self.ai_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
                 purpose='answer_synthesis'
