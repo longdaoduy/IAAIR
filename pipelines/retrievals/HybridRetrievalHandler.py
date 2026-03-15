@@ -38,17 +38,25 @@ class HybridRetrievalHandler:
         self.clip_client = clip_client
 
     async def execute_vector_search(self, query: str, top_k: int) -> List[Dict]:
-        """Internal milvus search implementation."""
+        """Execute vector search with performance tracking."""
+        if self.performance_monitor:
+            with self.performance_monitor.track_operation('vector_search'):
+                return await self._execute_vector_search_internal(query, top_k)
+        else:
+            return await self._execute_vector_search_internal(query, top_k)
+
+    async def _execute_vector_search_internal(self, query: str, top_k: int) -> List[Dict]:
+        """Internal vector search implementation."""
         try:
             # Check cache first
             if self.cache_manager:
                 cached_results = self.cache_manager.get_search_results(
-                    query, top_k, use_hybrid=True, routing_strategy="milvus"
+                    query, top_k, use_hybrid=True, routing_strategy="vector"
                 )
                 if cached_results is not None:
                     if self.performance_monitor:
                         self.performance_monitor.record_cache_hit('search', True)
-                        self.performance_monitor.record_result_count('milvus', len(cached_results))
+                        self.performance_monitor.record_result_count('vector', len(cached_results))
                     logger.debug(f"Vector search cache hit for: {query[:50]}...")
                     return cached_results
 
@@ -64,16 +72,17 @@ class HybridRetrievalHandler:
             # Cache results
             if self.cache_manager and results:
                 self.cache_manager.cache_search_results(
-                    query, results, top_k, use_hybrid=True, routing_strategy="milvus"
+                    query, results, top_k, use_hybrid=True, routing_strategy="vector"
                 )
 
             if self.performance_monitor:
-                self.performance_monitor.record_result_count('milvus', len(results or []))
+                self.performance_monitor.record_result_count('vector', len(results or []))
 
             return results or []
         except Exception as e:
             logger.error(f"Vector search error: {e}")
             return []
+
 
     async def execute_multimodal_vector_search(self, query: str, keywords: List[str],
                                                 top_k: int) -> tuple:
@@ -506,7 +515,7 @@ class HybridRetrievalHandler:
                 return [], template_info, empty_visual
 
             # Parse the query intelligently based on patterns
-            cypher_query, parameters, template_key = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
+            cypher_query, parameters, template_key, keywords = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
 
             # Build template info
             template_desc = self.GRAPH_TEMPLATES.get(template_key, {}).get('description', template_key)
@@ -526,10 +535,9 @@ class HybridRetrievalHandler:
             # gets results (with basic metadata from Milvus instead of rich
             # Neo4j metadata like authors, venue, citations).
             if len(results) < top_k:
-                if not visual_data.get('vector_results'):
-                    sorted_ids, visual_data = await self.execute_multimodal_vector_search(
-                        query, keywords, top_k - len(results)
-                    )
+                sorted_ids, visual_data = await self.execute_multimodal_vector_search(
+                    query, keywords, top_k - len(results)
+                )
                 logger.warning(
                     f"Graph returned 0 results — falling back to "
                     f"{len(visual_data['vector_results'])} vector search results"
@@ -1037,7 +1045,7 @@ Respond with ONLY the template name, nothing else."""
                 if cached is not None:
                     cypher_query, parameters = cached
                     logger.info(f"Cypher cache HIT for: {query[:50]}...")
-                    return cypher_query, parameters, "cached"
+                    return cypher_query, parameters, "cached", []
 
             # Step 1: Extract entities from the query
             extracted = self._extract_all_entities(query)
@@ -1065,7 +1073,7 @@ Respond with ONLY the template name, nothing else."""
                         )
                         if self.cache_manager:
                             self.cache_manager.cache_cypher(query, top_k, refined_cypher, parameters)
-                        return refined_cypher, parameters, "raw_cypher"
+                        return refined_cypher, parameters, "raw_cypher", []
             else:
                 template_key = await self._select_template_with_ai(query, extracted)
             logger.info(f"Selected template: {template_key}")
@@ -1078,9 +1086,9 @@ Respond with ONLY the template name, nothing else."""
             template_cypher_text = self.GRAPH_TEMPLATES.get(template_key, {}).get('cypher', '')
             needs_paper_ids = '$paper_ids' in template_cypher_text
             has_paper_ids = bool(extracted.get('paper_ids'))
+            keywords = extracted.get('keywords', [])
 
             if needs_paper_ids and not has_paper_ids:
-                keywords = extracted.get('keywords', [])
 
                 all_results = {}
 
@@ -1119,7 +1127,7 @@ Respond with ONLY the template name, nothing else."""
             if self.cache_manager:
                 self.cache_manager.cache_cypher(query, top_k, cypher_query, parameters)
 
-            return cypher_query, parameters, template_key
+            return cypher_query, parameters, template_key, keywords
 
         except Exception as e:
             logger.error(f"Error in intelligent Cypher generation: {e}")
@@ -1130,7 +1138,7 @@ Respond with ONLY the template name, nothing else."""
                     {"paper_ids": paper_ids, "limit": top_k}, "search_by_paper_ids"
             keywords = self._extract_keywords(query)
             return self.GRAPH_TEMPLATES['search_by_keywords']['cypher'].strip(), \
-                {"keywords": keywords or [query], "limit": top_k}, "search_by_keywords"
+                {"keywords": keywords or [query], "limit": top_k}, "search_by_keywords", keywords
 
     async def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
         """Run vector search to extract relevant paper IDs for graph enrichment.
