@@ -1060,7 +1060,9 @@ Respond with ONLY the template name, nothing else."""
                     return cypher_query, parameters, "cached", []
 
             # Step 1: Extract entities from the query
-            extracted = self._extract_all_entities(query)
+            para_query = self._paraphrase_query_as_description(query)
+
+            extracted = self._extract_all_entities(para_query)
             logger.info(f"Extracted entities: {extracted}")
 
             # Step 2: AI agent selects the best template
