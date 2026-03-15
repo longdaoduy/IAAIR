@@ -666,7 +666,6 @@ class HybridRetrievalHandler:
     # =========================================================================
     # TEMPLATE SELECTION — AI agent picks the best template
     # =========================================================================
-
     async def _paraphrase_query_as_description(self, query: str) -> str:
         """Paraphrase the user's query into a clean description format.
 
@@ -684,26 +683,19 @@ class HybridRetrievalHandler:
             # Fallback: strip special characters only
             return re.sub(r'[?!.;:]+', '', query).strip()
 
-        paraphrase_prompt = f"""Normalize the following user query by fixing grammar and spelling errors, and removing special characters such as ? ! ... ; : and question marks.
-Do NOT change the meaning, structure, or key words of the query.
-Do NOT rephrase, reword, or substitute any nouns (especially venue names, topics, or entity names).
-Do NOT add, remove, or replace any important words — only fix grammar and remove special characters.
-Output ONLY the cleaned query, nothing else.
-
-Examples:
-"Find the papers publish in journals medicine" → "Find the papers published in journals medicine"
-"what papers about deep learning?" → "papers about deep learning"
-"papers publish in Nature about protein?" → "papers published in Nature about protein"
-"who are the authors of W1234!!" → "who are the authors of W1234"
+        paraphrase_prompt = f"""Rephrase the following user query into a short, clean description.
+Remove all special characters such as ? ! ... ; : and question marks.
+Keep the same meaning. Do NOT answer the query — only rephrase it.
+Output ONLY the rephrased description, nothing else.
 
 User query: "{query}"
-Cleaned query:"""
+Rephrased description:"""
 
         try:
             response = await run_blocking(
                 self.ai_agent.generate_content,
                 prompt=paraphrase_prompt,
-                system_prompt="You normalize queries by fixing grammar and removing special characters. Never change key words or meaning. Output only the cleaned text.",
+                system_prompt="You rephrase queries into clean descriptions. Output only the rephrased text.",
                 purpose='query_paraphrase'
             )
             if response:
