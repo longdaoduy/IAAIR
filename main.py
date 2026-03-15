@@ -534,7 +534,7 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         )
 
         logger.info(f"Template used: {template_info}")
-        logger.info(f"Vector results from milvus-first: {len(vector_results)} results")
+        logger.info(f"Hybrid results (graph+vector combined): {len(hybrid_results or [])} results")
 
         # Visual data is now collected inside _build_intelligent_cypher_query
         # alongside vector search, with re-ranking applied to produce final paper IDs
@@ -547,7 +547,6 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 
         with factory.performance_monitor.track_operation('fusion'):
             fused_results = factory.result_fusion.fuse_results(
-                vector_results or [],
                 hybrid_results or [],
                 request.fusion_weights,
                 visual_data=visual_data
@@ -583,12 +582,10 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         total_time = (datetime.now() - start_time).total_seconds()
 
         fusion_stats = {
-            'vector_results_count': len(vector_results or []),
-            'graph_results_count': len(hybrid_results or []),
+            'hybrid_results_count': len(hybrid_results or []),
             'visual_figures_count': len(visual_figures),
             'visual_tables_count': len(visual_tables),
             'papers_with_visual_evidence': len(visual_data.get('paper_visual_scores', {})),
-            # 'fusion_method': routing_strategy.value,
             'fusion_weights': request.fusion_weights or factory.result_fusion.default_weights
         }
 
