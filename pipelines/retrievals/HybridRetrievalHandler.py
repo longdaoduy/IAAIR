@@ -32,7 +32,7 @@ class HybridRetrievalHandler:
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
-        self.answer_agent = LLMClient(model_name="Qwen/Qwen2.5-0.5B-Instruct")
+        self.answer_agent = LLMClient()
         self.template_agent = LLMClient(model_name="Qwen/Qwen2.5-0.5B-Instruct")
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
