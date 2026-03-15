@@ -1219,13 +1219,15 @@ Respond with ONLY the template name, nothing else."""
             template_info: Optional[Dict] = None,
             visual_evidence: Optional[Dict] = None,
     ) -> Optional[str]:
-        """Generate AI response from vector and graph searches.
+        """Generate AI response from milvus, neo4j, and cross-modal visual searches.
 
         Args:
             query: The user's natural language query
             search_results: List of search result objects or dicts
             template_info: Optional dict with 'template_key' and 'description'
-                           of the graph template used for retrieval
+                           of the neo4j template used for retrievals
+            visual_evidence: Optional dict with 'figure_results', 'table_results',
+                             and 'paper_visual_scores' from cross-modal visual search
         """
         try:
             if not self.ai_agent:
@@ -1272,8 +1274,34 @@ Respond with ONLY the template name, nothing else."""
                 tpl_desc = template_info.get("description", tpl_key)
                 template_context = f"\nRetrieval Strategy: {tpl_key} — {tpl_desc}"
 
+            # Build visual evidence context for the prompt
+            visual_context = ""
+            if visual_evidence:
+                figs = visual_evidence.get('figure_results', [])
+                tabs = visual_evidence.get('table_results', [])
+                if figs or tabs:
+                    visual_context = "\n\nVisual Evidence Retrieved:"
+                    for i, fig in enumerate(figs[:5], 1):
+                        desc = (fig.get('description', '') or '')[:150]
+                        pid = fig.get('paper_id', '')
+                        score = fig.get('similarity_score', 0)
+                        visual_context += f"\n  Figure {i} (paper {pid}, relevance {score:.2f}): {desc}"
+                    for i, tab in enumerate(tabs[:5], 1):
+                        desc = (tab.get('description', '') or '')[:150]
+                        pid = tab.get('paper_id', '')
+                        score = tab.get('similarity_score', 0)
+                        visual_context += f"\n  Table {i} (paper {pid}, relevance {score:.2f}): {desc}"
+
             # Build template-specific instructions
             template_instructions = self._get_template_specific_instructions(template_info)
+
+            # Add visual evidence instructions if visual results are present
+            if visual_context:
+                template_instructions += (
+                    "\n- Reference relevant figures and tables when they support the answer"
+                    "\n- Mention which paper each visual element comes from"
+                    "\n- If the query is about experimental results, graphs, or data, emphasize the visual evidence"
+                )
 
             system_prompt = "You are a research assistant specializing in academic literature. Be accurate, concise, and tailor your response to the type of query."
             prompt = f"""Answer this question based on the search results: "{query}"
@@ -1281,6 +1309,7 @@ Respond with ONLY the template name, nothing else."""
 
 Search Results:
 {self._format_papers_for_prompt(context_papers[:4])}
+{visual_context}
 
 Instructions:
 {template_instructions}
