@@ -76,7 +76,7 @@ class HybridRetrievalHandler:
             return []
 
     async def execute_multimodal_vector_search(self, query: str, keywords: List[str],
-                                               top_k: int) -> tuple:
+                                                top_k: int) -> tuple:
         """Multi-modal vector search: SciBERT + CLIP cross-modal + re-ranking.
 
         Combines text-based vector search with cross-modal visual search to produce
@@ -103,7 +103,7 @@ class HybridRetrievalHandler:
 
         try:
             # ── Step 1: Vector search (SciBERT) per keyword ──
-            all_vector_scores = {}  # paper_id → best distance (lower = better)
+            all_vector_scores = {}   # paper_id → best distance (lower = better)
             all_vector_results = []
 
             for keyword in keywords:
@@ -506,8 +506,7 @@ class HybridRetrievalHandler:
                 return [], template_info, empty_visual
 
             # Parse the query intelligently based on patterns
-            cypher_query, parameters, template_key, visual_data, keywords = await self._build_intelligent_cypher_query(
-                query, top_k, template_cypher)
+            cypher_query, parameters, template_key, visual_data, keywords = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
 
             # Build template info
             template_desc = self.GRAPH_TEMPLATES.get(template_key, {}).get('description', template_key)
@@ -621,84 +620,11 @@ class HybridRetrievalHandler:
             keywords.append(query.strip())
 
         return list(set(keywords))  # Remove duplicates
-
-    # @staticmethod
-    # def _is_vague_entity_name(name: str) -> bool:
-    #     """Check if a venue or institution name is a vague/generic descriptor.
-    #
-    #     Phrases like "top medical journals", "leading conferences", "major universities"
-    #     are qualitative descriptors — not actual entity names that can be matched
-    #     in the database. This method returns True for such vague names.
-    #
-    #     Args:
-    #         name: The venue or institution name to check
-    #
-    #     Returns:
-    #         True if the name is too vague/generic to be a real entity
-    #     """
-    #     name_lower = name.lower().strip()
-    #
-    #     # Vague qualifier words that indicate a generic descriptor, not a real name
-    #     vague_qualifiers = {
-    #         'top', 'leading', 'major', 'prestigious', 'high-impact', 'high impact',
-    #         'best', 'good', 'notable', 'prominent', 'renowned', 'well-known',
-    #         'well known', 'famous', 'important', 'significant', 'reputable',
-    #         'premier', 'elite', 'key', 'various', 'several', 'many',
-    #         'international', 'relevant', 'popular', 'mainstream',
-    #     }
-    #
-    #     # Generic category words (not specific names)
-    #     generic_categories = {
-    #         'journals', 'journal', 'conferences', 'conference', 'venues', 'venue',
-    #         'publications', 'publication', 'outlets', 'outlet',
-    #         'universities', 'university', 'institutions', 'institution',
-    #         'labs', 'lab', 'laboratories', 'laboratory',
-    #         'organizations', 'organization', 'companies', 'company',
-    #         'research groups', 'research labs', 'research centers',
-    #     }
-    #
-    #     # Check if name is just a combination of qualifiers + generic categories
-    #     # e.g. "top medical journals", "leading research universities"
-    #     words = name_lower.split()
-    #
-    #     # If any word is a vague qualifier and any word/phrase is a generic category → vague
-    #     has_qualifier = any(q in name_lower for q in vague_qualifiers)
-    #     has_category = any(c in name_lower for c in generic_categories)
-    #
-    #     if has_qualifier and has_category:
-    #         return True
-    #
-    #     # Also reject names that are purely generic categories (even without qualifiers)
-    #     # e.g. "medical journals", "computer science conferences"
-    #     if has_category and len(words) <= 4:
-    #         # Check if all non-category words are adjectives/modifiers rather than proper names
-    #         # A real venue name like "Nature Medicine" won't have generic categories
-    #         non_category_words = [w for w in words if w not in
-    #                               {'journals', 'journal', 'conferences', 'conference',
-    #                                'venues', 'venue', 'universities', 'university',
-    #                                'institutions', 'institution', 'labs', 'lab',
-    #                                'publications', 'publication', 'outlets', 'outlet',
-    #                                'organizations', 'organization', 'laboratories', 'laboratory'}]
-    #         # If remaining words are all common adjectives (not proper nouns), it's vague
-    #         common_modifiers = {
-    #             'medical', 'scientific', 'academic', 'clinical', 'biomedical',
-    #             'computer', 'science', 'engineering', 'biological', 'chemical',
-    #             'physical', 'social', 'environmental', 'educational',
-    #             'top', 'leading', 'major', 'good', 'best', 'high', 'impact',
-    #             'peer', 'reviewed', 'peer-reviewed', 'open', 'access',
-    #             'research', 'technical', 'general', 'specialized', 'interdisciplinary',
-    #         }
-    #         if all(w in common_modifiers for w in non_category_words):
-    #             return True
-    #
-    #     return False
-
     # =========================================================================
     # GRAPH TEMPLATE LIBRARY — Loaded from data/graph_templates.json
     # =========================================================================
 
     _graph_templates_cache: Optional[Dict] = None
-
     @classmethod
     def _load_graph_templates(cls) -> Dict:
         """Load neo4j query templates from data/graph_templates.json.
@@ -994,27 +920,27 @@ Respond with ONLY the template name, nothing else."""
         """
         # Always extract paper IDs via regex — they have a deterministic format
         extracted = {}
-        # paper_ids = [pid.upper() for pid in re.findall(r'\b([Ww]\d+)\b', query)]
-        # if paper_ids:
-        #     extracted['paper_ids'] = paper_ids
-        #
-        # # Try AI extraction first, fall back to rules
-        # if self.ai_agent:
-        #     ai_extracted = await self._extract_all_entities_with_ai(query)
-        #     if ai_extracted:
-        #         # Merge: AI results take priority, but keep regex paper_ids
-        #         ai_extracted.setdefault('paper_ids', [])
-        #         if paper_ids:
-        #             # Combine and deduplicate paper IDs from AI + regex
-        #             combined_ids = list(dict.fromkeys(
-        #                 extracted.get('paper_ids', []) + ai_extracted.get('paper_ids', [])
-        #             ))
-        #             ai_extracted['paper_ids'] = combined_ids
-        #         logger.info(f"AI entity extraction succeeded: {ai_extracted}")
-        #         return ai_extracted
-        #
-        # # Fallback to rule-based extraction
-        # logger.info("Falling back to rule-based entity extraction")
+        paper_ids = re.findall(r'\b(W\d+)\b', query)
+        if paper_ids:
+            extracted['paper_ids'] = paper_ids
+
+        # Try AI extraction first, fall back to rules
+        if self.ai_agent:
+            ai_extracted = await self._extract_all_entities_with_ai(query)
+            if ai_extracted:
+                # Merge: AI results take priority, but keep regex paper_ids
+                ai_extracted.setdefault('paper_ids', [])
+                if paper_ids:
+                    # Combine and deduplicate paper IDs from AI + regex
+                    combined_ids = list(dict.fromkeys(
+                        extracted.get('paper_ids', []) + ai_extracted.get('paper_ids', [])
+                    ))
+                    ai_extracted['paper_ids'] = combined_ids
+                logger.info(f"AI entity extraction succeeded: {ai_extracted}")
+                return ai_extracted
+
+        # Fallback to rule-based extraction
+        logger.info("Falling back to rule-based entity extraction")
         return self._extract_all_entities_by_rules(query, extracted)
 
     async def _extract_all_entities_with_ai(self, query: str) -> Optional[Dict]:
@@ -1139,7 +1065,7 @@ Return ONLY the JSON object, nothing else."""
             pids = ai_result.get('paper_ids', [])
             if pids and isinstance(pids, list):
                 # Validate format: must match W followed by digits
-                valid_pids = [p.upper() for p in pids if isinstance(p, str) and re.match(r'^[Ww]\d+$', p)]
+                valid_pids = [p for p in pids if isinstance(p, str) and re.match(r'^W\d+$', p)]
                 if valid_pids:
                     extracted['paper_ids'] = valid_pids
 
@@ -1167,38 +1093,19 @@ Return ONLY the JSON object, nothing else."""
             year_to = ai_result.get('year_to')
             if year_from and isinstance(year_from, str) and re.match(r'^\d{4}$', year_from):
                 extracted['year_from'] = year_from
-                extracted['year_to'] = year_to if (
-                        year_to and isinstance(year_to, str) and re.match(r'^\d{4}$', year_to)) else '2099'
+                extracted['year_to'] = year_to if (year_to and isinstance(year_to, str) and re.match(r'^\d{4}$', year_to)) else '2099'
 
-            # Venue — reject vague/generic descriptors AND hallucinated names
+            # Venue — reject vague/generic descriptors
             venue = ai_result.get('venue')
             if venue and isinstance(venue, str) and len(venue.strip()) > 1:
                 venue_clean = venue.strip()
-                # Guard: reject venue if it doesn't appear in the original query
-                # (prevents AI from hallucinating venues like "Nature" when user said "medicine")
-                if venue_clean.lower() not in query.lower():
-                    logger.info(f"Discarded hallucinated venue '{venue_clean}' — not found in query: '{query}'")
-                    # Don't add to keywords — it's not what the user said
-                # elif self._is_vague_entity_name(venue_clean):
-                #     topic_words = self._extract_topic_from_vague_name(venue_clean, entity_type='venue')
-                #     logger.info(f"Discarded vague venue '{venue_clean}' — extracted topic keywords: {topic_words}")
-                #     extracted.setdefault('keywords', []).extend(topic_words)
-                else:
-                    extracted['venue'] = venue_clean
+                extracted['venue'] = venue_clean
 
-            # Institution — reject vague/generic descriptors AND hallucinated names
+            # Institution — reject vague/generic descriptors
             institution = ai_result.get('institution')
             if institution and isinstance(institution, str) and len(institution.strip()) > 1:
                 inst_clean = institution.strip()
-                # Guard: reject institution if it doesn't appear in the original query
-                if inst_clean.lower() not in query.lower():
-                    logger.info(f"Discarded hallucinated institution '{inst_clean}' — not found in query: '{query}'")
-                # elif self._is_vague_entity_name(inst_clean):
-                #     topic_words = self._extract_topic_from_vague_name(inst_clean, entity_type='institution')
-                #     logger.info(f"Discarded vague institution '{inst_clean}' — extracted topic keywords: {topic_words}")
-                #     extracted.setdefault('keywords', []).extend(topic_words)
-                else:
-                    extracted['institution'] = inst_clean
+                extracted['institution'] = inst_clean
 
             # Intent flags
             if ai_result.get('wants_citations') is True:
@@ -1237,7 +1144,7 @@ Return ONLY the JSON object, nothing else."""
 
         # 1. Paper IDs (if not already set)
         if not extracted.get('paper_ids'):
-            paper_ids = [pid.upper() for pid in re.findall(r'\b([Ww]\d+)\b', query)]
+            paper_ids = re.findall(r'\b(W\d+)\b', query)
             if paper_ids:
                 extracted['paper_ids'] = paper_ids
 
@@ -1302,262 +1209,6 @@ Return ONLY the JSON object, nothing else."""
             extracted['keywords'] = keywords
 
         return extracted
-
-    # =========================================================================
-    # TEMPLATE VALIDATION — Ensure extracted entities satisfy template needs
-    # =========================================================================
-
-    async def _validate_and_fill_extracted(self, template_key: str, extracted: Dict,
-                                           query: str) -> tuple:
-        """Validate that *extracted* has the params the chosen template needs.
-
-        Each template has a `triggers` list in graph_templates.json that declares
-        what entity types it requires (e.g. ["author_names", "keywords"]).
-        This method maps each trigger to the corresponding extracted key and
-        checks whether it is present and non-empty.
-
-        Resolution strategy (in order):
-        1. Ask the AI agent to extract the specific missing fields.
-        2. Fall back to regex helpers if AI is unavailable or returns nothing.
-        3. If still missing, re-select a template that only needs entities we
-           already have (rule-based fallback).
-
-        Args:
-            template_key: The currently selected template key.
-            extracted: The extracted entities dict (mutated in-place when filling).
-            query: The original/paraphrased query for regex fallback extraction.
-
-        Returns:
-            (template_key, extracted) — possibly changed if a different template
-            was selected due to unfillable missing params.
-        """
-        template = self.GRAPH_TEMPLATES.get(template_key)
-        if not template:
-            return template_key, extracted
-
-        # Map trigger names → extracted dict keys
-        trigger_to_key = {
-            'paper_ids': 'paper_ids',
-            'author_names': 'author_names',
-            'keywords': 'keywords',
-            'venue': 'venue',
-            'institution': 'institution',
-            'year': 'year',
-            'year_range': 'year_from',
-            'citations': 'paper_ids',
-            'top_cited': None,
-            'coauthor': 'author_names',
-            'author_venues': 'author_names',
-        }
-
-        triggers = template.get('triggers', [])
-        missing = []
-
-        for trigger in triggers:
-            needed_key = trigger_to_key.get(trigger)
-            if needed_key is None:
-                continue
-            if not extracted.get(needed_key):
-                missing.append((trigger, needed_key))
-
-        if not missing:
-            return template_key, extracted
-
-        missing_keys = [k for _, k in missing]
-        logger.info(f"Template '{template_key}' missing entities: {missing_keys}")
-
-        # ── Step 1: Ask AI agent to extract the missing fields ──
-        ai_filled = await self._ai_fill_missing(query, missing_keys)
-        if ai_filled:
-            for key, value in ai_filled.items():
-                if value and not extracted.get(key):
-                    extracted[key] = value
-                    logger.info(f"AI filled missing '{key}': {value}")
-
-        # ── Step 2: Regex fallback for anything AI couldn't fill ──
-        # still_missing = []
-        # for trigger, needed_key in missing:
-        #     if extracted.get(needed_key):
-        #         continue  # already filled by AI
-        #
-        #     filled = self._regex_fill_one(needed_key, query, extracted)
-        #     if filled:
-        #         logger.info(f"Regex filled missing '{needed_key}': {extracted.get(needed_key)}")
-        #     else:
-        #         still_missing.append((trigger, needed_key))
-        #
-        # if not still_missing:
-        return template_key, extracted
-
-        # ── Step 3: Re-select a template that fits available entities ──
-        logger.warning(
-            f"Cannot fill {[k for _, k in still_missing]} for template "
-            f"'{template_key}' — re-selecting based on available entities"
-        )
-        new_key = self._select_template_by_rules(extracted)
-        if new_key != template_key:
-            logger.info(f"Re-selected template: '{template_key}' → '{new_key}'")
-        return new_key, extracted
-
-    async def _ai_fill_missing(self, query: str, missing_keys: List[str]) -> Optional[Dict]:
-        """Use the AI agent to extract only the specific missing fields.
-
-        Sends a targeted prompt listing just the fields that need filling,
-        avoiding a full re-extraction. Returns a dict with the filled values
-        or None if AI is unavailable or fails.
-        """
-        if not self.ai_agent:
-            return None
-
-        fields_desc = {
-            'paper_ids': 'paper_ids (list of OpenAlex IDs like W1234567890)',
-            'author_names': 'author_names (list of full names, e.g. ["Kaiming He"])',
-            'keywords': 'keywords (list of research topics/concepts)',
-            'venue': 'venue (specific journal/conference name, NOT generic like "top journals")',
-            'institution': 'institution (specific university/org name)',
-            'year': 'year (4-digit year string)',
-            'year_from': 'year_from (start year for range)',
-        }
-
-        fields_to_extract = [fields_desc.get(k, k) for k in missing_keys]
-        fields_str = '\n'.join(f'  - {f}' for f in fields_to_extract)
-
-        prompt = f"""Extract ONLY the following missing fields from the user query.
-Return a JSON object with only the requested fields. Use null if not found.
-
-User query: "{query}"
-
-Missing fields to extract:
-{fields_str}
-
-Rules:
-- paper_ids must match the pattern W followed by digits (e.g. W1775749144)
-- author_names must have at least first and last name
-- keywords are research topics — NOT author names, venues, or common words
-- venue must be a SPECIFIC journal/conference name that appears in the query
-- institution must be a SPECIFIC university/org name that appears in the query
-- Return ONLY valid JSON, nothing else."""
-
-        try:
-            response = await run_blocking(
-                self.ai_agent.generate_content,
-                prompt=prompt,
-                system_prompt="Extract only the requested fields. Return valid JSON.",
-                purpose='entity_extraction'
-            )
-            if not response:
-                return None
-
-            cleaned = response.strip()
-            if cleaned.startswith('```'):
-                cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
-                cleaned = re.sub(r'\s*```$', '', cleaned)
-            cleaned = cleaned.strip()
-
-            result = json.loads(cleaned)
-            filled = {}
-
-            for key in missing_keys:
-                val = result.get(key)
-                if val is None:
-                    continue
-
-                if key == 'paper_ids' and isinstance(val, list):
-                    valid = [p.upper() for p in val
-                             if isinstance(p, str) and re.match(r'^[Ww]\d+$', p)]
-                    if valid:
-                        filled['paper_ids'] = valid
-
-                elif key == 'author_names' and isinstance(val, list):
-                    valid = [a for a in val
-                             if isinstance(a, str) and len(a.split()) >= 2]
-                    if valid:
-                        filled['author_names'] = valid
-
-                elif key == 'keywords' and isinstance(val, list):
-                    valid = [k for k in val
-                             if isinstance(k, str) and len(k.strip()) > 1]
-                    if valid:
-                        filled['keywords'] = valid
-
-                elif key == 'venue' and isinstance(val, str) and len(val.strip()) > 1:
-                    v = val.strip()
-                    # if v.lower() in query.lower() and not self._is_vague_entity_name(v):
-                    filled['venue'] = v
-
-                elif key == 'institution' and isinstance(val, str) and len(val.strip()) > 1:
-                    v = val.strip()
-                    # if v.lower() in query.lower() and not self._is_vague_entity_name(v):
-                    filled['institution'] = v
-
-                elif key == 'year' and isinstance(val, str) and re.match(r'^\d{4}$', val):
-                    filled['year'] = val
-
-                elif key == 'year_from' and isinstance(val, str) and re.match(r'^\d{4}$', val):
-                    filled['year_from'] = val
-                    yr_to = result.get('year_to')
-                    filled['year_to'] = yr_to if (isinstance(yr_to, str) and re.match(r'^\d{4}$', yr_to)) else '2099'
-
-            return filled if filled else None
-
-        except Exception as e:
-            logger.warning(f"AI fill-missing failed: {e}")
-            return None
-
-    def _regex_fill_one(self, needed_key: str, query: str, extracted: Dict) -> bool:
-        """Try to fill a single missing entity key using regex. Returns True if filled."""
-        if needed_key == 'paper_ids':
-            ids = [pid.upper() for pid in re.findall(r'\b([Ww]\d+)\b', query)]
-            if ids:
-                extracted['paper_ids'] = ids
-                return True
-
-        elif needed_key == 'author_names':
-            names = self._extract_author_names(query)
-            if names:
-                extracted['author_names'] = names
-                return True
-
-        elif needed_key == 'keywords':
-            kws = self._extract_keywords(query)
-            if kws:
-                extracted['keywords'] = kws
-                return True
-
-        elif needed_key == 'venue':
-            m = re.search(
-                r'(?:in|from|published\s+in|journal|conference)\s+["\']?'
-                r'([A-Z][^"\'\,]{2,40})["\']?',
-                query, re.IGNORECASE
-            )
-            if m:
-                extracted['venue'] = m.group(1).strip()
-                return True
-
-        elif needed_key == 'institution':
-            m = re.search(
-                r'(?:from|at|institution|university|org(?:anization)?)\s+'
-                r'["\']?([A-Z][^"\'\,]{2,50})["\']?',
-                query, re.IGNORECASE
-            )
-            if m:
-                extracted['institution'] = m.group(1).strip()
-                return True
-
-        elif needed_key == 'year':
-            ym = re.search(r'\b(20\d{2})\b', query)
-            if ym:
-                extracted['year'] = ym.group(1)
-                return True
-
-        elif needed_key == 'year_from':
-            rm = re.search(r'\b(since|after|from)\s+(\d{4})\b', query, re.IGNORECASE)
-            if rm:
-                extracted['year_from'] = rm.group(2)
-                extracted.setdefault('year_to', '2099')
-                return True
-
-        return False
 
     # =========================================================================
     # PARAMETER BUILDERS — Fill template parameters from extracted entities
@@ -1660,13 +1311,9 @@ Rules:
                         return refined_cypher, parameters, "raw_cypher", empty_visual, []
             else:
                 template_key = await self._select_template_with_ai(paraphrased_query, extracted)
+            if template_key == 'search_by_keywords':
+                template_key = 'search_by_paper_ids'
             logger.info(f"Selected template: {template_key}")
-
-            # Validate extracted has what the template needs; fill gaps or re-select
-            template_key, extracted = await self._validate_and_fill_extracted(
-                template_key, extracted, paraphrased_query
-            )
-            logger.info(f"Validated template: {template_key} | entities: {extracted}")
 
             # Step 3: Multi-modal vector search for keyword queries
             # Only run when the selected template requires $paper_ids but none
@@ -1690,8 +1337,7 @@ Rules:
 
                 # Inject re-ranked paper IDs into extracted entities for the Cypher query
                 extracted.setdefault('paper_ids', []).extend(sorted_ids)
-                logger.info(
-                    f"Multi-modal search: injected {len(sorted_ids)} re-ranked paper IDs for template '{template_key}'")
+                logger.info(f"Multi-modal search: injected {len(sorted_ids)} re-ranked paper IDs for template '{template_key}'")
             else:
                 # Still run visual search scoped to existing paper IDs for evidence enrichment
                 existing_pids = extracted.get('paper_ids', [])
@@ -1719,8 +1365,7 @@ Rules:
             return cypher_query, parameters, template_key, visual_data, keywords
 
         except Exception as e:
-            import traceback
-            logger.error(f"Error in intelligent Cypher generation: {e}\n{traceback.format_exc()}")
+            logger.error(f"Error in intelligent Cypher generation: {e}")
             paraphrased_query = await self._paraphrase_query_as_description(query)
 
             # Ultimate fallback — milvus-first then paper IDs lookup
@@ -1730,8 +1375,7 @@ Rules:
                     {"paper_ids": paper_ids, "limit": top_k}, "search_by_paper_ids", empty_visual, []
             keywords = self._extract_keywords(paraphrased_query)
             return self.GRAPH_TEMPLATES['search_by_keywords']['cypher'].strip(), \
-                {"keywords": keywords or [paraphrased_query],
-                 "limit": top_k}, "search_by_keywords", empty_visual, keywords
+                {"keywords": keywords or [paraphrased_query], "limit": top_k}, "search_by_keywords", empty_visual, keywords
 
     async def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
         """Run milvus search to extract relevant paper IDs for neo4j enrichment.
@@ -2109,7 +1753,7 @@ Answer:"""
     # =========================================================================
 
     async def search_visual_by_text(self, query: str, top_k: int = 5,
-                                    paper_ids: Optional[List[str]] = None) -> Dict:
+                                      paper_ids: Optional[List[str]] = None) -> Dict:
         """Cross-modal search: find figures and tables for papers found by vector search.
 
         Visual search is scoped to the paper IDs already discovered by vector search.
@@ -2252,7 +1896,6 @@ Answer:"""
         except Exception as e:
             logger.error(f"Cross-modal visual search error: {e}")
             return empty_result
-
     #
     # # =========================================================================
     # # IMAGE SEARCH METHODS
