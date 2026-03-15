@@ -900,80 +900,43 @@ Respond with ONLY the template name, nothing else."""
     # ENTITY EXTRACTION — Pull structured data from natural language query
     # =========================================================================
 
-    def _extract_all_entities(self, query: str) -> Dict:
+    async def _extract_all_entities(self, query: str) -> Dict:
         """Extract all entities from a natural language query.
+
+        Uses the AI agent as the primary extractor for accurate entity recognition
+        (author names, venues, institutions, intents, etc.). Falls back to the
+        rule-based regex extractor when the AI agent is unavailable or fails.
+
+        Paper IDs (W12345 format) are always extracted via regex for reliability.
 
         Returns a dict with:
             paper_ids, author_names, keywords, year, year_from, year_to,
             venue, institution, wants_citations, wants_coauthors, wants_top_cited
         """
+        # Always extract paper IDs via regex — they have a deterministic format
         extracted = {}
-        query_lower = query.lower()
-
-        # 1. Paper IDs
         paper_ids = re.findall(r'\b(W\d+)\b', query)
         if paper_ids:
             extracted['paper_ids'] = paper_ids
 
-        # 2. Author names
-        author_names = self._extract_author_names(query)
-        if author_names:
-            extracted['author_names'] = author_names
+        # Try AI extraction first, fall back to rules
+        if self.ai_agent:
+            ai_extracted = await self._extract_all_entities_with_ai(query)
+            if ai_extracted:
+                # Merge: AI results take priority, but keep regex paper_ids
+                ai_extracted.setdefault('paper_ids', [])
+                if paper_ids:
+                    # Combine and deduplicate paper IDs from AI + regex
+                    combined_ids = list(dict.fromkeys(
+                        extracted.get('paper_ids', []) + ai_extracted.get('paper_ids', [])
+                    ))
+                    ai_extracted['paper_ids'] = combined_ids
+                logger.info(f"AI entity extraction succeeded: {ai_extracted}")
+                return ai_extracted
 
-        # 3. Year / year range
-        range_match = re.search(r'\b(since|after|from)\s+(\d{4})\b', query, re.IGNORECASE)
-        if range_match:
-            extracted['year_from'] = range_match.group(2)
-            extracted['year_to'] = '2099'  # open-ended
-        else:
-            before_match = re.search(r'\b(before|until|up\s+to)\s+(\d{4})\b', query, re.IGNORECASE)
-            if before_match:
-                extracted['year_from'] = '1900'
-                extracted['year_to'] = before_match.group(2)
-            else:
-                between_match = re.search(r'\b(\d{4})\s*[-–to]+\s*(\d{4})\b', query)
-                if between_match:
-                    extracted['year_from'] = between_match.group(1)
-                    extracted['year_to'] = between_match.group(2)
-                else:
-                    year_match = re.search(r'\b(in|year)\s+(\d{4})\b', query, re.IGNORECASE)
-                    if year_match:
-                        extracted['year'] = year_match.group(2)
-                    else:
-                        standalone = re.search(r'\b(20\d{2})\b', query)
-                        if standalone:
-                            extracted['year'] = standalone.group(1)
-
-        # 4. Venue
-        venue_match = re.search(
-            r'(?:in|from|published\s+in|venue|journal|conference)\s+["\']?([A-Z][^"\',]{2,40})["\']?',
-            query, re.IGNORECASE
-        )
-        if venue_match:
-            extracted['venue'] = venue_match.group(1).strip()
-
-        # 5. Institution
-        inst_match = re.search(
-            r'(?:from|at|institution|university|org(?:anization)?)\s+["\']?([A-Z][^"\',]{2,50})["\']?',
-            query, re.IGNORECASE
-        )
-        if inst_match and not extracted.get('venue'):  # avoid conflict with venue
-            extracted['institution'] = inst_match.group(1).strip()
-
-        # 6. Intent flags
-        if re.search(r'\bcit(?:e|ed|ation|ing)\b', query_lower):
-            extracted['wants_citations'] = True
-        if re.search(r'\bco-?author|collaborat', query_lower):
-            extracted['wants_coauthors'] = True
-        if re.search(r'\b(?:most|top|highest)\s+cited\b|\btop\s+papers?\b|\bmost\s+influential\b', query_lower):
-            extracted['wants_top_cited'] = True
-
-        # 7. Keywords (extract last — exclude entities already captured)
-        keywords = self._extract_keywords(query)
-        if keywords:
-            extracted['keywords'] = keywords
-
-        return extracted
+        # Fallback to rule-based extraction
+        logger.info("Falling back to rule-based entity extraction")
+        return self._extract_all_entities_by_rules(query, extracted)
 
     async def _extract_all_entities_with_ai(self, query: str) -> Optional[Dict]:
         """Use AI agent to extract structured entities from a natural language query.
