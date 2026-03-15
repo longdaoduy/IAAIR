@@ -1275,10 +1275,11 @@ Return ONLY the JSON object, nothing else."""
                     logger.info(f"Cypher cache HIT for: {query[:50]}...")
                     return cypher_query, parameters, "cached", empty_visual, []
 
-            paraphrased_query = await self._paraphrase_query_as_description(query)
+            # paraphrased_query = await self._paraphrase_query_as_description(query)
+            paraphrased_query = query
 
             # Step 1: Extract entities from the query (AI-first, rule-based fallback)
-            extracted = self._extract_all_entities(paraphrased_query)
+            extracted = await self._extract_all_entities(paraphrased_query)
             logger.info(f"Extracted entities: {extracted}")
 
             # Step 2: AI agent selects the best template
@@ -1363,7 +1364,8 @@ Return ONLY the JSON object, nothing else."""
         except Exception as e:
             import traceback
             logger.error(f"Error in intelligent Cypher generation: {e}\n{traceback.format_exc()}")
-            paraphrased_query = await self._paraphrase_query_as_description(query)
+            # paraphrased_query = await self._paraphrase_query_as_description(query)
+            paraphrased_query = query
 
             # Ultimate fallback — milvus-first then paper IDs lookup
             paper_ids = await self._vector_first_paper_ids(paraphrased_query, top_k) if self.milvus_client else None
