@@ -11,7 +11,7 @@ import os
 import re
 import json
 from clients.milvus.MilvusClient import MilvusClient
-from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
+from clients.neo4j.Neo4jClient import Neo4jClient
 from clients.huggingface.SciBERTClient import SciBERTClient
 from clients.huggingface.LLM_Client import LLMClient
 from clients.huggingface.CLIPClient import CLIPClient
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class HybridRetrievalHandler:
     """Unified handler for milvus and neo4j-based retrievals operations."""
 
-    def __init__(self, vector_db: Optional[MilvusClient], graph_db: GraphQueryHandler,
+    def __init__(self, vector_db: Optional[MilvusClient], graph_db: Neo4jClient,
                  ai_agent: Optional[LLMClient], embedder: SciBERTClient,
                  cache_manager=None, performance_monitor=None,
                  clip_client: Optional[CLIPClient] = None):

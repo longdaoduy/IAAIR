@@ -947,7 +947,7 @@ async def execute_custom_query(request: GraphQueryRequest, factory: ServiceFacto
             if not any(keyword in query.upper() for keyword in ['LIMIT', 'SKIP']):
                 query += f" LIMIT {request.limit}"
 
-        results = await run_blocking(factory.query_handler.execute_query, query, request.parameters)
+        results = await run_blocking(factory.neo4j_client.execute_query, query, request.parameters)
 
         query_time = (datetime.now() - start_time).total_seconds()
 
@@ -1369,52 +1369,6 @@ async def get_cache_stats(factory: ServiceFactory = Depends(get_services)):
     except Exception as e:
         logger.error(f"Error getting cache stats: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get cache stats: {str(e)}")
-
-
-@app.post("/performance/tune")
-async def tune_performance_parameters(
-        milvus_nprobe: int = None,
-        embedding_cache_size: int = None,
-        search_cache_size: int = None,
-        max_rerank_candidates: int = None,
-        factory: ServiceFactory = Depends(get_services)
-):
-    """Tune performance parameters at runtime.
-
-    Args:
-        milvus_nprobe: Milvus search parameter (lower = faster, higher = more accurate)
-        embedding_cache_size: Size of embedding cache
-        search_cache_size: Size of search results cache
-        max_rerank_candidates: Maximum candidates to rerank (lower = faster)
-    """
-    try:
-        changes_made = []
-
-        # Tune Milvus parameters (would need to be implemented in MilvusClient)
-        if milvus_nprobe is not None:
-            # This would require modifying the MilvusClient to accept dynamic parameters
-            changes_made.append(f"Milvus nprobe set to {milvus_nprobe}")
-
-        # Tune cache sizes (would require cache resizing methods)
-        if embedding_cache_size is not None:
-            # Would need to implement cache resizing
-            changes_made.append(f"Embedding cache size set to {embedding_cache_size}")
-
-        if search_cache_size is not None:
-            # Would need to implement cache resizing
-            changes_made.append(f"Search cache size set to {search_cache_size}")
-
-        return {
-            "success": True,
-            "message": "Performance parameters updated",
-            "changes": changes_made,
-            "timestamp": datetime.now().isoformat(),
-            "note": "Some parameter changes may require system restart to take full effect"
-        }
-
-    except Exception as e:
-        logger.error(f"Error tuning performance: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to tune performance: {str(e)}")
 
 
 @app.get("/metrics")

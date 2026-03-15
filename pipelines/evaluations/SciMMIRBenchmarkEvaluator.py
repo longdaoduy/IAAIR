@@ -23,7 +23,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-class SciMMIRBenchmarkRunner:
+class SciMMIRBenchmarkEvaluator:
     """Run SciMMIR benchmarks using your IAAIR system."""
 
     def __init__(self,

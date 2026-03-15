@@ -12,12 +12,11 @@ from clients.huggingface.CLIPClient import CLIPClient
 from clients.mongo.MongoClient import MongoClient
 from pipelines.ingestions.EmbeddingSciBERTHandler import EmbeddingSciBERTHandler
 from pipelines.retrievals.HybridRetrievalHandler import HybridRetrievalHandler
-from pipelines.retrievals.GraphQueryHandler import GraphQueryHandler
 from models.engines.ResultFusion import ResultFusion
 from models.engines.ScientificReranker import ScientificReranker
 from models.engines.CacheManager import CacheManager
 from models.engines.PerformanceMonitor import PerformanceMonitor
-from pipelines.evaluations.SciMMIRBenchmarkEvaluator import SciMMIRBenchmarkRunner
+from pipelines.evaluations.SciMMIRBenchmarkEvaluator import SciMMIRBenchmarkEvaluator
 from pipelines.evaluations.SciMMIRDataLoader import SciMMIRDataLoader
 from pipelines.evaluations.SciMMIRResultAnalyzer import SciMMIRResultAnalyzer
 from models.entities.evaluations.SciMMIRBenchmarkResult import SciMMIRBenchmarkResult
@@ -45,7 +44,6 @@ class ServiceFactory:
         self.performance_monitor = PerformanceMonitor(slow_query_threshold=5.0)
 
         # Pipelines & Engines
-        self.query_handler = GraphQueryHandler(neo4j_client=self.neo4j_client)
         self.result_fusion = ResultFusion()
         self.scientific_reranker = None
         self.attribution_tracker = None
@@ -56,7 +54,7 @@ class ServiceFactory:
         self.embedding_handler = EmbeddingSciBERTHandler(self.scibert_client)
         self.retrieval_handler = HybridRetrievalHandler(
             self.milvus_client,
-            self.query_handler,
+            self.neo4j_client,
             self.deepseek_client,
             self.scibert_client,
             self.cache_manager,
@@ -93,7 +91,7 @@ class ServiceFactory:
             raise ValueError("Failed to load SciMMIR samples")
 
         # Run benchmark
-        benchmark_runner = SciMMIRBenchmarkRunner(self.clip_client, self.scibert_client, self.milvus_client)
+        benchmark_runner = SciMMIRBenchmarkEvaluator(self.clip_client, self.scibert_client, self.milvus_client)
         result = benchmark_runner.run_benchmark(samples, model_name="IAAIR-SciBERT-CLIP")
 
         # Generate report
