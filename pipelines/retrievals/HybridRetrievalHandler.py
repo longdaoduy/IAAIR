@@ -34,6 +34,7 @@ class HybridRetrievalHandler:
         self.ai_agent = ai_agent
         self.answer_agent = LLMClient()
         self.template_agent = LLMClient(model_name="Qwen/Qwen2.5-0.5B-Instruct")
+        self.para_agent = LLMClient(model_name="Qwen/Qwen2.5-0.5B-Instruct")
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
         self.clip_client = clip_client
@@ -699,7 +700,7 @@ class HybridRetrievalHandler:
         Returns:
             A cleaned, description-style version of the query
         """
-        if not self.ai_agent:
+        if not self.para_agent:
             # Fallback: strip special characters only
             return re.sub(r'[?!.;:]+', '', query).strip()
 
@@ -713,7 +714,7 @@ Rephrased description:"""
 
         try:
             response = await run_blocking(
-                self.ai_agent.generate_content,
+                self.para_agent.generate_content,
                 prompt=paraphrase_prompt,
                 system_prompt="You rephrase queries into clean descriptions. Output only the rephrased text.",
                 purpose='query_paraphrase'
