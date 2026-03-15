@@ -358,9 +358,8 @@ class HybridRetrievalHandler:
         )
         if venue_match and ':Venue' in template_cypher:
             venue_name = venue_match.group(1).strip()
-            if not self._is_vague_entity_name(venue_name):
-                conditions.append('toLower(v.name) CONTAINS toLower($venue_name)')
-                parameters['venue_name'] = venue_name
+            conditions.append('toLower(v.name) CONTAINS toLower($venue_name)')
+            parameters['venue_name'] = venue_name
 
         # Build the refined Cypher
         refined_cypher = self._inject_where_conditions(template_cypher, conditions)
