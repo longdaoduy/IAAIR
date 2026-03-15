@@ -525,16 +525,16 @@ class HybridRetrievalHandler:
             # found papers, use the vector results directly so the user still
             # gets results (with basic metadata from Milvus instead of rich
             # Neo4j metadata like authors, venue, citations).
-            if not results and visual_data.get('vector_results'):
+            if len(results) < top_k:
                 if not visual_data.get('vector_results'):
                     sorted_ids, visual_data = await self.execute_multimodal_vector_search(
-                        query, keywords, top_k
+                        query, keywords, top_k - len(results)
                     )
                 logger.warning(
                     f"Graph returned 0 results — falling back to "
                     f"{len(visual_data['vector_results'])} vector search results"
                 )
-                results = visual_data['vector_results']
+                results.extend(visual_data['vector_results'])
 
             # Cache results
             if self.cache_manager and results:
@@ -974,27 +974,13 @@ Rules:
 4. For year ranges: "since 2020" → year_from="2020", year_to="2099"; "before 2024" → year_from="1900", year_to="2024"
 5. For a single year: "in 2023" → year="2023" (leave year_from and year_to as null)
 6. "venue" MUST be a SPECIFIC, real journal/conference name (e.g. "Nature", "NeurIPS", "Analytical Biochemistry", "The Lancet").
-   NEVER use vague/generic descriptors as venue — these are NOT valid venues:
-   "top journals", "high-impact journals", "medical journals", "leading conferences",
-   "prestigious venues", "top medical journals", "major conferences", "good journals".
-   If the query mentions a category of venues (e.g. "medicine journals", "machine learning venues") without naming a specific one,
-   set venue to null and extract ONLY the subject/topic words into keywords — strip out generic category words
-   (journals, journal, conferences, conference, venues, venue, publications, outlets) and vague qualifiers
-   (top, leading, major, prestigious, high-impact, best, good, notable, prominent, renowned).
+   If no specific venue is named, extract the keywords to search the venue name.
    Examples: "medicine journals" → keyword "medicine"; "machine learning conferences" → keyword "machine learning";
    "top medical journals" → keyword "medical"; "high-impact AI venues" → keyword "AI".
 7. "institution" MUST be a SPECIFIC, real institution name (e.g. "Stanford", "Google DeepMind", "MIT").
-   NEVER use vague/generic descriptors as institution — these are NOT valid institutions:
-   "top universities", "leading research labs", "major institutions".
-   If no specific institution is named, set institution to null and extract ONLY the subject/topic words into keywords —
-   strip out generic category words (universities, university, institutions, institution, labs, laboratory, organizations)
-   and vague qualifiers (top, leading, major, prestigious, best, renowned).
+   If no specific institution is named, extract the keywords to search the institution name.
    Examples: "biomedical research labs" → keyword "biomedical"; "top engineering universities" → keyword "engineering".
 8. Set intent flags (wants_citations, wants_coauthors, wants_top_cited) based on the query's intent
-9. CRITICAL: The "venue" value MUST appear as a substring in the user's query. NEVER invent or hallucinate a venue name that the user did not mention.
-   For example, if the user says "papers in medicine journals", the word "Nature" does NOT appear in the query, so venue must be null.
-   Only set venue when the user explicitly names a specific journal/conference (e.g. "published in Nature", "from NeurIPS").
-10. CRITICAL: The "institution" value MUST appear as a substring in the user's query. NEVER invent or infer an institution name that the user did not mention.
 
 Examples:
 Query: "Find papers by Kaiming He about deep learning since 2020"
@@ -1008,24 +994,6 @@ Query: "Papers co-authored by Georg Kresse and J Furthmuller"
 
 Query: "Find papers that cite W2128635872"
 {{"paper_ids": ["W2128635872"], "author_names": [], "keywords": [], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": true, "wants_coauthors": false, "wants_top_cited": false}}
-
-Query: "Papers published in Nature about protein folding"
-{{"paper_ids": [], "author_names": [], "keywords": ["protein folding"], "year": null, "year_from": null, "year_to": null, "venue": "Nature", "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
-
-Query: "Cancer papers published in high-impact medical journals"
-{{"paper_ids": [], "author_names": [], "keywords": ["cancer", "medical"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
-
-Query: "Papers published in medicine journals"
-{{"paper_ids": [], "author_names": [], "keywords": ["medicine"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
-
-Query: "Machine learning papers from top AI conferences"
-{{"paper_ids": [], "author_names": [], "keywords": ["machine learning", "AI"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
-
-Query: "Deep learning research from top engineering universities"
-{{"paper_ids": [], "author_names": [], "keywords": ["deep learning", "engineering"], "year": null, "year_from": null, "year_to": null, "venue": null, "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
-
-Query: "Papers about CRISPR published in Cell"
-{{"paper_ids": [], "author_names": [], "keywords": ["CRISPR"], "year": null, "year_from": null, "year_to": null, "venue": "Cell", "institution": null, "wants_citations": false, "wants_coauthors": false, "wants_top_cited": false}}
 
 Return ONLY the JSON object, nothing else."""
 
@@ -1273,38 +1241,18 @@ Return ONLY the JSON object, nothing else."""
                     return cypher_query, parameters, "cached", empty_visual, []
 
             paraphrased_query = await self._paraphrase_query_as_description(query)
-
             # Step 1: Extract entities from the query (AI-first, rule-based fallback)
-            extracted = await self._extract_all_entities(paraphrased_query)
+            extracted = await self._extract_all_entities(query)
             logger.info(f"Extracted entities: {extracted}")
 
             # Step 2: AI agent selects the best template
             # template_cypher can be a template KEY name (e.g. "search_by_institution")
             # or raw Cypher text passed from the API.
             if template_cypher:
-                if template_cypher in self.GRAPH_TEMPLATES:
-                    # It's a known template key name
-                    template_key = template_cypher
-                else:
-                    # It's raw Cypher text — reverse-lookup the template key
-                    template_key = None
-                    for key, tpl in self.GRAPH_TEMPLATES.items():
-                        if tpl['cypher'].strip() == template_cypher.strip():
-                            template_key = key
-                            break
-                    if not template_key:
-                        # No matching template found — use raw Cypher directly
-                        logger.info("Using raw Cypher template (no matching template key found)")
-                        refined_cypher, parameters = self._refine_template_with_conditions(
-                            paraphrased_query, template_cypher, top_k
-                        )
-                        if self.cache_manager:
-                            self.cache_manager.cache_cypher(query, top_k, refined_cypher, parameters)
-                        return refined_cypher, parameters, "raw_cypher", empty_visual, []
+                template_key = template_cypher
             else:
-                template_key = await self._select_template_with_ai(paraphrased_query, extracted)
-            if template_key == 'search_by_keywords':
-                template_key = 'search_by_paper_ids'
+                template_key = await self._select_template_with_ai(query, extracted)
+
             logger.info(f"Selected template: {template_key}")
 
             # Step 3: Multi-modal vector search for keyword queries
@@ -1318,9 +1266,7 @@ Return ONLY the JSON object, nothing else."""
 
             keywords = extracted.get('keywords', [])
 
-            if (needs_paper_ids and not has_paper_ids) or template_key == 'search_by_keywords':
-                if template_key == 'search_by_keywords':
-                    template_key = 'search_by_paper_ids'
+            if (needs_paper_ids and not has_paper_ids):
 
                 # Run multi-modal vector search (SciBERT + CLIP + re-ranking)
                 sorted_ids, visual_data = await self.execute_multimodal_vector_search(
