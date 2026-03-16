@@ -122,6 +122,7 @@ class LLMClient:
     # Purpose-based token limits — shorter outputs for auxiliary tasks, longer for synthesis
     PURPOSE_TOKEN_LIMITS = {
         'routing':              64,   # just a label
+        'template_selection':   32,   # single template key name
         'author_extraction':    128,  # list of names
         'cypher_generation':    256,  # Cypher query + params
         'claim_extraction':     256,  # bullet list of claims
