@@ -32,7 +32,7 @@ class HybridRetrievalHandler:
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
-        # self.ai_agent = LLMClient()
+        self.answer_agent = LLMClient()
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
         self.clip_client = clip_client
@@ -1367,7 +1367,7 @@ class HybridRetrievalHandler:
                            of the graph template used for retrieval
         """
         try:
-            if not self.ai_agent:
+            if not self.answer_agent:
                 logger.info("AI Agent is not available for response generation")
                 return None
 
@@ -1425,7 +1425,7 @@ Answer:"""
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
-                self.ai_agent.generate_content,
+                self.answer_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
                 purpose='answer_synthesis'
