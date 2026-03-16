@@ -524,7 +524,13 @@ class HybridRetrievalHandler:
                 if cached is not None:
                     cypher_query, parameters = cached
                     logger.info(f"Cypher cache HIT for: {query[:50]}...")
-                    return cypher_query, parameters, "cached", []
+                    # Execute the cached Cypher and return proper (results, template_info, visual_data)
+                    results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+                    cached_pids = [r.get('paper_id') for r in results if r.get('paper_id')]
+                    visual_data = empty_visual
+                    if cached_pids:
+                        visual_data = await self.search_visual_by_text(query, top_k, paper_ids=cached_pids)
+                    return results, template_info, visual_data
 
             # Step 1: Extract entities — AI first, regex fallback
             # AI is much better at understanding natural language structure
@@ -604,66 +610,101 @@ class HybridRetrievalHandler:
             cypher_query = template['cypher'].strip()
 
             if needs_paper_ids and not has_paper_ids:
-                #Vector-first
-                all_results = {}
+                # Vector-first: use multimodal search to get re-ranked paper IDs + visual data
+                sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
 
-                for keyword in keywords:
-                    results = await self._execute_vector_search_internal(keyword, top_k)
-
-                    for paper in results:
-                        p_id = paper.get('paper_id')
-                        dist = paper.get('distance', 0.0)
-                        if p_id not in all_results or dist < all_results[p_id]:
-                            all_results[p_id] = dist
-
-                # Sort by distance (ascending) and take the top_k
-                sorted_ids = sorted(all_results, key=all_results.get)[:top_k]
-
-                # Extend the extracted list
+                # Inject discovered paper IDs into extracted entities and rebuild parameters
                 extracted.setdefault('paper_ids', []).extend(sorted_ids)
+                parameters = param_builder(extracted, top_k)
+
                 logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for template '{template_key}'")
                 results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
                 logger.info(f"Graph search returned {len(results)} results")
 
-                graph_paper_ids = [r.get('paper_id') for r in results]
+                # If graph returned 0 results, fall back to vector results
+                if not results and visual_data.get('vector_results'):
+                    results = visual_data['vector_results'][:top_k]
+                    logger.info(f"Graph returned 0 results, falling back to {len(results)} vector results")
 
-                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
+                # Update visual data with final graph paper IDs
+                graph_paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
+                if graph_paper_ids:
+                    visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
 
             elif template_key != 'search_by_keywords':
-                # graph first
+                # Graph-first: run graph query, then use vector search to re-rank
                 results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-
-                graph_paper_ids = [r.get('paper_id') for r in results]
-
                 logger.info(f"Graph search returned {len(results)} results")
 
-                all_results = {}
-                # search by paper_ids to re rank score
-                results = await self._execute_vector_search_internal(graph_paper_ids)
+                graph_paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
 
-                # Sort by distance (ascending) and take the top_k
-                sorted_ids = sorted(all_results, key=all_results.get)[:top_k]
+                # Re-rank graph results using vector similarity scores
+                if graph_paper_ids:
+                    vector_scores = {}
+                    for pid in graph_paper_ids:
+                        vector_results = await self._execute_vector_search_internal(pid, top_k)
+                        for paper in vector_results:
+                            p_id = paper.get('paper_id')
+                            dist = paper.get('distance', 0.0)
+                            if p_id not in vector_scores or dist < vector_scores[p_id]:
+                                vector_scores[p_id] = dist
 
-                # Extend the extracted list
-                extracted.setdefault('paper_ids', []).extend(sorted_ids)
+                    # Re-sort results by vector distance (ascending = more similar)
+                    if vector_scores:
+                        results.sort(
+                            key=lambda r: vector_scores.get(r.get('paper_id'), float('inf'))
+                        )
+                        results = results[:top_k]
 
                 visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
             else:
-                # graph first
+                # search_by_keywords: run both graph and vector, merge and re-rank
                 graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-
-                graph_paper_ids = [r.get('paper_id') for r in graph_results]
-
+                graph_paper_ids = [r.get('paper_id') for r in graph_results if r.get('paper_id')]
                 logger.info(f"Graph search returned {len(graph_results)} results")
 
-                all_results = {}
-                # search by paper_ids to re rank score
+                # Vector search on the original query
                 vector_results = await self._execute_vector_search_internal(query=query, top_k=top_k)
+                vector_paper_ids = [r.get('paper_id') for r in vector_results if r.get('paper_id')]
 
-                # Sort by distance (ascending) and take the top_k
-                vector_paper_ids = sorted(all_results, key=vector_results.get)
+                # Enrich vector results with graph metadata via search_by_paper_ids template
+                # so they have the same schema as graph results (authors, venue, doi, etc.)
+                vector_enriched = []
+                vector_only_ids = [pid for pid in vector_paper_ids if pid not in set(graph_paper_ids)]
+                if vector_only_ids:
+                    paper_ids_template = self.GRAPH_TEMPLATES.get('search_by_paper_ids', {})
+                    if paper_ids_template:
+                        enrich_cypher = paper_ids_template['cypher'].strip()
+                        enrich_params = self._params_paper_ids({'paper_ids': vector_only_ids}, len(vector_only_ids))
+                        vector_enriched = await run_blocking(
+                            self.graph_handler.execute_query, enrich_cypher, enrich_params
+                        )
+                        logger.info(f"Enriched {len(vector_enriched)} vector-only papers via search_by_paper_ids")
 
-                results, visual_data = await self.rerank_by_search_visual_by_text(query, top_k, paper_ids=graph_paper_ids + vector_paper_ids)
+                # Build a score map from vector results for re-ranking
+                vector_score_map = {}
+                for paper in vector_results:
+                    p_id = paper.get('paper_id')
+                    dist = paper.get('distance', 0.0)
+                    if p_id not in vector_score_map or dist < vector_score_map[p_id]:
+                        vector_score_map[p_id] = dist
+
+                # Merge results: graph results + enriched vector-only results
+                graph_pid_set = set(graph_paper_ids)
+                merged_results = list(graph_results)
+                for vr in vector_enriched:
+                    if vr.get('paper_id') not in graph_pid_set:
+                        merged_results.append(vr)
+
+                # Re-rank merged results by vector similarity (papers without vector score go last)
+                merged_results.sort(
+                    key=lambda r: vector_score_map.get(r.get('paper_id'), float('inf'))
+                )
+                results = merged_results[:top_k]
+
+                # Visual search on the merged paper IDs
+                final_paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
+                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_paper_ids)
 
             # Step 5: Cache the result
             if self.cache_manager:
