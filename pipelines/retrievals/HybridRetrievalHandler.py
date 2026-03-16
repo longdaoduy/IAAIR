@@ -34,7 +34,6 @@ class HybridRetrievalHandler:
         self.ai_agent = ai_agent
         self.answer_agent = LLMClient()
         self.template_agent = LLMClient(model_name="Qwen/Qwen2.5-0.5B-Instruct")
-        self.para_agent = LLMClient(model_name="Qwen/Qwen2.5-0.5B-Instruct")
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
         self.clip_client = clip_client
@@ -687,50 +686,96 @@ class HybridRetrievalHandler:
     # =========================================================================
     # TEMPLATE SELECTION — AI agent picks the best template
     # =========================================================================
-    async def _paraphrase_query_as_description(self, query: str) -> str:
-        """Paraphrase the user's query into a clean description format.
+    @staticmethod
+    def _normalize_extracted(extracted: Dict) -> Dict:
+        """Normalize extracted entities for cleaner template selection & parameter filling.
 
-        Removes special characters (?, !, ...) and rephrases the query
-        so it reads like a template description while preserving meaning.
-        If the AI agent is unavailable, falls back to simple regex cleanup.
+        Deterministic cleanup — no LLM call needed:
+        - Trim whitespace from all string values
+        - Normalize author names (title-case, strip punctuation)
+        - Deduplicate and lowercase keywords
+        - Remove empty / whitespace-only entries
+        - Ensure list values contain no None or empty strings
 
         Args:
-            query: The user's original natural language query
+            extracted: Raw extracted entities dict from _extract_all_entities
 
         Returns:
-            A cleaned, description-style version of the query
+            Cleaned copy of the extracted dict
         """
-        if not self.para_agent:
-            # Fallback: strip special characters only
-            return re.sub(r'[?!.;:]+', '', query).strip()
+        cleaned: Dict = {}
 
-        paraphrase_prompt = f"""Rephrase the following user query into a short, clean description.
-Remove all special characters such as ? ! ... ; : and question marks.
-Keep the same meaning. Do NOT answer the query — only rephrase it.
-Output ONLY the rephrased description, nothing else.
+        for key, value in extracted.items():
+            if value is None:
+                continue
 
-User query: "{query}"
-Rephrased description:"""
+            if isinstance(value, list):
+                # Clean each item in the list
+                normed = []
+                for item in value:
+                    if isinstance(item, str):
+                        item = item.strip()
+                        if not item:
+                            continue
+                        normed.append(item)
+                    elif item is not None:
+                        normed.append(item)
+                if not normed:
+                    continue
+                value = normed
 
-        try:
-            response = await run_blocking(
-                self.ai_agent.generate_content,
-                prompt=paraphrase_prompt,
-                system_prompt="You rephrase queries into clean descriptions. Output only the rephrased text.",
-                purpose='query_paraphrase'
-            )
-            if response:
-                paraphrased = response.strip().strip('"\'')
-                # Extra safety: remove any leftover special chars
-                paraphrased = re.sub(r'[?!]+', '', paraphrased).strip()
-                if paraphrased:
-                    logger.info(f"Paraphrased query: '{query}' → '{paraphrased}'")
-                    return paraphrased
-        except Exception as e:
-            logger.warning(f"Query paraphrase failed: {e}")
+            elif isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    continue
 
-        # Fallback: simple regex cleanup
-        return re.sub(r'[?!.;:]+', '', query).strip()
+            elif isinstance(value, bool):
+                if not value:
+                    continue
+
+            cleaned[key] = value
+
+        # Normalize author names: title-case, strip trailing punctuation
+        if 'author_names' in cleaned:
+            cleaned['author_names'] = [
+                re.sub(r'[.,:;!?]+$', '', name).strip().title()
+                for name in cleaned['author_names']
+                if name.strip()
+            ]
+            # Remove duplicates (case-insensitive) while preserving order
+            seen = set()
+            unique = []
+            for name in cleaned['author_names']:
+                key_lower = name.lower()
+                if key_lower not in seen:
+                    seen.add(key_lower)
+                    unique.append(name)
+            cleaned['author_names'] = unique
+            if not cleaned['author_names']:
+                del cleaned['author_names']
+
+        # Normalize keywords: lowercase, deduplicate, remove very short ones
+        if 'keywords' in cleaned:
+            seen_kw = set()
+            unique_kw = []
+            for kw in cleaned['keywords']:
+                kw_lower = kw.lower().strip()
+                if len(kw_lower) > 2 and kw_lower not in seen_kw:
+                    seen_kw.add(kw_lower)
+                    unique_kw.append(kw_lower)
+            cleaned['keywords'] = unique_kw
+            if not cleaned['keywords']:
+                del cleaned['keywords']
+
+        # Normalize venue / institution: title-case, strip punctuation
+        for field in ('venue', 'institution'):
+            if field in cleaned and isinstance(cleaned[field], str):
+                cleaned[field] = re.sub(r'[.,:;!?]+$', '', cleaned[field]).strip()
+                if not cleaned[field]:
+                    del cleaned[field]
+
+        logger.debug(f"Normalized extracted entities: {cleaned}")
+        return cleaned
 
     # Mapping from template trigger names to the extracted entity keys they require.
     # A template is "viable" only when ALL its required entity keys are present
@@ -1104,10 +1149,9 @@ Respond with ONLY the template name, nothing else."""
                     logger.info(f"Cypher cache HIT for: {query[:50]}...")
                     return cypher_query, parameters, "cached", []
 
-            # Step 1: Extract entities from the query
-            para_query = await self._paraphrase_query_as_description(query)
-
-            extracted = self._extract_all_entities(para_query)
+            # Step 1: Extract entities from the original query, then normalize
+            extracted = self._extract_all_entities(query)
+            extracted = self._normalize_extracted(extracted)
             logger.info(f"Extracted entities: {extracted}")
 
             # Step 2: AI agent selects the best template
