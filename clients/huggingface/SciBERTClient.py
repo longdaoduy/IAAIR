@@ -125,3 +125,15 @@ class SciBERTClient:
                         results[idx] = None
 
         return results
+
+    def cleanup(self):
+        """Free model memory for shutdown."""
+        if self.model is not None:
+            del self.model
+            self.model = None
+        if self.tokenizer is not None:
+            del self.tokenizer
+            self.tokenizer = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print("SciBERT model memory freed")

@@ -116,6 +116,30 @@ class ServiceFactory:
         # # await self.neo4j_handler.connect() if async
 
     async def disconnect_all(self):
-        """Cleanup connections on shutdown"""
-        await asyncio.to_thread(self.milvus_client.disconnect)
-        # self.mongo_client.disconnect()
+        """Cleanup all connections, models, and caches on shutdown."""
+        # Disconnect databases
+        try:
+            await asyncio.to_thread(self.milvus_client.disconnect)
+        except Exception as e:
+            logger.warning(f"Milvus disconnect error: {e}")
+
+        try:
+            await self.neo4j_client.close()
+        except Exception as e:
+            logger.warning(f"Neo4j disconnect error: {e}")
+
+        # Free ML model memory (largest RAM consumers)
+        if self.llms_client:
+            self.llms_client.cleanup()
+
+        if self.scibert_client and hasattr(self.scibert_client, 'cleanup'):
+            self.scibert_client.cleanup()
+
+        if self.clip_client and hasattr(self.clip_client, 'cleanup'):
+            self.clip_client.cleanup()
+
+        # Clear all in-memory caches
+        if self.cache_manager:
+            self.cache_manager.clear_all_caches()
+
+        logger.info("All services disconnected and memory freed")

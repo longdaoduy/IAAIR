@@ -145,6 +145,11 @@ class Neo4jClient:
     async def close(self):
         if self.driver:
             await self.driver.close()
+            self.driver = None
+        if self._sync_driver:
+            self._sync_driver.close()
+            self._sync_driver = None
+            logger.info("Neo4j sync driver closed")
 
     # --- Core Ingestion Logic (Atomic & Batched) ---
 

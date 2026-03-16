@@ -49,8 +49,11 @@ class LRUCache:
         if key in self.cache:
             self.cache.move_to_end(key)
         else:
+            # Periodically purge expired entries to reclaim memory
             if len(self.cache) >= self.max_size:
-                # Remove least recently used
+                self.purge_expired()
+            if len(self.cache) >= self.max_size:
+                # Still full after purge — remove least recently used
                 oldest_key = next(iter(self.cache))
                 del self.cache[oldest_key]
                 del self.timestamps[oldest_key]
@@ -58,6 +61,18 @@ class LRUCache:
         self.cache[key] = value
         self.timestamps[key] = datetime.now()
     
+    def purge_expired(self):
+        """Remove all expired entries to reclaim memory."""
+        expired_keys = [
+            key for key in list(self.cache.keys())
+            if self._is_expired(key)
+        ]
+        for key in expired_keys:
+            del self.cache[key]
+            del self.timestamps[key]
+        if expired_keys:
+            logger.debug(f"Purged {len(expired_keys)} expired cache entries")
+
     def clear(self):
         """Clear all cache entries."""
         self.cache.clear()

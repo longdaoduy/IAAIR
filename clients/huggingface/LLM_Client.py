@@ -8,6 +8,7 @@ provides configurable embedding generation.
 
 import torch
 from typing import List, Optional
+from collections import deque
 
 from models.configurators.LLMConfig import LLMConfig
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -34,7 +35,7 @@ class LLMClient:
         
         # LLM call tracking
         self._llm_call_count = 0
-        self._llm_call_log = []  # list of {purpose, timestamp, duration_ms}
+        self._llm_call_log = deque(maxlen=1000)  # bounded ring buffer
         self._llm_total_time = 0.0  # cumulative seconds
 
         # Prometheus integration (optional — works without it)
@@ -193,6 +194,12 @@ class LLMClient:
             input_length = inputs["input_ids"].shape[1]
             generated_ids = outputs[0, input_length:]
             response = self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+
+            # Free GPU/CPU tensors immediately to prevent memory accumulation
+            del outputs
+            del inputs
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
             duration = _time.time() - call_start
             self._llm_total_time += duration
@@ -212,6 +219,10 @@ class LLMClient:
             return response
 
         except Exception as e:
+            # Free any partially-allocated tensors
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             duration = _time.time() - call_start
             self._llm_total_time += duration
             self._llm_call_log.append({
@@ -261,3 +272,15 @@ class LLMClient:
         self._llm_call_count = 0
         self._llm_call_log.clear()
         self._llm_total_time = 0.0
+
+    def cleanup(self):
+        """Free model memory for shutdown."""
+        if self.model is not None:
+            del self.model
+            self.model = None
+        if self.tokenizer is not None:
+            del self.tokenizer
+            self.tokenizer = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        logger.info("LLM model memory freed")

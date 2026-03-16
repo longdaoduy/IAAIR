@@ -32,6 +32,8 @@ class MilvusClient:
         self.config = config or VectorDBConfig.from_env()
 
         self.collection = None
+        self._figures_collection = None  # cached Collection object
+        self._tables_collection = None   # cached Collection object
         self.is_connected = False
         self.tfidf_vectorizer = TfidfVectorizer(
             max_features=10000,
@@ -40,6 +42,26 @@ class MilvusClient:
             ngram_range=(1, 2)
         )
         self.is_tfidf_fitted = False
+
+    def _get_figures_collection(self) -> Optional[Collection]:
+        """Get or create cached figures Collection object."""
+        if self._figures_collection is None:
+            collection_name = "figures_collection"
+            if not utility.has_collection(collection_name):
+                return None
+            self._figures_collection = Collection(collection_name)
+            self._figures_collection.load()
+        return self._figures_collection
+
+    def _get_tables_collection(self) -> Optional[Collection]:
+        """Get or create cached tables Collection object."""
+        if self._tables_collection is None:
+            collection_name = "tables_collection"
+            if not utility.has_collection(collection_name):
+                return None
+            self._tables_collection = Collection(collection_name)
+            self._tables_collection.load()
+        return self._tables_collection
 
     def connect(self) -> bool:
         try:
@@ -839,7 +861,7 @@ class MilvusClient:
                 },
                 limit=top_k * 2  # Get more candidates for reranking
             )
-            weighted_ranker = WeightedRanker(0.0, 1)
+            weighted_ranker = WeightedRanker(0.05, 0.95)
             # Perform hybrid search with RRF (Reciprocal Rank Fusion) reranking
             hybrid_results = self.collection.hybrid_search(
                 reqs=[dense_search_request, sparse_search_request],
@@ -871,6 +893,9 @@ class MilvusClient:
     def disconnect(self):
         """Disconnect from Zilliz."""
         try:
+            self._figures_collection = None
+            self._tables_collection = None
+            self.collection = None
             connections.disconnect("default")
             self.is_connected = False
             print("🔌 Disconnected from Zilliz")
@@ -892,13 +917,10 @@ class MilvusClient:
             List of matching figures with scores
         """
         try:
-            collection_name = "figures_collection"
-            if not utility.has_collection(collection_name):
-                print(f"⚠️ Collection '{collection_name}' not found")
+            figures_collection = self._get_figures_collection()
+            if figures_collection is None:
+                print("⚠️ Figures collection not found")
                 return []
-
-            figures_collection = Collection(collection_name)
-            figures_collection.load()
 
             search_params = {
                 "metric_type": "COSINE",
@@ -943,13 +965,10 @@ class MilvusClient:
             List of matching tables with scores
         """
         try:
-            collection_name = "tables_collection"
-            if not utility.has_collection(collection_name):
-                print(f"⚠️ Collection '{collection_name}' not found")
+            tables_collection = self._get_tables_collection()
+            if tables_collection is None:
+                print("⚠️ Tables collection not found")
                 return []
-
-            tables_collection = Collection(collection_name)
-            tables_collection.load()
 
             search_params = {
                 "metric_type": "COSINE",
@@ -994,13 +1013,10 @@ class MilvusClient:
             List of matching figures with scores
         """
         try:
-            collection_name = "figures_collection"
-            if not utility.has_collection(collection_name):
-                print(f"⚠️ Collection '{collection_name}' not found")
+            figures_collection = self._get_figures_collection()
+            if figures_collection is None:
+                print("⚠️ Figures collection not found")
                 return []
-
-            figures_collection = Collection(collection_name)
-            figures_collection.load()
 
             search_params = {
                 "metric_type": "COSINE",
@@ -1045,13 +1061,10 @@ class MilvusClient:
             List of matching tables with scores
         """
         try:
-            collection_name = "tables_collection"
-            if not utility.has_collection(collection_name):
-                print(f"⚠️ Collection '{collection_name}' not found")
+            tables_collection = self._get_tables_collection()
+            if tables_collection is None:
+                print("⚠️ Tables collection not found")
                 return []
-
-            tables_collection = Collection(collection_name)
-            tables_collection.load()
 
             search_params = {
                 "metric_type": "COSINE",
