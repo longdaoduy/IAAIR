@@ -618,8 +618,14 @@ class HybridRetrievalHandler:
                 parameters = param_builder(extracted, top_k)
 
                 logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for template '{template_key}'")
-                results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-                logger.info(f"Graph search returned {len(results)} results")
+
+                # Execute graph query with fallback to vector results on failure
+                try:
+                    results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+                    logger.info(f"Graph search returned {len(results)} results")
+                except Exception as e:
+                    logger.warning(f"Graph query failed ({e}), falling back to vector results")
+                    results = []
 
                 # If graph returned 0 results, fall back to vector results
                 if not results and visual_data.get('vector_results'):
@@ -633,13 +639,23 @@ class HybridRetrievalHandler:
 
             elif template_key != 'search_by_keywords':
                 # Graph-first: run graph query, then use vector search to re-rank
-                results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-                logger.info(f"Graph search returned {len(results)} results")
+                try:
+                    results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+                    logger.info(f"Graph search returned {len(results)} results")
+                except Exception as e:
+                    logger.warning(f"Graph query failed ({e}), falling back to vector search")
+                    results = []
 
                 graph_paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
 
-                # Re-rank graph results using vector similarity scores
-                if graph_paper_ids:
+                # If graph failed or returned 0, fall back to vector search
+                if not results:
+                    vector_results = await self._execute_vector_search_internal(query=query, top_k=top_k)
+                    results = vector_results[:top_k]
+                    graph_paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
+                    logger.info(f"Vector fallback returned {len(results)} results")
+                elif graph_paper_ids:
+                    # Re-rank graph results using vector similarity scores
                     vector_scores = {}
                     for pid in graph_paper_ids:
                         vector_results = await self._execute_vector_search_internal(pid, top_k)
@@ -659,7 +675,12 @@ class HybridRetrievalHandler:
                 visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
             else:
                 # search_by_keywords: run both graph and vector, merge and re-rank
-                graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+                try:
+                    graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+                except Exception as e:
+                    logger.warning(f"Graph query failed ({e}), continuing with vector-only results")
+                    graph_results = []
+
                 graph_paper_ids = [r.get('paper_id') for r in graph_results if r.get('paper_id')]
                 logger.info(f"Graph search returned {len(graph_results)} results")
 
@@ -672,14 +693,19 @@ class HybridRetrievalHandler:
                 vector_enriched = []
                 vector_only_ids = [pid for pid in vector_paper_ids if pid not in set(graph_paper_ids)]
                 if vector_only_ids:
-                    paper_ids_template = self.GRAPH_TEMPLATES.get('search_by_paper_ids', {})
-                    if paper_ids_template:
-                        enrich_cypher = paper_ids_template['cypher'].strip()
-                        enrich_params = self._params_paper_ids({'paper_ids': vector_only_ids}, len(vector_only_ids))
-                        vector_enriched = await run_blocking(
-                            self.graph_handler.execute_query, enrich_cypher, enrich_params
-                        )
-                        logger.info(f"Enriched {len(vector_enriched)} vector-only papers via search_by_paper_ids")
+                    try:
+                        paper_ids_template = self.GRAPH_TEMPLATES.get('search_by_paper_ids', {})
+                        if paper_ids_template:
+                            enrich_cypher = paper_ids_template['cypher'].strip()
+                            enrich_params = self._params_paper_ids({'paper_ids': vector_only_ids}, len(vector_only_ids))
+                            vector_enriched = await run_blocking(
+                                self.graph_handler.execute_query, enrich_cypher, enrich_params
+                            )
+                            logger.info(f"Enriched {len(vector_enriched)} vector-only papers via search_by_paper_ids")
+                    except Exception as e:
+                        logger.warning(f"Graph enrichment failed ({e}), using raw vector results")
+                        # Fall back to raw vector results (without graph metadata)
+                        vector_enriched = [r for r in vector_results if r.get('paper_id') not in set(graph_paper_ids)]
 
                 # Build a score map from vector results for re-ranking
                 vector_score_map = {}
