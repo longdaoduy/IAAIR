@@ -648,12 +648,12 @@ class HybridRetrievalHandler:
 
                 graph_paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
 
-                # If graph failed or returned 0, fall back to vector search
+                # If graph failed or returned 0, fall back to multimodal vector search
                 if not results:
-                    vector_results = await self._execute_vector_search_internal(query=query, top_k=top_k)
-                    results = vector_results[:top_k]
-                    graph_paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
-                    logger.info(f"Vector fallback returned {len(results)} results")
+                    sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
+                    results = visual_data.get('vector_results', [])[:top_k]
+                    logger.info(f"Multimodal vector fallback returned {len(results)} results")
+                    # Skip re-ranking — multimodal search already re-ranked
                 elif graph_paper_ids:
                     # Re-rank graph results using vector similarity scores
                     vector_scores = {}
@@ -672,7 +672,7 @@ class HybridRetrievalHandler:
                         )
                         results = results[:top_k]
 
-                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
+                    visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
             else:
                 # search_by_keywords: run both graph and vector, merge and re-rank
                 try:
