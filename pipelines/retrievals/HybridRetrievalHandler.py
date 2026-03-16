@@ -714,7 +714,7 @@ Rephrased description:"""
 
         try:
             response = await run_blocking(
-                self.para_agent.generate_content,
+                self.ai_agent.generate_content,
                 prompt=paraphrase_prompt,
                 system_prompt="You rephrase queries into clean descriptions. Output only the rephrased text.",
                 purpose='query_paraphrase'
@@ -732,11 +732,65 @@ Rephrased description:"""
         # Fallback: simple regex cleanup
         return re.sub(r'[?!.;:]+', '', query).strip()
 
+    # Mapping from template trigger names to the extracted entity keys they require.
+    # A template is "viable" only when ALL its required entity keys are present
+    # in the extracted dict (non-empty).
+    TRIGGER_TO_ENTITY_KEYS: Dict[str, List[str]] = {
+        'paper_ids':      ['paper_ids'],
+        'author_names':   ['author_names'],
+        'keywords':       ['keywords'],
+        'venue':          ['venue'],
+        'institution':    ['institution'],
+        'year':           ['year'],
+        'year_range':     ['year_from'],
+        'citations':      ['paper_ids', 'wants_citations'],
+        'coauthor':       ['author_names', 'wants_coauthors'],
+        'top_cited':      ['wants_top_cited'],
+        'author_venues':  ['author_names'],
+    }
+
+    def _get_viable_templates(self, extracted: Dict) -> List[str]:
+        """Return template keys whose required parameters are present in extracted entities.
+
+        A template is viable when every entity key implied by its triggers
+        exists and is truthy in the extracted dict.  Templates that need no
+        specific entity (e.g. top_cited_papers when the intent flag is set)
+        are also included.
+
+        search_by_keywords is always viable as an ultimate fallback because
+        keywords are extracted from virtually every query.
+        """
+        viable = []
+        for tpl_key, tpl in self.GRAPH_TEMPLATES.items():
+            triggers = tpl.get('triggers', [])
+            if not triggers:
+                viable.append(tpl_key)
+                continue
+
+            # All trigger groups must be satisfiable
+            all_satisfied = True
+            for trigger in triggers:
+                required_keys = self.TRIGGER_TO_ENTITY_KEYS.get(trigger, [])
+                if not all(bool(extracted.get(k)) for k in required_keys):
+                    all_satisfied = False
+                    break
+
+            if all_satisfied:
+                viable.append(tpl_key)
+
+        # search_by_keywords is always a valid fallback
+        if 'search_by_keywords' not in viable:
+            viable.append('search_by_keywords')
+
+        return viable
+
     async def _select_template_with_ai(self, query: str, extracted: Dict) -> str:
         """Use AI agent to select the best neo4j template for the user's query.
 
-        The query is first paraphrased into a clean description format (no special
-        characters) to match the style of template descriptions and few-shot examples.
+        Only templates whose required parameters have been successfully extracted
+        are presented to the AI. This prevents the AI from selecting a template
+        (e.g. search_by_author) when the required entities (author names) were
+        not found in the query.
 
         Args:
             query: User's natural language query
@@ -748,101 +802,84 @@ Rephrased description:"""
         if not self.template_agent:
             return self._select_template_by_rules(extracted)
 
-        # Paraphrase the query into a description-like format
+        # Determine which templates are viable given the extracted entities
+        viable_keys = self._get_viable_templates(extracted)
+        logger.info(f"Viable templates for extracted entities: {viable_keys}")
 
-        # Build template catalog for the AI
+        # Build template catalog — only show viable templates to the AI
         template_list = []
-        for key, tpl in self.GRAPH_TEMPLATES.items():
-            template_list.append(f"- {key}: {tpl['description']}")
+        for key in viable_keys:
+            tpl = self.GRAPH_TEMPLATES.get(key, {})
+            template_list.append(f"- {key}: {tpl.get('description', key)}")
         templates_str = "\n".join(template_list)
 
-        # Build extracted entities summary
+        # Build extracted entities summary (only non-empty values)
         entities_str = json.dumps({k: v for k, v in extracted.items() if v}, ensure_ascii=False)
 
         prompt = f"""You are a query router for a Neo4j academic paper database.
-Given the user's query and the extracted entities, select the BEST template.
+Select the BEST template based on:
+1. The user's query intent
+2. The entities that were actually extracted from the query
+
+IMPORTANT: You may ONLY choose from the "Viable templates" list below.
+These are the templates whose required parameters were successfully extracted.
 
 User query: "{query}"
 Extracted entities: {entities_str}
 
-Available templates:
+Viable templates (choose one):
 {templates_str}
 
-Here are example queries and their correct template:
+Few-shot examples:
 
-Query: "Who are the authors of paper W1775749144?"
+Query: "Who are the authors of paper W1775749144?"  (extracted: paper_ids)
 Template: search_by_paper_ids
 
-Query: "What papers has Kaiming He authored?"
+Query: "What papers has Kaiming He authored?"  (extracted: author_names)
 Template: search_by_author
 
-Query: "Which papers cite W2128635872?"
+Query: "Which papers cite W2128635872?"  (extracted: paper_ids, wants_citations)
 Template: search_citations
 
-Query: "How many citations does paper W2100837269 have?"
-Template: search_by_paper_ids
-
-Query: "What venue published paper W3038568908?"
-Template: search_by_paper_ids
-
-Query: "Which papers were published in Nature?"
-Template: search_by_venue
-
-Query: "What papers were published in Analytical Biochemistry?"
-Template: search_by_venue
-
-Query: "Which papers were co-authored by Georg Kresse and J. Furthmüller?"
-Template: coauthor_network
-
-Query: "What papers are co-authored by Kaiming He and Jian Sun?"
-Template: coauthor_network
-
-Query: "Which paper has the highest citation count?"
-Template: top_cited_papers
-
-Query: "What is the DOI of paper W1979290264?"
-Template: search_by_paper_ids
-
-Query: "What is the publication year of paper W2107277218?"
-Template: search_by_paper_ids
-
-Query: "papers about protein quantification methods"
-Template: search_by_keywords
-
-Query: "Research on deep learning architectures for computer vision"
-Template: search_by_keywords
-
-Query: "papers by Kaiming He about deep learning"
+Query: "papers by Kaiming He about deep learning"  (extracted: author_names, keywords)
 Template: search_author_by_keywords
 
-Query: "What papers discuss bioinformatics algorithms?"
+Query: "Which papers were co-authored by Georg Kresse and J. Furthmüller?"  (extracted: author_names, wants_coauthors)
+Template: coauthor_network
+
+Query: "Which paper has the highest citation count?"  (extracted: wants_top_cited)
+Template: top_cited_papers
+
+Query: "papers about protein quantification methods"  (extracted: keywords)
 Template: search_by_keywords
 
-Query: "papers from Stanford University"
+Query: "Which papers were published in Nature?"  (extracted: venue)
+Template: search_by_venue
+
+Query: "papers from Stanford University"  (extracted: institution)
 Template: search_by_institution
 
-Query: "papers published since 2020"
+Query: "papers published since 2020"  (extracted: year_from)
 Template: search_by_year_range
 
-Query: "papers published in 2023"
+Query: "papers published in 2023"  (extracted: year)
 Template: search_by_year
 
-Query: "which journals does Stephen F. Altschul publish in?"
+Query: "which journals does Stephen F. Altschul publish in?"  (extracted: author_names)
 Template: author_venue_stats
 
-Rules (use if no example above matches):
-1. Paper ID mentioned (W12345) + asking about citations → search_citations
-2. Paper ID mentioned (W12345) for any other question → search_by_paper_ids
-3. Two or more author names + "co-author" or "together" or "collaboration" → coauthor_network
-4. Author name + topic/keywords → search_author_by_keywords
-5. Author name only → search_by_author
-6. "most cited" or "top papers" or "highest citation" → top_cited_papers
-7. "which journals/venues" + author name → author_venue_stats
-8. Venue/journal/conference name mentioned → search_by_venue
-9. Institution/university mentioned → search_by_institution
-10. Year range (since/after/before/between) → search_by_year_range
-11. Specific year → search_by_year
-12. Topic, keyword, or concept search → search_by_keywords
+Selection rules (use when no example matches):
+1. If paper_ids extracted + wants_citations → search_citations
+2. If paper_ids extracted (any other question) → search_by_paper_ids
+3. If author_names + wants_coauthors → coauthor_network
+4. If author_names + keywords → search_author_by_keywords
+5. If author_names only → search_by_author
+6. If wants_top_cited → top_cited_papers
+7. If venue extracted → search_by_venue
+8. If institution extracted → search_by_institution
+9. If year_from extracted → search_by_year_range
+10. If year extracted → search_by_year
+11. Otherwise → search_by_keywords
 
 Respond with ONLY the template name, nothing else."""
 
@@ -856,10 +893,17 @@ Respond with ONLY the template name, nothing else."""
 
             if response:
                 template_key = response.strip().strip('"\'').strip()
-                # Validate the response is a known template
+                # Validate: must be a known template AND viable
                 if template_key in self.GRAPH_TEMPLATES:
-                    logger.info(f"AI selected template: {template_key}")
-                    return template_key
+                    if template_key in viable_keys:
+                        logger.info(f"AI selected template: {template_key}")
+                        return template_key
+                    else:
+                        # AI picked a valid template but its params aren't available
+                        logger.warning(
+                            f"AI selected '{template_key}' but required params missing "
+                            f"(viable: {viable_keys}), falling back to rules"
+                        )
                 else:
                     logger.warning(f"AI returned unknown template '{template_key}', falling back to rules")
 
