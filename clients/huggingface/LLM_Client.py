@@ -129,7 +129,7 @@ class LLMClient:
         'cypher_generation':    128,  # Cypher query + params
         'claim_extraction':     128,  # short bullet list of claims
         'scifact_verification': 16,   # SUPPORTED / CONTRADICTED / NO_EVIDENCE
-        'answer_synthesis':     200,  # main answer — concise, 3-5 sentences
+        'answer_synthesis':     350,  # main answer — concise, 5-6 sentences
         'general':              128,
     }
 

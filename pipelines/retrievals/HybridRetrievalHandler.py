@@ -1410,25 +1410,33 @@ class HybridRetrievalHandler:
             # Build template-specific instructions
             template_instructions = self._get_template_specific_instructions(template_info)
 
-            system_prompt = "You are a research assistant specializing in academic literature. Be accurate, concise, and tailor your response to the type of query."
-            prompt = f"""Answer this question based on the search results: "{query}"
+            system_prompt = (
+                "You are a precise research assistant. Strict rules:\n"
+                "- Write ONLY a single plain-text paragraph of 5-6 complete sentences.\n"
+                "- Do NOT use bullet points, numbered lists, headers, or markdown formatting.\n"
+                "- Do NOT repeat or rephrase the question.\n"
+                "- Do NOT start with phrases like 'Based on the search results' or 'According to'.\n"
+                "- ONLY state facts from the provided evidence. NEVER invent authors, dates, or findings.\n"
+                "- Cite papers using their EXACT title and authors from the evidence.\n"
+                "- If evidence is insufficient, say so in one sentence."
+            )
+            prompt = f"""Question: "{query}"
 {template_context}
 
-Search Results:
+Evidence:
 {self._format_papers_for_prompt(context_papers[:4])}
 
-Instructions:
 {template_instructions}
-- Be accurate — only use information from the provided results
 
-Answer:"""
+Write a single paragraph of 5-6 sentences answering the question. No bullet points. No lists. Start directly with the answer:"""
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
-                self.answer_agent.generate_content,
+                self.ai_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
-                purpose='answer_synthesis'
+                purpose='answer_synthesis',
+                max_tokens=350,
             )
 
             if not ai_answer:
@@ -1446,72 +1454,60 @@ Answer:"""
         """Return tailored generation instructions based on the neo4j template used."""
         if not template_info or not template_info.get("template_key"):
             return (
-                "- Answer directly in 3-5 sentences\n"
-                "- Cite specific papers and authors when relevant"
+                "Respond in 5-6 sentences. Summarize key findings from the evidence.\n"
+                "Cite papers by exact title and authors as listed. Do not add information not in the evidence."
             )
 
         tpl_key = template_info["template_key"]
 
         instructions_map = {
             "search_by_paper_ids": (
-                "- Provide details about the requested paper(s): title, authors, venue, year, and DOI\n"
-                "- Include citation count if available\n"
-                "- Summarize the paper's main contribution from its abstract"
+                "State the paper's exact title, authors, venue, year, and DOI from the evidence.\n"
+                "Include citation count if listed. Summarize the abstract in 1-2 sentences."
             ),
             "search_by_author": (
-                "- List the papers found for the requested author(s)\n"
-                "- Highlight the author's most cited or notable works\n"
-                "- Mention venues and publication years"
+                "List the author's papers found, citing exact titles, venues, and years from the evidence.\n"
+                "Mention the most cited work if citation counts are available."
             ),
             "search_by_keywords": (
-                "- Summarize the key findings across the retrieved papers\n"
-                "- Group results by sub-topic if applicable\n"
-                "- Cite specific papers and authors when relevant"
+                "Identify which paper(s) best answer the question, citing exact titles and authors.\n"
+                "Summarize the most relevant finding in 2-3 sentences using only the abstracts provided."
             ),
             "search_citations": (
-                "- List the citation relationships found\n"
-                "- Identify which papers cite which, and describe the connections\n"
-                "- Highlight any influential papers in the citation chain"
+                "Describe the citation relationships using only the papers listed in the evidence.\n"
+                "State which paper cites which, with exact titles."
             ),
             "coauthor_network": (
-                "- Describe the collaboration between the mentioned authors\n"
-                "- List co-authored papers with titles and years\n"
-                "- Note the venues where their joint work was published"
+                "List the co-authored papers with exact titles, venues, and years from the evidence.\n"
+                "Describe the collaboration scope briefly."
             ),
             "search_by_venue": (
-                "- List papers found in the requested venue/journal/conference\n"
-                "- Highlight the most cited papers from that venue\n"
-                "- Mention key authors and topics"
+                "List the papers from the venue, citing exact titles and authors from the evidence.\n"
+                "Mention citation counts if available."
             ),
             "search_by_institution": (
-                "- List papers associated with the requested institution\n"
-                "- Highlight notable authors and research areas\n"
-                "- Mention publication venues and years"
+                "List papers from the institution with exact titles and authors from the evidence.\n"
+                "Note the research areas covered."
             ),
             "search_by_year": (
-                "- List papers from the requested year/period\n"
-                "- Highlight the most impactful publications\n"
-                "- Note trends or common topics in that timeframe"
+                "List the papers from the requested period with exact titles and authors.\n"
+                "Highlight the most cited if counts are available."
             ),
             "search_by_year_range": (
-                "- List papers from the requested time range\n"
-                "- Highlight the most impactful publications\n"
-                "- Note trends or common topics across the period"
+                "List papers from the time range with exact titles and authors.\n"
+                "Note any trends visible from the evidence."
             ),
             "search_author_by_keywords": (
-                "- List the author's papers matching the requested topic\n"
-                "- Summarize how the author's work relates to the topic\n"
-                "- Cite specific papers with titles and years"
+                "List the author's papers matching the topic, citing exact titles and years.\n"
+                "Summarize how the work relates to the topic in 1-2 sentences."
             ),
             "top_cited_papers": (
-                "- List the most cited papers with their citation counts\n"
-                "- Briefly describe each paper's contribution\n"
-                "- Mention authors and venues"
+                "List the most cited papers with their exact citation counts, titles, and authors.\n"
+                "Briefly describe each paper's contribution in one sentence."
             ),
             "author_venue_stats": (
-                "- List the venues/journals where the author has published\n"
-                "- Include paper counts per venue if available\n"
-                "- Highlight the author's primary publication outlets"
+                "List the venues where the author published, with paper counts if available.\n"
+                "Highlight the primary publication outlets."
             ),
         }
 
@@ -1608,7 +1604,7 @@ Answer:"""
         for i, p in enumerate(papers, 1):
             authors = p.get('authors', [])
             auth = ', '.join(authors[:2]) + (' et al.' if len(authors) > 2 else '') if authors else ''
-            abstract = (p.get('abstract', '') or '')[:150]
+            abstract = (p.get('abstract', '') or '')[:300]
             lines.append(
                 f"{i}. {p.get('title', 'Untitled')} | {auth} | "
                 f"{p.get('venue', '') or ''} {p.get('publication_date', '') or ''}\n"

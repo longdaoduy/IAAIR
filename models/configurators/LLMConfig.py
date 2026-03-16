@@ -53,7 +53,7 @@ class LLMConfig:
     model_provider: str = "huggingface"  # "huggingface", "openai", "sentence-transformers"
     embedding_dim: int = 768
     batch_size: int = 32
-    max_sequence_length: int = 512
+    max_sequence_length: int = 2048
     temperature: float = 0.7
     device: str = "auto"  # "cpu", "cuda", "auto"
 
