@@ -33,6 +33,7 @@ class HybridRetrievalHandler:
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
         self.answer_agent = LLMClient()
+        self.template_agent = LLMClient()
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
         self.clip_client = clip_client
@@ -538,7 +539,7 @@ class HybridRetrievalHandler:
             # Regex is kept as a fallback and to catch paper_ids / intent flags
             # that the AI might miss.
             extracted = {}
-            if self.ai_agent:
+            if self.template_agent:
                 try:
                     extracted = await self._extract_entities_with_ai(query)
                 except Exception as e:
@@ -1141,7 +1142,7 @@ class HybridRetrievalHandler:
         )
 
         raw = await run_blocking(
-            self.ai_agent.generate_content,
+            self.template_agent.generate_content,
             prompt=prompt,
             system_prompt='Extract entities from academic queries. Return ONLY valid JSON.',
             purpose='entity_extraction',
