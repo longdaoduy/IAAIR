@@ -119,16 +119,18 @@ class LLMClient:
         embedding = self._mean_pooling(outputs, inputs["attention_mask"])
         return embedding.squeeze().cpu().tolist()
 
-    # Purpose-based token limits — shorter outputs for auxiliary tasks, longer for synthesis
+    # Purpose-based token limits — keep outputs short for fast inference
+    # on small models (1.5B).  Every extra token ≈ 0.2s on CPU / 0.02s on GPU.
     PURPOSE_TOKEN_LIMITS = {
-        'routing':              64,   # just a label
-        'template_selection':   32,   # single template key name
-        'author_extraction':    128,  # list of names
-        'cypher_generation':    256,  # Cypher query + params
-        'claim_extraction':     256,  # bullet list of claims
-        'scifact_verification': 32,   # SUPPORTED / CONTRADICTED / NO_EVIDENCE
-        'answer_synthesis':     384,  # main answer — allow more but still bounded
-        'general':              256,
+        'routing':              32,   # just a label
+        'template_selection':   24,   # single template key name
+        'entity_extraction':    150,  # compact JSON dict
+        'author_extraction':    64,   # list of names
+        'cypher_generation':    128,  # Cypher query + params
+        'claim_extraction':     128,  # short bullet list of claims
+        'scifact_verification': 16,   # SUPPORTED / CONTRADICTED / NO_EVIDENCE
+        'answer_synthesis':     200,  # main answer — concise, 3-5 sentences
+        'general':              128,
     }
 
     def generate_content(self, prompt: str, system_prompt: str = None,
@@ -164,11 +166,16 @@ class LLMClient:
                 add_generation_prompt=True
             )
 
+            # Cap input length to leave room for generation
+            max_input_tokens = self.config.max_sequence_length - effective_max_tokens
+            max_input_tokens = max(max_input_tokens, 128)  # safety floor
+
             inputs = self.tokenizer(
                 [text],
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
+                max_length=max_input_tokens,
             )
 
             device = self.model.device

@@ -535,22 +535,20 @@ class HybridRetrievalHandler:
             results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
             logger.info(f"Graph search returned {len(results)} results")
 
-            # Fallback: if graph returned fewer than top_k results,
-            # supplement with multimodal vector search results so the user
-            # still gets results (with basic metadata from Milvus instead of
-            # rich Neo4j metadata like authors, venue, citations).
             visual_data = empty_visual
             graph_paper_ids = [r.get('paper_id') for r in results]
 
+            # Non-keyword templates: visual search on graph results,
+            # vector fallback only when graph returned nothing
             if len(results) > 0:
                 visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
-            if (len(results)  == 0) or (len(results) < top_k and template_key == 'search_by_keywords'):
+            if len(results) == 0:
                 sorted_ids, visual_data = await self.execute_multimodal_vector_search(
-                    query, keywords, top_k - len(results)
+                    query, keywords, top_k
                 )
                 vector_fallback = visual_data.get('vector_results', [])
                 logger.warning(
-                    f"Graph returned {len(results)} results — falling back to "
+                    f"Graph returned 0 results — falling back to "
                     f"{len(vector_fallback)} vector search results"
                 )
                 results.extend(vector_fallback)
@@ -697,7 +695,7 @@ class HybridRetrievalHandler:
         - Ensure list values contain no None or empty strings
 
         Args:
-            extracted: Raw extracted entities dict from _extract_all_entities
+            extracted: Raw extracted entities dict from _extract_entities_with_ai or _extract_entities_regex
 
         Returns:
             Cleaned copy of the extracted dict
@@ -938,8 +936,88 @@ class HybridRetrievalHandler:
     # ENTITY EXTRACTION — Pull structured data from natural language query
     # =========================================================================
 
-    def _extract_all_entities(self, query: str) -> Dict:
-        """Extract all entities from a natural language query.
+    async def _extract_entities_with_ai(self, query: str) -> Dict:
+        """Use the AI agent to extract entities from a natural language query.
+
+        The LLM is much better than regex at understanding natural language
+        structure (e.g. "What papers has Stephen F. Altschul authored?" →
+        author_names: ["Stephen F. Altschul"]).
+
+        Returns a dict with the same keys as _extract_entities_regex:
+            paper_ids, author_names, keywords, year, year_from, year_to,
+            venue, institution, wants_citations, wants_coauthors, wants_top_cited
+        """
+        prompt = (
+            f'Query: "{query}"\n'
+            f'Extract as JSON: {{"paper_ids":[],"author_names":[],"keywords":[],'
+            f'"year":"","year_from":"","year_to":"","venue":"","institution":"",'
+            f'"wants_citations":false,"wants_coauthors":false,"wants_top_cited":false}}\n'
+            f'Omit empty keys. JSON:'
+        )
+
+        raw = await run_blocking(
+            self.answer_agent.generate_content,
+            prompt=prompt,
+            system_prompt='Extract entities from academic queries. Return ONLY valid JSON.',
+            purpose='entity_extraction',
+        )
+
+        if not raw:
+            return {}
+
+        # Parse the JSON from the LLM response
+        try:
+            # Strip markdown fences if present
+            cleaned = raw.strip()
+            if cleaned.startswith('```'):
+                cleaned = cleaned.split('\n', 1)[-1]
+            if cleaned.endswith('```'):
+                cleaned = cleaned.rsplit('```', 1)[0]
+            cleaned = cleaned.strip()
+
+            # Find the first { ... } block
+            start = cleaned.find('{')
+            end = cleaned.rfind('}')
+            if start == -1 or end == -1:
+                logger.warning(f"AI entity extraction returned no JSON object: {raw[:200]}")
+                return {}
+
+            extracted = json.loads(cleaned[start:end + 1])
+
+            # Validate types — only keep expected keys with correct types
+            valid: Dict = {}
+            list_keys = ('paper_ids', 'author_names', 'keywords')
+            str_keys = ('year', 'year_from', 'year_to', 'venue', 'institution')
+            bool_keys = ('wants_citations', 'wants_coauthors', 'wants_top_cited')
+
+            for k in list_keys:
+                v = extracted.get(k)
+                if isinstance(v, list) and v:
+                    valid[k] = [str(item).strip() for item in v if item]
+                elif isinstance(v, str) and v.strip():
+                    valid[k] = [v.strip()]
+
+            for k in str_keys:
+                v = extracted.get(k)
+                if isinstance(v, str) and v.strip():
+                    valid[k] = v.strip()
+                elif isinstance(v, (int, float)):
+                    valid[k] = str(int(v))
+
+            for k in bool_keys:
+                v = extracted.get(k)
+                if v is True:
+                    valid[k] = True
+
+            logger.info(f"AI entity extraction: {valid}")
+            return valid
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"AI entity extraction JSON parse failed: {e} — raw: {raw[:200]}")
+            return {}
+
+    def _extract_entities_regex(self, query: str) -> Dict:
+        """Regex-based entity extraction (fast fallback).
 
         Returns a dict with:
             paper_ids, author_names, keywords, year, year_from, year_to,
@@ -1080,8 +1158,30 @@ class HybridRetrievalHandler:
                     logger.info(f"Cypher cache HIT for: {query[:50]}...")
                     return cypher_query, parameters, "cached", []
 
-            # Step 1: Extract entities from the original query, then normalize
-            extracted = self._extract_all_entities(query)
+            # Step 1: Extract entities — AI first, regex fallback
+            # AI is much better at understanding natural language structure
+            # (e.g. distinguishing author names from institutions).
+            # Regex is kept as a fallback and to catch paper_ids / intent flags
+            # that the AI might miss.
+            extracted = {}
+            if self.answer_agent:
+                try:
+                    extracted = await self._extract_entities_with_ai(query)
+                except Exception as e:
+                    logger.warning(f"AI entity extraction failed: {e}")
+
+            # Always run regex to catch paper IDs and intent flags reliably
+            regex_extracted = self._extract_entities_regex(query)
+
+            # Merge: AI wins for semantic fields, regex fills gaps
+            for key, value in regex_extracted.items():
+                if key not in extracted or not extracted[key]:
+                    extracted[key] = value
+
+            # Ensure keywords are always present (from regex at minimum)
+            if 'keywords' not in extracted or not extracted['keywords']:
+                extracted['keywords'] = regex_extracted.get('keywords', self._extract_keywords(query))
+
             extracted = self._normalize_extracted(extracted)
             logger.info(f"Extracted entities: {extracted}")
 
@@ -1262,37 +1362,27 @@ class HybridRetrievalHandler:
                 logger.info("AI Agent is not available for response generation")
                 return None
 
-            # Prepare context from search results
+            # Prepare context from search results (limit to 3 papers for speed)
             context_papers = []
-            for result in search_results[:5]:  # Use top 5 results
+            for result in search_results[:3]:
                 # Handle both dict and object types
                 if hasattr(result, '__dict__'):
-                    # It's an object, use getattr
                     context_papers.append({
                         "title": getattr(result, "title", "") or "",
                         "authors": getattr(result, "authors", []) or [],
-                        "abstract": (getattr(result, "abstract", "") or "")[:300],
-                        "relevance_score": getattr(result, "relevance_score", 0),
+                        "abstract": (getattr(result, "abstract", "") or "")[:150],
                         "venue": getattr(result, "venue", "") or "",
                         "publication_date": getattr(result, "publication_date", "") or "",
                         "paper_id": getattr(result, "paper_id", "") or getattr(result, "id", ""),
-                        "doi": getattr(result, "doi", "") or "",
-                        "matched_figures": getattr(result, "matched_figures", 0),
-                        "matched_tables": getattr(result, "matched_tables", 0),
                     })
                 else:
-                    # It's a dict, use .get()
                     context_papers.append({
                         "title": result.get("title", "") or "",
                         "authors": result.get("authors", []) or [],
-                        "abstract": (result.get("abstract", "") or "")[:300],
-                        "relevance_score": result.get("relevance_score", 0),
+                        "abstract": (result.get("abstract", "") or "")[:150],
                         "venue": result.get("venue", "") or "",
                         "publication_date": result.get("publication_date", "") or "",
                         "paper_id": result.get("paper_id", "") or result.get("id", ""),
-                        "doi": result.get("doi", "") or "",
-                        "matched_figures": result.get("matched_figures", 0),
-                        "matched_tables": result.get("matched_tables", 0),
                     })
 
             # Build template-aware context for the prompt
@@ -1302,23 +1392,19 @@ class HybridRetrievalHandler:
                 tpl_desc = template_info.get("description", tpl_key)
                 template_context = f"\nRetrieval Strategy: {tpl_key} — {tpl_desc}"
 
-            # Build visual evidence context for the prompt
+            # Build visual evidence context for the prompt (keep short)
             visual_context = ""
             if visual_evidence:
                 figs = visual_evidence.get('figure_results', [])
                 tabs = visual_evidence.get('table_results', [])
                 if figs or tabs:
-                    visual_context = "\n\nVisual Evidence Retrieved:"
-                    for i, fig in enumerate(figs[:5], 1):
-                        desc = (fig.get('description', '') or '')[:150]
-                        pid = fig.get('paper_id', '')
-                        score = fig.get('similarity_score', 0)
-                        visual_context += f"\n  Figure {i} (paper {pid}, relevance {score:.2f}): {desc}"
-                    for i, tab in enumerate(tabs[:5], 1):
-                        desc = (tab.get('description', '') or '')[:150]
-                        pid = tab.get('paper_id', '')
-                        score = tab.get('similarity_score', 0)
-                        visual_context += f"\n  Table {i} (paper {pid}, relevance {score:.2f}): {desc}"
+                    visual_context = "\nVisual Evidence:"
+                    for i, fig in enumerate(figs[:3], 1):
+                        desc = (fig.get('description', '') or '')[:80]
+                        visual_context += f"\n  Fig{i} ({fig.get('paper_id','')}): {desc}"
+                    for i, tab in enumerate(tabs[:3], 1):
+                        desc = (tab.get('description', '') or '')[:80]
+                        visual_context += f"\n  Tab{i} ({tab.get('paper_id','')}): {desc}"
 
             # Build template-specific instructions
             template_instructions = self._get_template_specific_instructions(template_info)
@@ -1331,19 +1417,16 @@ class HybridRetrievalHandler:
                     "\n- If the query is about experimental results, graphs, or data, emphasize the visual evidence"
                 )
 
-            system_prompt = "You are a research assistant specializing in academic literature. Be accurate, concise, and tailor your response to the type of query."
-            prompt = f"""Answer this question based on the search results: "{query}"
+            system_prompt = "You are a research assistant. Be concise (3-5 sentences max). Only use information from the provided results."
+            prompt = f"""Question: "{query}"
 {template_context}
 
-Search Results:
-{self._format_papers_for_prompt(context_papers[:4])}
+Results:
+{self._format_papers_for_prompt(context_papers[:3])}
 {visual_context}
 
-Instructions:
 {template_instructions}
-- Be accurate — only use information from the provided results
-
-Answer:"""
+Answer concisely:"""
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
@@ -1525,25 +1608,18 @@ Answer:"""
 
     @staticmethod
     def _format_papers_for_prompt(papers: List[Dict]) -> str:
-        """Format papers for inclusion in response generation."""
-        formatted_papers = []
-
-        for i, paper in enumerate(papers, 1):
-            authors = paper.get("authors", [])
-            authors_str = ", ".join(authors[:3]) if authors else "N/A"
-            if len(authors) > 3:
-                authors_str += " et al."
-
-            paper_text = f"""{i}. Title: {paper.get('title', 'N/A')}
-   Authors: {authors_str}
-   Venue: {paper.get('venue', 'N/A')}
-   Date: {paper.get('publication_date', 'N/A')}
-   Relevance: {paper.get('relevance_score', 0):.2f}
-   Abstract: {paper.get('abstract', 'N/A')}"""
-
-            formatted_papers.append(paper_text)
-
-        return "\n\n".join(formatted_papers)
+        """Format papers compactly for LLM prompt (minimize input tokens)."""
+        lines = []
+        for i, p in enumerate(papers, 1):
+            authors = p.get('authors', [])
+            auth = ', '.join(authors[:2]) + (' et al.' if len(authors) > 2 else '') if authors else ''
+            abstract = (p.get('abstract', '') or '')[:150]
+            lines.append(
+                f"{i}. {p.get('title','Untitled')} | {auth} | "
+                f"{p.get('venue','') or ''} {p.get('publication_date','') or ''}\n"
+                f"   {abstract}"
+            )
+        return '\n'.join(lines)
 
     # =========================================================================
     # CROSS-MODAL VISUAL SEARCH (text query → figure/table retrieval)
