@@ -32,7 +32,7 @@ class HybridRetrievalHandler:
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
-        self.answer_agent = LLMClient()
+        # self.ai_agent = LLMClient()
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
         self.clip_client = clip_client
@@ -83,9 +83,8 @@ class HybridRetrievalHandler:
             logger.error(f"Vector search error: {e}")
             return []
 
-
     async def execute_multimodal_vector_search(self, query: str, keywords: List[str],
-                                                top_k: int) -> tuple:
+                                               top_k: int) -> tuple:
         """Multi-modal vector search: SciBERT + CLIP cross-modal + re-ranking.
 
         Combines text-based vector search with cross-modal visual search to produce
@@ -112,7 +111,7 @@ class HybridRetrievalHandler:
 
         try:
             # ── Step 1: Vector search (SciBERT) per keyword ──
-            all_vector_scores = {}   # paper_id → best distance (lower = better)
+            all_vector_scores = {}  # paper_id → best distance (lower = better)
             all_vector_results = []
 
             for keyword in keywords:
@@ -498,7 +497,7 @@ class HybridRetrievalHandler:
             # Check cache first
             if self.cache_manager:
                 cached_results = self.cache_manager.get_search_results(
-                    query, top_k, use_hybrid=False, routing_strategy="neo4j"
+                    query, top_k, use_hybrid=False, routing_strategy="graph"
                 )
                 if cached_results is not None:
                     if self.performance_monitor:
@@ -519,39 +518,156 @@ class HybridRetrievalHandler:
                 logger.error("Graph handler not initialized")
                 return [], template_info, empty_visual
 
-            # Parse the query intelligently based on patterns
-            cypher_query, parameters, template_key, keywords = await self._build_intelligent_cypher_query(query, top_k, template_cypher)
+            # Check Cypher cache first
+            if self.cache_manager:
+                cached = self.cache_manager.get_cypher(query, top_k)
+                if cached is not None:
+                    cypher_query, parameters = cached
+                    logger.info(f"Cypher cache HIT for: {query[:50]}...")
+                    return cypher_query, parameters, "cached", []
+
+            # Step 1: Extract entities — AI first, regex fallback
+            # AI is much better at understanding natural language structure
+            # (e.g. distinguishing author names from institutions).
+            # Regex is kept as a fallback and to catch paper_ids / intent flags
+            # that the AI might miss.
+            extracted = {}
+            if self.ai_agent:
+                try:
+                    extracted = await self._extract_entities_with_ai(query)
+                except Exception as e:
+                    logger.warning(f"AI entity extraction failed: {e}")
+
+            # Always run regex to catch paper IDs and intent flags reliably
+            regex_extracted = self._extract_entities_regex(query)
+
+            # Merge: AI wins for semantic fields, regex fills gaps
+            for key, value in regex_extracted.items():
+                if key not in extracted or not extracted[key]:
+                    extracted[key] = value
+
+            # Ensure keywords are always present (from regex at minimum)
+            if 'keywords' not in extracted or not extracted['keywords']:
+                extracted['keywords'] = regex_extracted.get('keywords', self._extract_keywords(query))
+
+            extracted = self._normalize_extracted(extracted)
+            logger.info(f"Extracted entities: {extracted}")
+
+            # Step 2: AI agent selects the best template
+            # template_cypher can be a template KEY name (e.g. "search_by_institution")
+            # or raw Cypher text passed from the API.
+            if template_cypher:
+                if template_cypher in self.GRAPH_TEMPLATES:
+                    # It's a known template key name
+                    template_key = template_cypher
+                else:
+                    # It's raw Cypher text — reverse-lookup the template key
+                    template_key = None
+                    for key, tpl in self.GRAPH_TEMPLATES.items():
+                        if tpl['cypher'].strip() == template_cypher.strip():
+                            template_key = key
+                            break
+                    if not template_key:
+                        # No matching template found — use raw Cypher directly
+                        logger.info("Using raw Cypher template (no matching template key found)")
+                        refined_cypher, parameters = self._refine_template_with_conditions(
+                            query, template_cypher, top_k
+                        )
+                        if self.cache_manager:
+                            self.cache_manager.cache_cypher(query, top_k, refined_cypher, parameters)
+                        return refined_cypher, parameters, "raw_cypher", []
+            else:
+                template_key = await self._select_template(query, extracted)
+
+            logger.info(f"Selected template: {template_key}")
+
+            # Step 3: Vector-first for keyword queries
+            # Only run keyword → vector search when the selected template
+            # requires $paper_ids but none were extracted from the query.
+            # Templates with their own structured filters (author, venue, year,
+            # keywords, etc.) don't need this expensive round-trip.
+            template_cypher_text = self.GRAPH_TEMPLATES.get(template_key, {}).get('cypher', '')
+            needs_paper_ids = '$paper_ids' in template_cypher_text
+            has_paper_ids = bool(extracted.get('paper_ids'))
+            keywords = extracted.get('keywords', [])
+            template = self.GRAPH_TEMPLATES[template_key]
+            logger.info(f"Final template: {template_key} — {template['description']}")
+
+            # Step 4: Build parameters using the template's param builder
+            param_builder = getattr(self, template['param_builder'])
+            parameters = param_builder(extracted, top_k)
 
             # Build template info
             template_desc = self.GRAPH_TEMPLATES.get(template_key, {}).get('description', template_key)
             template_info = {"template_key": template_key, "description": template_desc}
 
-            # Debug logging
-            logger.info(f"Graph search query: {query}")
-            logger.info(f"Generated Cypher: {cypher_query}")
-            logger.info(f"Parameters: {parameters}")
-            logger.info(f"Template used: {template_key} — {template_desc}")
+            cypher_query = template['cypher'].strip()
 
-            results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-            logger.info(f"Graph search returned {len(results)} results")
+            if needs_paper_ids and not has_paper_ids:
+                #Vector-first
+                all_results = {}
 
-            visual_data = empty_visual
-            graph_paper_ids = [r.get('paper_id') for r in results]
+                for keyword in keywords:
+                    results = await self._execute_vector_search_internal(keyword, top_k)
 
-            # Non-keyword templates: visual search on graph results,
-            # vector fallback only when graph returned nothing
-            if len(results) > 0:
+                    for paper in results:
+                        p_id = paper.get('paper_id')
+                        dist = paper.get('distance', 0.0)
+                        if p_id not in all_results or dist < all_results[p_id]:
+                            all_results[p_id] = dist
+
+                # Sort by distance (ascending) and take the top_k
+                sorted_ids = sorted(all_results, key=all_results.get)[:top_k]
+
+                # Extend the extracted list
+                extracted.setdefault('paper_ids', []).extend(sorted_ids)
+                logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for template '{template_key}'")
+                results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+                logger.info(f"Graph search returned {len(results)} results")
+
+                graph_paper_ids = [r.get('paper_id') for r in results]
+
                 visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
-            if len(results) == 0:
-                sorted_ids, visual_data = await self.execute_multimodal_vector_search(
-                    query, keywords, top_k
-                )
-                vector_fallback = visual_data.get('vector_results', [])
-                logger.warning(
-                    f"Graph returned 0 results — falling back to "
-                    f"{len(vector_fallback)} vector search results"
-                )
-                results.extend(vector_fallback)
+
+            elif template_key != 'search_by_keywords':
+                # graph first
+                results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+
+                graph_paper_ids = [r.get('paper_id') for r in results]
+
+                logger.info(f"Graph search returned {len(results)} results")
+
+                all_results = {}
+                # search by paper_ids to re rank score
+                results = await self._execute_vector_search_internal(graph_paper_ids)
+
+                # Sort by distance (ascending) and take the top_k
+                sorted_ids = sorted(all_results, key=all_results.get)[:top_k]
+
+                # Extend the extracted list
+                extracted.setdefault('paper_ids', []).extend(sorted_ids)
+
+                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
+            else:
+                # graph first
+                graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+
+                graph_paper_ids = [r.get('paper_id') for r in graph_results]
+
+                logger.info(f"Graph search returned {len(graph_results)} results")
+
+                all_results = {}
+                # search by paper_ids to re rank score
+                vector_results = await self._execute_vector_search_internal(query=query, top_k=top_k)
+
+                # Sort by distance (ascending) and take the top_k
+                vector_paper_ids = sorted(all_results, key=vector_results.get)
+
+                results, visual_data = await self.rerank_by_search_visual_by_text(query, top_k, paper_ids=graph_paper_ids + vector_paper_ids)
+
+            # Step 5: Cache the result
+            if self.cache_manager:
+                self.cache_manager.cache_cypher(query, top_k, cypher_query, parameters)
 
             # Cache results
             if self.cache_manager and results:
@@ -637,11 +753,13 @@ class HybridRetrievalHandler:
             keywords.append(query.strip())
 
         return list(set(keywords))  # Remove duplicates
+
     # =========================================================================
     # GRAPH TEMPLATE LIBRARY — Loaded from data/graph_templates.json
     # =========================================================================
 
     _graph_templates_cache: Optional[Dict] = None
+
     @classmethod
     def _load_graph_templates(cls) -> Dict:
         """Load neo4j query templates from data/graph_templates.json.
@@ -778,17 +896,17 @@ class HybridRetrievalHandler:
     # A template is "viable" only when ALL its required entity keys are present
     # in the extracted dict (non-empty).
     TRIGGER_TO_ENTITY_KEYS: Dict[str, List[str]] = {
-        'paper_ids':      ['paper_ids'],
-        'author_names':   ['author_names'],
-        'keywords':       ['keywords'],
-        'venue':          ['venue'],
-        'institution':    ['institution'],
-        'year':           ['year'],
-        'year_range':     ['year_from'],
-        'citations':      ['paper_ids', 'wants_citations'],
-        'coauthor':       ['author_names', 'wants_coauthors'],
-        'top_cited':      ['wants_top_cited'],
-        'author_venues':  ['author_names'],
+        'paper_ids': ['paper_ids'],
+        'author_names': ['author_names'],
+        'keywords': ['keywords'],
+        'venue': ['venue'],
+        'institution': ['institution'],
+        'year': ['year'],
+        'year_range': ['year_from'],
+        'citations': ['paper_ids', 'wants_citations'],
+        'coauthor': ['author_names', 'wants_coauthors'],
+        'top_cited': ['wants_top_cited'],
+        'author_venues': ['author_names'],
     }
 
     def _get_viable_templates(self, extracted: Dict) -> List[str]:
@@ -840,7 +958,7 @@ class HybridRetrievalHandler:
         'search_by_institution',
         'search_by_year_range',
         'search_by_year',
-        'search_by_keywords',   # ultimate fallback — always viable
+        'search_by_keywords',  # ultimate fallback — always viable
     ]
 
     def _rank_viable_templates(self, extracted: Dict) -> List[str]:
@@ -882,7 +1000,7 @@ class HybridRetrievalHandler:
         logger.info(f"Viable templates (ranked): {candidates}")
 
         # Fast path: single candidate or no AI agent
-        if len(candidates) <= 1 or not self.answer_agent:
+        if len(candidates) <= 1 or not self.ai_agent:
             selected = candidates[0] if candidates else 'search_by_keywords'
             logger.info(f"Template selected (deterministic): {selected}")
             return selected
@@ -905,7 +1023,7 @@ class HybridRetrievalHandler:
             )
 
             raw = await run_blocking(
-                self.answer_agent.generate_content,
+                self.ai_agent.generate_content,
                 prompt=prompt,
                 system_prompt=(
                     'You are a query router. Given a user query and its '
@@ -956,7 +1074,7 @@ class HybridRetrievalHandler:
         )
 
         raw = await run_blocking(
-            self.answer_agent.generate_content,
+            self.ai_agent.generate_content,
             prompt=prompt,
             system_prompt='Extract entities from academic queries. Return ONLY valid JSON.',
             purpose='entity_extraction',
@@ -1134,146 +1252,6 @@ class HybridRetrievalHandler:
     # BUILD INTELLIGENT CYPHER — Main entry point for graph search
     # =========================================================================
 
-    async def _build_intelligent_cypher_query(self, query: str, top_k: int, template_cypher: str = None) -> tuple:
-        """Build Cypher query by selecting the best template and filling parameters.
-
-        Flow:
-        1. Check Cypher cache
-        2. Extract entities from query (paper IDs, authors, keywords, years, etc.)
-        3. AI agent selects the best template (fallback: rule-based selection)
-        4. If template is keyword-only → vector-first: run vector search to get
-           relevant paper IDs, then use search_by_paper_ids for rich graph metadata
-        5. Fill template parameters from extracted entities
-        6. Cache and return
-
-        Returns:
-            (cypher_query, parameters, template_key) tuple
-        """
-        try:
-            # Check Cypher cache first
-            if self.cache_manager:
-                cached = self.cache_manager.get_cypher(query, top_k)
-                if cached is not None:
-                    cypher_query, parameters = cached
-                    logger.info(f"Cypher cache HIT for: {query[:50]}...")
-                    return cypher_query, parameters, "cached", []
-
-            # Step 1: Extract entities — AI first, regex fallback
-            # AI is much better at understanding natural language structure
-            # (e.g. distinguishing author names from institutions).
-            # Regex is kept as a fallback and to catch paper_ids / intent flags
-            # that the AI might miss.
-            extracted = {}
-            if self.answer_agent:
-                try:
-                    extracted = await self._extract_entities_with_ai(query)
-                except Exception as e:
-                    logger.warning(f"AI entity extraction failed: {e}")
-
-            # Always run regex to catch paper IDs and intent flags reliably
-            regex_extracted = self._extract_entities_regex(query)
-
-            # Merge: AI wins for semantic fields, regex fills gaps
-            for key, value in regex_extracted.items():
-                if key not in extracted or not extracted[key]:
-                    extracted[key] = value
-
-            # Ensure keywords are always present (from regex at minimum)
-            if 'keywords' not in extracted or not extracted['keywords']:
-                extracted['keywords'] = regex_extracted.get('keywords', self._extract_keywords(query))
-
-            extracted = self._normalize_extracted(extracted)
-            logger.info(f"Extracted entities: {extracted}")
-
-            # Step 2: AI agent selects the best template
-            # template_cypher can be a template KEY name (e.g. "search_by_institution")
-            # or raw Cypher text passed from the API.
-            if template_cypher:
-                if template_cypher in self.GRAPH_TEMPLATES:
-                    # It's a known template key name
-                    template_key = template_cypher
-                else:
-                    # It's raw Cypher text — reverse-lookup the template key
-                    template_key = None
-                    for key, tpl in self.GRAPH_TEMPLATES.items():
-                        if tpl['cypher'].strip() == template_cypher.strip():
-                            template_key = key
-                            break
-                    if not template_key:
-                        # No matching template found — use raw Cypher directly
-                        logger.info("Using raw Cypher template (no matching template key found)")
-                        refined_cypher, parameters = self._refine_template_with_conditions(
-                            query, template_cypher, top_k
-                        )
-                        if self.cache_manager:
-                            self.cache_manager.cache_cypher(query, top_k, refined_cypher, parameters)
-                        return refined_cypher, parameters, "raw_cypher", []
-            else:
-                template_key = await self._select_template(query, extracted)
-            logger.info(f"Selected template: {template_key}")
-
-            # Step 3: Vector-first for keyword queries
-            # Only run keyword → vector search when the selected template
-            # requires $paper_ids but none were extracted from the query.
-            # Templates with their own structured filters (author, venue, year,
-            # keywords, etc.) don't need this expensive round-trip.
-            template_cypher_text = self.GRAPH_TEMPLATES.get(template_key, {}).get('cypher', '')
-            needs_paper_ids = '$paper_ids' in template_cypher_text
-            has_paper_ids = bool(extracted.get('paper_ids'))
-            keywords = extracted.get('keywords', [])
-
-            if needs_paper_ids and not has_paper_ids:
-
-                all_results = {}
-
-                for keyword in keywords:
-                    results = await self._execute_vector_search_internal(keyword, top_k)
-
-                    for paper in results:
-                        p_id = paper.get('paper_id')
-                        dist = paper.get('distance', 0.0)
-                        if p_id not in all_results or dist < all_results[p_id]:
-                            all_results[p_id] = dist
-
-                # Sort by distance (ascending) and take the top_k
-                sorted_ids = sorted(all_results, key=all_results.get)[:top_k]
-
-                # Extend the extracted list
-                extracted.setdefault('paper_ids', []).extend(sorted_ids)
-                logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for template '{template_key}'")
-            else:
-                if has_paper_ids:
-                    logger.info(f"Skipping keyword vector search — paper IDs already extracted from query")
-                else:
-                    logger.info(
-                        f"Skipping keyword vector search — template '{template_key}' uses its own filters (no $paper_ids needed)")
-
-            template = self.GRAPH_TEMPLATES[template_key]
-            logger.info(f"Final template: {template_key} — {template['description']}")
-
-            # Step 4: Build parameters using the template's param builder
-            param_builder = getattr(self, template['param_builder'])
-            parameters = param_builder(extracted, top_k)
-
-            cypher_query = template['cypher'].strip()
-
-            # Step 5: Cache the result
-            if self.cache_manager:
-                self.cache_manager.cache_cypher(query, top_k, cypher_query, parameters)
-
-            return cypher_query, parameters, template_key, keywords
-
-        except Exception as e:
-            logger.error(f"Error in intelligent Cypher generation: {e}")
-            # Ultimate fallback — vector-first then paper IDs lookup
-            paper_ids = await self._vector_first_paper_ids(query, top_k) if self.milvus_client else None
-            if paper_ids:
-                return self.GRAPH_TEMPLATES['search_by_paper_ids']['cypher'].strip(), \
-                    {"paper_ids": paper_ids, "limit": top_k}, "search_by_paper_ids"
-            keywords = self._extract_keywords(query)
-            return self.GRAPH_TEMPLATES['search_by_keywords']['cypher'].strip(), \
-                {"keywords": keywords or [query], "limit": top_k}, "search_by_keywords", keywords
-
     async def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
         """Run vector search to extract relevant paper IDs for graph enrichment.
 
@@ -1307,82 +1285,52 @@ class HybridRetrievalHandler:
             logger.error(f"Vector-first search failed: {e}")
             return []
 
-    async def _execute_graph_refinement(self, paper_ids: List[str], top_k: int) -> List[Dict]:
-        """Refine vector results using graph relationships."""
-        try:
-            if not self.graph_handler:
-                logger.error("Graph handler not initialized")
-                return []
-
-            # Find related papers through citations and collaborations
-            cypher_query = """
-                MATCH (p:Paper)
-                WHERE p.id IN $paper_ids
-                OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)
-                OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)
-                RETURN p.id as paper_id, p.title as title, p.abstract as abstract,
-                       p.doi as doi, p.publication_date as publication_date,
-                       p.cited_by_count as cited_by_count,
-                       collect(DISTINCT a.name) as authors,
-                       v.name as venue
-                ORDER BY p.id
-            """
-
-            logger.info(paper_ids)
-
-            results = await run_blocking(self.graph_handler.execute_query, cypher_query, {
-                "paper_ids": paper_ids,
-                "top_k": top_k
-            })
-
-            return results
-        except Exception as e:
-            logger.error(f"Graph refinement error: {e}")
-            return []
-
     async def generate_ai_response(
             self,
             query: str,
             search_results: List,
             template_info: Optional[Dict] = None,
-            visual_evidence: Optional[Dict] = None,
     ) -> Optional[str]:
-        """Generate AI response from milvus, neo4j, and cross-modal visual searches.
+        """Generate AI response from vector and graph searches.
 
         Args:
             query: The user's natural language query
             search_results: List of search result objects or dicts
             template_info: Optional dict with 'template_key' and 'description'
-                           of the neo4j template used for retrievals
-            visual_evidence: Optional dict with 'figure_results', 'table_results',
-                             and 'paper_visual_scores' from cross-modal visual search
+                           of the graph template used for retrieval
         """
         try:
-            if not self.answer_agent:
+            if not self.ai_agent:
                 logger.info("AI Agent is not available for response generation")
                 return None
 
-            # Prepare context from search results (limit to 3 papers for speed)
+            # Prepare context from search results
             context_papers = []
-            for result in search_results[:3]:
+            for result in search_results[:5]:  # Use top 5 results
                 # Handle both dict and object types
                 if hasattr(result, '__dict__'):
+                    # It's an object, use getattr
                     context_papers.append({
                         "title": getattr(result, "title", "") or "",
                         "authors": getattr(result, "authors", []) or [],
-                        "abstract": (getattr(result, "abstract", "") or "")[:150],
+                        "abstract": (getattr(result, "abstract", "") or "")[:300],
+                        "relevance_score": getattr(result, "relevance_score", 0),
                         "venue": getattr(result, "venue", "") or "",
                         "publication_date": getattr(result, "publication_date", "") or "",
                         "paper_id": getattr(result, "paper_id", "") or getattr(result, "id", ""),
+                        "doi": getattr(result, "doi", "") or ""
                     })
                 else:
+                    # It's a dict, use .get()
                     context_papers.append({
                         "title": result.get("title", "") or "",
                         "authors": result.get("authors", []) or [],
-                        "abstract": (result.get("abstract", "") or "")[:150],
+                        "abstract": (result.get("abstract", "") or "")[:300],
+                        "relevance_score": result.get("relevance_score", 0),
                         "venue": result.get("venue", "") or "",
                         "publication_date": result.get("publication_date", "") or "",
                         "paper_id": result.get("paper_id", "") or result.get("id", ""),
+                        "doi": result.get("doi", "") or ""
                     })
 
             # Build template-aware context for the prompt
@@ -1392,45 +1340,25 @@ class HybridRetrievalHandler:
                 tpl_desc = template_info.get("description", tpl_key)
                 template_context = f"\nRetrieval Strategy: {tpl_key} — {tpl_desc}"
 
-            # Build visual evidence context for the prompt (keep short)
-            visual_context = ""
-            if visual_evidence:
-                figs = visual_evidence.get('figure_results', [])
-                tabs = visual_evidence.get('table_results', [])
-                if figs or tabs:
-                    visual_context = "\nVisual Evidence:"
-                    for i, fig in enumerate(figs[:3], 1):
-                        desc = (fig.get('description', '') or '')[:80]
-                        visual_context += f"\n  Fig{i} ({fig.get('paper_id','')}): {desc}"
-                    for i, tab in enumerate(tabs[:3], 1):
-                        desc = (tab.get('description', '') or '')[:80]
-                        visual_context += f"\n  Tab{i} ({tab.get('paper_id','')}): {desc}"
-
             # Build template-specific instructions
             template_instructions = self._get_template_specific_instructions(template_info)
 
-            # Add visual evidence instructions if visual results are present
-            if visual_context:
-                template_instructions += (
-                    "\n- Reference relevant figures and tables when they support the answer"
-                    "\n- Mention which paper each visual element comes from"
-                    "\n- If the query is about experimental results, graphs, or data, emphasize the visual evidence"
-                )
-
-            system_prompt = "You are a research assistant. Be concise (3-5 sentences max). Only use information from the provided results."
-            prompt = f"""Question: "{query}"
+            system_prompt = "You are a research assistant specializing in academic literature. Be accurate, concise, and tailor your response to the type of query."
+            prompt = f"""Answer this question based on the search results: "{query}"
 {template_context}
 
-Results:
-{self._format_papers_for_prompt(context_papers[:3])}
-{visual_context}
+Search Results:
+{self._format_papers_for_prompt(context_papers[:4])}
 
+Instructions:
 {template_instructions}
-Answer concisely:"""
+- Be accurate — only use information from the provided results
+
+Answer:"""
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
-                self.answer_agent.generate_content,
+                self.ai_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
                 purpose='answer_synthesis'
@@ -1615,8 +1543,8 @@ Answer concisely:"""
             auth = ', '.join(authors[:2]) + (' et al.' if len(authors) > 2 else '') if authors else ''
             abstract = (p.get('abstract', '') or '')[:150]
             lines.append(
-                f"{i}. {p.get('title','Untitled')} | {auth} | "
-                f"{p.get('venue','') or ''} {p.get('publication_date','') or ''}\n"
+                f"{i}. {p.get('title', 'Untitled')} | {auth} | "
+                f"{p.get('venue', '') or ''} {p.get('publication_date', '') or ''}\n"
                 f"   {abstract}"
             )
         return '\n'.join(lines)
@@ -1626,7 +1554,7 @@ Answer concisely:"""
     # =========================================================================
 
     async def search_visual_by_text(self, query: str, top_k: int = 5,
-                                      paper_ids: Optional[List[str]] = None) -> Dict:
+                                    paper_ids: Optional[List[str]] = None) -> Dict:
         """Cross-modal search: find figures and tables for papers found by vector search.
 
         Visual search is scoped to the paper IDs already discovered by vector search.
@@ -1794,6 +1722,7 @@ Answer concisely:"""
         except Exception as e:
             logger.error(f"Cross-modal visual search error: {e}")
             return empty_result
+
     #
     # # =========================================================================
     # # IMAGE SEARCH METHODS

@@ -839,7 +839,7 @@ class MilvusClient:
                 },
                 limit=top_k * 2  # Get more candidates for reranking
             )
-            weighted_ranker = WeightedRanker(0.7, 0.3)
+            weighted_ranker = WeightedRanker(0.0, 1)
             # Perform hybrid search with RRF (Reciprocal Rank Fusion) reranking
             hybrid_results = self.collection.hybrid_search(
                 reqs=[dense_search_request, sparse_search_request],

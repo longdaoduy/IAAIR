@@ -93,7 +93,6 @@ class MockDataEvaluator:
                         query=question,
                         search_results=search_results,
                         template_info=_template_info,
-                        visual_evidence=_visual_data,
                     )
                     ai_generation_time = time.time() - ai_start_time
 

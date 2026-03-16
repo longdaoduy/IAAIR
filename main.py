@@ -523,7 +523,6 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
                     # 1. Generate the raw synthesis (with visual evidence context)
                     ai_response = await factory.retrieval_handler.generate_ai_response(
                         request.query, fused_results, template_info=template_info,
-                        visual_evidence=visual_data
                     )
 
                     # if ai_response:
