@@ -32,8 +32,8 @@ class HybridRetrievalHandler:
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
-        self.answer_agent = LLMClient()
-        self.template_agent = LLMClient()
+        # self.ai_agent = None
+        # self.ai_agent = None
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
         self.clip_client = clip_client
@@ -488,12 +488,17 @@ class HybridRetrievalHandler:
     ) -> tuple:
         """Build OR conditions from extracted entities for the given template.
 
-        For the unified `search_papers` template (no built-in WHERE), every
+        For the unified ``search_papers`` template (no built-in WHERE), every
         extracted entity becomes an OR condition so that any matching dimension
         surfaces results.
 
         For specialised templates (coauthor_network, search_citations, etc.),
         only entities NOT already handled by the template are added.
+
+        When conditions reference variables bound by ``OPTIONAL MATCH`` (e.g.
+        ``a``, ``v``, ``inst``), they are wrapped in ``EXISTS { pattern }``
+        subqueries so Neo4j can resolve them independently of the OPTIONAL
+        MATCH clause order.
 
         Returns:
             (or_conditions, extra_params) — list of Cypher condition strings
@@ -502,18 +507,35 @@ class HybridRetrievalHandler:
         or_conditions: List[str] = []
         extra_params: Dict = {}
 
+        # Detect whether the variable is already bound in a non-OPTIONAL MATCH
+        # (i.e. a mandatory MATCH line).  If so we can reference it directly;
+        # otherwise we must use an EXISTS subquery.
+        mandatory_match_section = ''
+        for line in cypher.split('\n'):
+            stripped = line.strip().upper()
+            if stripped.startswith('MATCH') and not stripped.startswith('OPTIONAL'):
+                mandatory_match_section += line + '\n'
+
+        def _var_in_mandatory(var: str) -> bool:
+            return f'({var}:' in mandatory_match_section or f' {var}:' in mandatory_match_section
+
         # --- Author names ---
         author_names = extracted.get('author_names', [])
         if author_names and '$author_names' not in cypher:
-            author_var_match = re.search(r'\((\w+):Author\)', cypher)
-            if author_var_match:
-                var = author_var_match.group(1)
+            if _var_in_mandatory('a'):
+                # Variable 'a' is in mandatory MATCH — safe to reference directly
                 or_conditions.append(
-                    f'any(name IN $author_names WHERE toLower({var}.name) CONTAINS toLower(name))'
+                    'any(name IN $author_names WHERE toLower(a.name) CONTAINS toLower(name))'
                 )
-                extra_params['author_names'] = author_names
+            else:
+                # Variable comes from OPTIONAL MATCH — use EXISTS subquery
+                or_conditions.append(
+                    'EXISTS { MATCH (auth_sub:Author)-[:AUTHORED]->(p) '
+                    'WHERE any(name IN $author_names WHERE toLower(auth_sub.name) CONTAINS toLower(name)) }'
+                )
+            extra_params['author_names'] = author_names
 
-        # --- Keywords ---
+        # --- Keywords (always safe — references p which is in mandatory MATCH) ---
         keywords = extracted.get('keywords', [])
         if keywords and '$keywords' not in cypher:
             or_conditions.append(
@@ -526,22 +548,34 @@ class HybridRetrievalHandler:
         # --- Venue ---
         venue = extracted.get('venue', '')
         if venue and '$venue_name' not in cypher and ':Venue' in cypher:
-            or_conditions.append('toLower(v.name) CONTAINS toLower($or_venue_name)')
+            if _var_in_mandatory('v'):
+                or_conditions.append('toLower(v.name) CONTAINS toLower($or_venue_name)')
+            else:
+                or_conditions.append(
+                    'EXISTS { MATCH (p)-[:PUBLISHED_IN]->(v_sub:Venue) '
+                    'WHERE toLower(v_sub.name) CONTAINS toLower($or_venue_name) }'
+                )
             extra_params['or_venue_name'] = venue
 
         # --- Institution ---
         institution = extracted.get('institution', '')
         if institution and '$institution_name' not in cypher and ':Institution' in cypher:
-            or_conditions.append('toLower(inst.name) CONTAINS toLower($or_institution_name)')
+            if _var_in_mandatory('inst'):
+                or_conditions.append('toLower(inst.name) CONTAINS toLower($or_institution_name)')
+            else:
+                or_conditions.append(
+                    'EXISTS { MATCH (p)-[:ASSOCIATED_WITH]->(inst_sub:Institution) '
+                    'WHERE toLower(inst_sub.name) CONTAINS toLower($or_institution_name) }'
+                )
             extra_params['or_institution_name'] = institution
 
-        # --- Year ---
+        # --- Year (always safe — references p) ---
         year = extracted.get('year', '')
         if year and '$year' not in cypher:
             or_conditions.append(f"p.publication_date STARTS WITH $or_year")
             extra_params['or_year'] = year
 
-        # --- Year range ---
+        # --- Year range (always safe — references p) ---
         year_from = extracted.get('year_from', '')
         year_to = extracted.get('year_to', '')
         if year_from and '$year_from' not in cypher:
@@ -748,7 +782,7 @@ class HybridRetrievalHandler:
             # Regex is kept as a fallback and to catch paper_ids / intent flags
             # that the AI might miss.
             extracted = {}
-            if self.template_agent:
+            if self.ai_agent:
                 try:
                     extracted = await self._extract_entities_with_ai(query)
                 except Exception as e:
@@ -1305,7 +1339,7 @@ class HybridRetrievalHandler:
         )
 
         raw = await run_blocking(
-            self.template_agent.generate_content,
+            self.ai_agent.generate_content,
             prompt=prompt,
             system_prompt='Extract entities from academic queries. Return ONLY valid JSON.',
             purpose='entity_extraction',
@@ -1472,39 +1506,6 @@ class HybridRetrievalHandler:
     # BUILD INTELLIGENT CYPHER — Main entry point for graph search
     # =========================================================================
 
-    async def _vector_first_paper_ids(self, query: str, top_k: int) -> List[str]:
-        """Run vector search to extract relevant paper IDs for graph enrichment.
-
-        This is the core of the vector-first strategy: use semantic similarity
-        to find relevant papers, then pass their IDs to a graph template for
-        rich metadata (authors, venues, citations, etc.).
-
-        Args:
-            query: Natural language search query
-            top_k: Number of papers to retrieve
-
-        Returns:
-            List of paper IDs (e.g. ['W12345', 'W67890'])
-        """
-        try:
-            vector_results = await self.search_similar_papers(
-                query_text=query,
-                top_k=top_k,
-                use_hybrid=True
-            )
-            if not vector_results:
-                logger.warning("Vector-first: no results from vector search")
-                return []
-
-            paper_ids = [r.get('paper_id') for r in vector_results]
-
-            logger.info(f"Vector-first: extracted {len(paper_ids)} paper IDs from vector search")
-            return paper_ids
-
-        except Exception as e:
-            logger.error(f"Vector-first search failed: {e}")
-            return []
-
     async def generate_ai_response(
             self,
             query: str,
@@ -1520,7 +1521,7 @@ class HybridRetrievalHandler:
                            of the graph template used for retrieval
         """
         try:
-            if not self.answer_agent:
+            if not self.ai_agent:
                 logger.info("AI Agent is not available for response generation")
                 return None
 
