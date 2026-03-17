@@ -243,8 +243,16 @@ class HybridRetrievalHandler:
             print(f"❌ Search failed: {e}")
             return []
 
-    async def execute_hybrid_search(self, query: str, top_k: int, template_cypher: str = None) -> tuple:
+    async def execute_hybrid_search(self, query: str, top_k: int, template_cypher: str = None,
+                                     use_multimodal: bool = True) -> tuple:
         """Execute neo4j search using Cypher query with intelligent query parsing and caching.
+
+        Args:
+            query: User's natural language query
+            top_k: Maximum number of results
+            template_cypher: Optional template key or raw Cypher text
+            use_multimodal: When True, use CLIP cross-modal visual search for
+                vector-first discovery; when False, use keyword-only SciBERT search.
 
         Returns:
             (results, template_info, visual_data) tuple where template_info
@@ -255,9 +263,9 @@ class HybridRetrievalHandler:
         """
         if self.performance_monitor:
             with self.performance_monitor.track_operation('graph_search'):
-                return await self._execute_hybrid_search_internal(query, top_k, template_cypher)
+                return await self._execute_hybrid_search_internal(query, top_k, template_cypher, use_multimodal)
         else:
-            return await self._execute_hybrid_search_internal(query, top_k, template_cypher)
+            return await self._execute_hybrid_search_internal(query, top_k, template_cypher, use_multimodal)
 
     def _refine_template_with_conditions(self, query: str, template_cypher: str, top_k: int,
                                          paper_ids: Optional[List[str]] = None) -> tuple:
@@ -742,8 +750,17 @@ class HybridRetrievalHandler:
         """Extract non-empty paper_id values from result dicts."""
         return [r.get('paper_id') for r in results if r.get('paper_id')]
 
-    async def _execute_hybrid_search_internal(self, query: str, top_k: int, template_cypher: str = None) -> tuple:
+    async def _execute_hybrid_search_internal(self, query: str, top_k: int,
+                                               template_cypher: str = None,
+                                               use_multimodal: bool = False) -> tuple:
         """Internal neo4j search implementation with caching.
+
+        Args:
+            query: User's natural language query
+            top_k: Maximum number of results
+            template_cypher: Optional template key or raw Cypher text
+            use_multimodal: When True, use CLIP cross-modal visual search for
+                vector-first discovery; when False, use keyword-only SciBERT search.
 
         Returns:
             (results, template_info, visual_data) tuple where template_info
@@ -882,12 +899,20 @@ class HybridRetrievalHandler:
                     f"Injected {len(or_conditions)} OR conditions into '{template_key}': "
                     f"{or_conditions}"
                 )
-
+            visual_data = None
+            final_pids = []
             if needs_paper_ids and not has_paper_ids:
                 # ── Branch 1: Vector-first ──
                 # Template needs paper_ids but query has none → discover via vector search
-                vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
-                sorted_ids = self._extract_paper_ids(vector_results)
+                if use_multimodal:
+                    sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
+                    # Build score_map from multimodal_scores (higher = better → invert for sort)
+                    multimodal_scores = visual_data.get('multimodal_scores', {})
+                    score_map = {pid: -score for pid, score in multimodal_scores.items()}
+                    vector_results = visual_data.get('vector_results', [])
+                else:
+                    vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
+                    sorted_ids = self._extract_paper_ids(vector_results)
 
                 # Inject discovered IDs and rebuild parameters
                 extracted.setdefault('paper_ids', []).extend(sorted_ids)
@@ -911,7 +936,6 @@ class HybridRetrievalHandler:
                     results = results[:top_k]
 
                 final_pids = self._extract_paper_ids(results)
-                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_pids) if final_pids else empty_visual
 
             else:
                 # ── Branch 2: Graph + Vector merge ──
@@ -925,8 +949,14 @@ class HybridRetrievalHandler:
 
                 graph_pids = set(self._extract_paper_ids(graph_results))
 
-                # Keyword vector search
-                vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
+                # Keyword vector search (or multimodal)
+                if use_multimodal:
+                    sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
+                    multimodal_scores = visual_data.get('multimodal_scores', {})
+                    score_map = {pid: -score for pid, score in multimodal_scores.items()}
+                    vector_results = visual_data.get('vector_results', [])
+                else:
+                    vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
                 vector_only_ids = [pid for pid in self._extract_paper_ids(vector_results) if pid not in graph_pids]
 
                 # Enrich vector-only papers with graph metadata
@@ -946,6 +976,8 @@ class HybridRetrievalHandler:
                 results = merged[:top_k]
 
                 final_pids = self._extract_paper_ids(results)
+             
+            if not visual_data:
                 visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_pids) if final_pids else empty_visual
 
             # Step 5: Cache the result
