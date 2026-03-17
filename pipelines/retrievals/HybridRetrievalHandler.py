@@ -292,7 +292,7 @@ class HybridRetrievalHandler:
         author_names = self._extract_author_names(query)
         if author_names:
             # Check if the template already filters by author name in its WHERE clause
-            # (e.g. coauthor_network uses a1.name, search_by_author uses a.name)
+            # (e.g. coauthor_network uses a1.name, search_papers uses a.name)
             template_already_filters_author = bool(
                 re.search(r'toLower\(\s*\w+\.name\s*\)\s*CONTAINS', template_cypher)
                 and '$author_names' in template_cypher
@@ -483,6 +483,215 @@ class HybridRetrievalHandler:
                 params[param] = param_defaults[param]
         return params
 
+    def _build_or_conditions(
+        self, cypher: str, extracted: Dict, template_key: str
+    ) -> tuple:
+        """Build OR conditions from extracted entities for the given template.
+
+        For the unified `search_papers` template (no built-in WHERE), every
+        extracted entity becomes an OR condition so that any matching dimension
+        surfaces results.
+
+        For specialised templates (coauthor_network, search_citations, etc.),
+        only entities NOT already handled by the template are added.
+
+        Returns:
+            (or_conditions, extra_params) — list of Cypher condition strings
+            and a dict of parameter values to merge into the query parameters.
+        """
+        or_conditions: List[str] = []
+        extra_params: Dict = {}
+
+        # --- Author names ---
+        author_names = extracted.get('author_names', [])
+        if author_names and '$author_names' not in cypher:
+            author_var_match = re.search(r'\((\w+):Author\)', cypher)
+            if author_var_match:
+                var = author_var_match.group(1)
+                or_conditions.append(
+                    f'any(name IN $author_names WHERE toLower({var}.name) CONTAINS toLower(name))'
+                )
+                extra_params['author_names'] = author_names
+
+        # --- Keywords ---
+        keywords = extracted.get('keywords', [])
+        if keywords and '$keywords' not in cypher:
+            or_conditions.append(
+                'any(keyword IN $or_keywords WHERE '
+                'toLower(p.title) CONTAINS toLower(keyword) OR '
+                'toLower(p.abstract) CONTAINS toLower(keyword))'
+            )
+            extra_params['or_keywords'] = keywords
+
+        # --- Venue ---
+        venue = extracted.get('venue', '')
+        if venue and '$venue_name' not in cypher and ':Venue' in cypher:
+            or_conditions.append('toLower(v.name) CONTAINS toLower($or_venue_name)')
+            extra_params['or_venue_name'] = venue
+
+        # --- Institution ---
+        institution = extracted.get('institution', '')
+        if institution and '$institution_name' not in cypher and ':Institution' in cypher:
+            or_conditions.append('toLower(inst.name) CONTAINS toLower($or_institution_name)')
+            extra_params['or_institution_name'] = institution
+
+        # --- Year ---
+        year = extracted.get('year', '')
+        if year and '$year' not in cypher:
+            or_conditions.append(f"p.publication_date STARTS WITH $or_year")
+            extra_params['or_year'] = year
+
+        # --- Year range ---
+        year_from = extracted.get('year_from', '')
+        year_to = extracted.get('year_to', '')
+        if year_from and '$year_from' not in cypher:
+            or_conditions.append(
+                "p.publication_date >= $or_year_from AND p.publication_date < $or_year_to"
+            )
+            extra_params['or_year_from'] = year_from
+            extra_params['or_year_to'] = year_to or '2099'
+
+        return or_conditions, extra_params
+
+    @staticmethod
+    def _inject_or_conditions(cypher: str, or_conditions: List[str]) -> str:
+        """Append OR conditions to the existing WHERE clause in a Cypher query.
+
+        If the template has a WHERE clause, wraps the original conditions and
+        the new OR conditions:  WHERE (original) OR (cond1) OR (cond2) ...
+
+        If no WHERE clause exists, injects WHERE (cond1 OR cond2 ...) after
+        the first MATCH.
+        """
+        if not or_conditions:
+            return cypher
+
+        or_str = ' OR '.join(or_conditions)
+        lines = cypher.strip().split('\n')
+        new_lines = []
+        injected = False
+        i = 0
+
+        # Terminators: lines that signal the end of a WHERE clause body
+        _terminators = ('OPTIONAL', 'RETURN', 'ORDER', 'LIMIT', 'WITH')
+
+        while i < len(lines):
+            stripped = lines[i].strip().upper()
+
+            if not injected and stripped.startswith('WHERE'):
+                # Found the WHERE clause — collect it + continuation lines
+                where_idx = lines[i].upper().index('WHERE')
+                prefix = lines[i][:where_idx]
+                where_body_parts = [lines[i][where_idx + 5:].strip()]
+                i += 1
+
+                # Gather continuation lines that are part of the WHERE body
+                while i < len(lines):
+                    next_stripped = lines[i].strip().upper()
+                    is_terminator = any(
+                        next_stripped.startswith(t) for t in _terminators
+                    ) or (next_stripped.startswith('MATCH') and not next_stripped.startswith('OPTIONAL'))
+                    if is_terminator or not lines[i].strip():
+                        break
+                    where_body_parts.append(lines[i].rstrip())
+                    i += 1
+
+                full_original = '\n'.join(where_body_parts).strip()
+                new_lines.append(f'{prefix}WHERE ({full_original})\n  OR {or_str}')
+                injected = True
+                continue  # don't increment i — next line is already at i
+
+            # Fallback: if no WHERE found yet and we hit OPTIONAL/RETURN/etc,
+            # insert WHERE before it (template had no WHERE clause)
+            if not injected and (
+                stripped.startswith('OPTIONAL') or
+                stripped.startswith('RETURN') or
+                stripped.startswith('ORDER') or
+                stripped.startswith('LIMIT')
+            ):
+                new_lines.append(f'WHERE {or_str}')
+                injected = True
+
+            new_lines.append(lines[i])
+            i += 1
+
+        return '\n'.join(new_lines)
+
+    # ── Shared helpers for hybrid search branches ──────────────────────────
+
+    async def _keyword_vector_search(
+        self, query: str, keywords: List[str], top_k: int
+    ) -> tuple:
+        """Run full-query + per-keyword vector search, deduplicate, and rank.
+
+        Returns:
+            (deduped_results, score_map) where deduped_results is a list of
+            paper dicts sorted by best distance (ascending) and score_map is
+            {paper_id: best_distance}.
+        """
+        score_map: Dict[str, float] = {}
+        all_results: List[Dict] = []
+
+        # Full-query vector search
+        base = await self._execute_vector_search_internal(query, top_k)
+        all_results.extend(base)
+
+        # Per-keyword vector search
+        for kw in keywords:
+            kw_results = await self._execute_vector_search_internal(kw, top_k)
+            all_results.extend(kw_results)
+
+        # Build score map (keep best / lowest distance per paper)
+        for paper in all_results:
+            pid = paper.get('paper_id')
+            if not pid:
+                continue
+            dist = paper.get('distance', 0.0)
+            if pid not in score_map or dist < score_map[pid]:
+                score_map[pid] = dist
+
+        # Deduplicate, sort by distance, trim to top_k
+        seen: set = set()
+        deduped: List[Dict] = []
+        for r in all_results:
+            pid = r.get('paper_id')
+            if pid and pid not in seen:
+                seen.add(pid)
+                deduped.append(r)
+        deduped.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+        return deduped[:top_k], score_map
+
+    async def _enrich_via_graph(
+        self, paper_ids: List[str], score_map: Dict[str, float],
+        fallback_results: List[Dict]
+    ) -> List[Dict]:
+        """Enrich paper IDs with full graph metadata via search_by_paper_ids.
+
+        Falls back to *fallback_results* if the graph query fails.
+        Results are re-sorted by vector distance from *score_map*.
+        """
+        if not paper_ids:
+            return fallback_results
+
+        try:
+            tpl = self.GRAPH_TEMPLATES.get('search_by_paper_ids', {})
+            if tpl:
+                cypher = tpl['cypher'].strip()
+                params = self._params_paper_ids({'paper_ids': paper_ids}, len(paper_ids))
+                results = await run_blocking(self.graph_handler.execute_query, cypher, params)
+                results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+                logger.info(f"Enriched {len(results)} papers via search_by_paper_ids")
+                return results if results else fallback_results
+        except Exception as e:
+            logger.warning(f"Graph enrichment failed ({e}), using raw vector results")
+
+        return fallback_results
+
+    @staticmethod
+    def _extract_paper_ids(results: List[Dict]) -> List[str]:
+        """Extract non-empty paper_id values from result dicts."""
+        return [r.get('paper_id') for r in results if r.get('paper_id')]
+
     async def _execute_hybrid_search_internal(self, query: str, top_k: int, template_cypher: str = None) -> tuple:
         """Internal neo4j search implementation with caching.
 
@@ -561,7 +770,7 @@ class HybridRetrievalHandler:
             logger.info(f"Extracted entities: {extracted}")
 
             # Step 2: AI agent selects the best template
-            # template_cypher can be a template KEY name (e.g. "search_by_institution")
+            # template_cypher can be a template KEY name (e.g. "search_papers")
             # or raw Cypher text passed from the API.
             if template_cypher:
                 if template_cypher in self.GRAPH_TEMPLATES:
@@ -610,17 +819,32 @@ class HybridRetrievalHandler:
 
             cypher_query = template['cypher'].strip()
 
-            if needs_paper_ids and not has_paper_ids:
-                # Vector-first: use multimodal search to get re-ranked paper IDs + visual data
-                sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
+            # Step 4b: Inject OR conditions for extra extracted entities
+            # If the user's query has entities beyond what the template filters,
+            # add them as OR conditions to broaden results.
+            or_conditions, extra_params = self._build_or_conditions(
+                cypher_query, extracted, template_key
+            )
+            if or_conditions:
+                cypher_query = self._inject_or_conditions(cypher_query, or_conditions)
+                parameters.update(extra_params)
+                logger.info(
+                    f"Injected {len(or_conditions)} OR conditions into '{template_key}': "
+                    f"{or_conditions}"
+                )
 
-                # Inject discovered paper IDs into extracted entities and rebuild parameters
+            if needs_paper_ids and not has_paper_ids:
+                # ── Branch 1: Vector-first ──
+                # Template needs paper_ids but query has none → discover via vector search
+                vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
+                sorted_ids = self._extract_paper_ids(vector_results)
+
+                # Inject discovered IDs and rebuild parameters
                 extracted.setdefault('paper_ids', []).extend(sorted_ids)
                 parameters = param_builder(extracted, top_k)
+                logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for '{template_key}'")
 
-                logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for template '{template_key}'")
-
-                # Execute graph query with fallback to vector results on failure
+                # Execute graph query with vector fallback
                 try:
                     results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
                     logger.info(f"Graph search returned {len(results)} results")
@@ -628,152 +852,51 @@ class HybridRetrievalHandler:
                     logger.warning(f"Graph query failed ({e}), falling back to vector results")
                     results = []
 
-                # If graph returned 0 results, fall back to vector results
-                if not results and visual_data.get('vector_results'):
-                    results = visual_data['vector_results'][:top_k]
-                    logger.info(f"Graph returned 0 results, falling back to {len(results)} vector results")
+                if not results and vector_results:
+                    results = vector_results
+                    logger.info(f"Graph returned 0, falling back to {len(results)} vector results")
 
-                # Update visual data with final graph paper IDs
-                graph_paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
-                if graph_paper_ids:
-                    visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
+                if results:
+                    results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+                    results = results[:top_k]
 
-            elif template_key != 'search_by_keywords':
-                # Graph-first: run graph query, then use vector search to re-rank
-                try:
-                    results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-                    logger.info(f"Graph search returned {len(results)} results")
-                except Exception as e:
-                    logger.warning(f"Graph query failed ({e}), falling back to vector search")
-                    results = []
+                final_pids = self._extract_paper_ids(results)
+                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_pids) if final_pids else empty_visual
 
-                paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
-
-                # If graph failed or returned 0, fall back to keyword vector search
-                if not results:
-                    # Search each keyword independently and merge by best distance
-                    vector_score_map = {}  # paper_id → best distance
-                    all_vector_results = []
-                    for keyword in keywords:
-                        kw_results = await self._execute_vector_search_internal(keyword, top_k)
-                        all_vector_results.extend(kw_results)
-                        for paper in kw_results:
-                            p_id = paper.get('paper_id')
-                            dist = paper.get('distance', 0.0)
-                            if p_id not in vector_score_map or dist < vector_score_map[p_id]:
-                                vector_score_map[p_id] = dist
-
-                    # Deduplicate and sort by distance (ascending = most similar)
-                    seen = set()
-                    deduped = []
-                    for r in all_vector_results:
-                        pid = r.get('paper_id')
-                        if pid and pid not in seen:
-                            seen.add(pid)
-                            deduped.append(r)
-                    deduped.sort(key=lambda r: vector_score_map.get(r.get('paper_id'), float('inf')))
-                    paper_ids = [r.get('paper_id') for r in deduped[:top_k] if r.get('paper_id')]
-
-                    # Enrich with graph metadata via search_by_paper_ids
-                    if paper_ids:
-                        try:
-                            paper_ids_template = self.GRAPH_TEMPLATES.get('search_by_paper_ids', {})
-                            if paper_ids_template:
-                                enrich_cypher = paper_ids_template['cypher'].strip()
-                                enrich_params = self._params_paper_ids({'paper_ids': paper_ids}, len(paper_ids))
-                                results = await run_blocking(
-                                    self.graph_handler.execute_query, enrich_cypher, enrich_params
-                                )
-                                # Re-sort enriched results by vector distance
-                                results.sort(
-                                    key=lambda r: vector_score_map.get(r.get('paper_id'), float('inf'))
-                                )
-                                logger.info(f"Vector fallback: enriched {len(results)} papers via search_by_paper_ids")
-                        except Exception as e:
-                            logger.warning(f"Graph enrichment failed ({e}), using raw vector results")
-                            results = deduped[:top_k]
-
-                    if not results:
-                        results = deduped[:top_k]
-
-                    logger.info(f"Keyword vector fallback returned {len(results)} results")
-                elif paper_ids:
-                    # Re-rank graph results using vector similarity scores
-                    vector_scores = {}
-                    for pid in paper_ids:
-                        vector_results = await self._execute_vector_search_internal(pid, top_k)
-                        for paper in vector_results:
-                            p_id = paper.get('paper_id')
-                            dist = paper.get('distance', 0.0)
-                            if p_id not in vector_scores or dist < vector_scores[p_id]:
-                                vector_scores[p_id] = dist
-
-                    # Re-sort results by vector distance (ascending = more similar)
-                    if vector_scores:
-                        results.sort(
-                            key=lambda r: vector_scores.get(r.get('paper_id'), float('inf'))
-                        )
-                        results = results[:top_k]
-
-                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=paper_ids)
             else:
-                # search_by_keywords: run both graph and vector, merge and re-rank
+                # ── Branch 2: Graph + Vector merge ──
+                # Run graph query, run keyword vector search, merge and re-rank
                 try:
                     graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+                    logger.info(f"Graph search returned {len(graph_results)} results")
                 except Exception as e:
-                    logger.warning(f"Graph query failed ({e}), continuing with vector-only results")
+                    logger.warning(f"Graph query failed ({e}), continuing with vector-only")
                     graph_results = []
 
-                graph_paper_ids = [r.get('paper_id') for r in graph_results if r.get('paper_id')]
-                logger.info(f"Graph search returned {len(graph_results)} results")
+                graph_pids = set(self._extract_paper_ids(graph_results))
 
-                # Vector search on the original query
-                vector_results = await self._execute_vector_search_internal(query=query, top_k=top_k)
-                vector_paper_ids = [r.get('paper_id') for r in vector_results if r.get('paper_id')]
+                # Keyword vector search
+                vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
+                vector_only_ids = [pid for pid in self._extract_paper_ids(vector_results) if pid not in graph_pids]
 
-                # Enrich vector results with graph metadata via search_by_paper_ids template
-                # so they have the same schema as graph results (authors, venue, doi, etc.)
-                vector_enriched = []
-                vector_only_ids = [pid for pid in vector_paper_ids if pid not in set(graph_paper_ids)]
-                if vector_only_ids:
-                    try:
-                        paper_ids_template = self.GRAPH_TEMPLATES.get('search_by_paper_ids', {})
-                        if paper_ids_template:
-                            enrich_cypher = paper_ids_template['cypher'].strip()
-                            enrich_params = self._params_paper_ids({'paper_ids': vector_only_ids}, len(vector_only_ids))
-                            vector_enriched = await run_blocking(
-                                self.graph_handler.execute_query, enrich_cypher, enrich_params
-                            )
-                            logger.info(f"Enriched {len(vector_enriched)} vector-only papers via search_by_paper_ids")
-                    except Exception as e:
-                        logger.warning(f"Graph enrichment failed ({e}), using raw vector results")
-                        # Fall back to raw vector results (without graph metadata)
-                        vector_enriched = [r for r in vector_results if r.get('paper_id') not in set(graph_paper_ids)]
-
-                # Build a score map from vector results for re-ranking
-                vector_score_map = {}
-                for paper in vector_results:
-                    p_id = paper.get('paper_id')
-                    dist = paper.get('distance', 0.0)
-                    if p_id not in vector_score_map or dist < vector_score_map[p_id]:
-                        vector_score_map[p_id] = dist
-
-                # Merge results: graph results + enriched vector-only results
-                graph_pid_set = set(graph_paper_ids)
-                merged_results = list(graph_results)
-                for vr in vector_enriched:
-                    if vr.get('paper_id') not in graph_pid_set:
-                        merged_results.append(vr)
-
-                # Re-rank merged results by vector similarity (papers without vector score go last)
-                merged_results.sort(
-                    key=lambda r: vector_score_map.get(r.get('paper_id'), float('inf'))
+                # Enrich vector-only papers with graph metadata
+                vector_enriched = await self._enrich_via_graph(
+                    vector_only_ids, score_map,
+                    [r for r in vector_results if r.get('paper_id') not in graph_pids]
                 )
-                results = merged_results[:top_k]
 
-                # Visual search on the merged paper IDs
-                final_paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
-                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_paper_ids)
+                # Merge: graph results + enriched vector-only results
+                merged = list(graph_results)
+                for vr in vector_enriched:
+                    if vr.get('paper_id') not in graph_pids:
+                        merged.append(vr)
+
+                # Re-rank by vector similarity
+                merged.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+                results = merged[:top_k]
+
+                final_pids = self._extract_paper_ids(results)
+                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_pids) if final_pids else empty_visual
 
             # Step 5: Cache the result
             if self.cache_manager:
@@ -1007,12 +1130,6 @@ class HybridRetrievalHandler:
     # in the extracted dict (non-empty).
     TRIGGER_TO_ENTITY_KEYS: Dict[str, List[str]] = {
         'paper_ids': ['paper_ids'],
-        'author_names': ['author_names'],
-        'keywords': ['keywords'],
-        'venue': ['venue'],
-        'institution': ['institution'],
-        'year': ['year'],
-        'year_range': ['year_from'],
         'citations': ['paper_ids', 'wants_citations'],
         'coauthor': ['author_names', 'wants_coauthors'],
         'top_cited': ['wants_top_cited'],
@@ -1027,8 +1144,8 @@ class HybridRetrievalHandler:
         specific entity (e.g. top_cited_papers when the intent flag is set)
         are also included.
 
-        search_by_keywords is always viable as an ultimate fallback because
-        keywords are extracted from virtually every query.
+        search_papers is always viable as an ultimate fallback because
+        it dynamically adds OR conditions for any extracted entities.
         """
         viable = []
         for tpl_key, tpl in self.GRAPH_TEMPLATES.items():
@@ -1048,9 +1165,9 @@ class HybridRetrievalHandler:
             if all_satisfied:
                 viable.append(tpl_key)
 
-        # search_by_keywords is always a valid fallback
-        if 'search_by_keywords' not in viable:
-            viable.append('search_by_keywords')
+        # search_papers is always a valid fallback (no triggers required)
+        if 'search_papers' not in viable:
+            viable.append('search_papers')
 
         return viable
 
@@ -1060,15 +1177,9 @@ class HybridRetrievalHandler:
         'search_by_paper_ids',
         'search_citations',
         'coauthor_network',
-        'search_author_by_keywords',
-        'search_by_author',
         'author_venue_stats',
         'top_cited_papers',
-        'search_by_venue',
-        'search_by_institution',
-        'search_by_year_range',
-        'search_by_year',
-        'search_by_keywords',  # ultimate fallback — always viable
+        'search_papers',  # universal fallback — handles all search_by_* via OR conditions
     ]
 
     def _rank_viable_templates(self, extracted: Dict) -> List[str]:
@@ -1078,7 +1189,7 @@ class HybridRetrievalHandler:
         is present and truthy in *extracted*.  The result is sorted according
         to TEMPLATE_PRIORITY so the top entry is the deterministic best pick.
 
-        search_by_keywords is always appended as a fallback.
+        search_papers is always appended as a fallback.
         """
         viable = self._get_viable_templates(extracted)
 
@@ -1111,7 +1222,7 @@ class HybridRetrievalHandler:
 
         # Fast path: single candidate or no AI agent
         if len(candidates) <= 1 or not self.ai_agent:
-            selected = candidates[0] if candidates else 'search_by_keywords'
+            selected = candidates[0] if candidates else 'search_papers'
             logger.info(f"Template selected (deterministic): {selected}")
             return selected
 
@@ -1128,17 +1239,27 @@ class HybridRetrievalHandler:
                 f'Extracted entities: {extracted}\n\n'
                 f'Pick the single best template from this list:\n'
                 f'{options}\n\n'
-                f'Reply with ONLY the template key (e.g. search_by_author). '
-                f'No explanation.'
+                f'Rules:\n'
+                f'- Use search_papers for any general paper search (by author, keywords, venue, year, etc.)\n'
+                f'- Use search_by_paper_ids ONLY when explicit paper IDs (W...) are given\n'
+                f'- Use search_citations ONLY when the user asks about citations\n'
+                f'- Use coauthor_network ONLY when the user asks about co-authors/collaborators\n'
+                f'- Use author_venue_stats ONLY when the user asks which venues an author publishes in\n'
+                f'- Use top_cited_papers ONLY when the user asks for most cited/influential papers\n\n'
+                f'Reply with ONLY the template key. No explanation.'
             )
 
             raw = await run_blocking(
                 self.ai_agent.generate_content,
                 prompt=prompt,
                 system_prompt=(
-                    'You are a query router. Given a user query and its '
-                    'extracted entities, pick the single most appropriate '
-                    'Neo4j template key from the provided list. '
+                    'You are a query router. Pick the single best Neo4j '
+                    'template key from the list. search_papers is the '
+                    'universal template for general paper search — it '
+                    'dynamically adds OR conditions for authors, keywords, '
+                    'venue, institution, year. Only pick a specialised '
+                    'template when the query specifically asks for that '
+                    'feature (citations, co-authors, venue stats, top cited). '
                     'Reply with ONLY the key.'
                 ),
                 purpose='template_selection',
@@ -1326,37 +1447,26 @@ class HybridRetrievalHandler:
     def _params_paper_ids(self, extracted: Dict, top_k: int) -> Dict:
         return {"paper_ids": extracted.get('paper_ids', []), "limit": top_k}
 
-    def _params_author(self, extracted: Dict, top_k: int) -> Dict:
-        return {"author_names": extracted.get('author_names', []), "limit": top_k}
-
-    def _params_keywords(self, extracted: Dict, top_k: int) -> Dict:
-        return {"keywords": extracted.get('keywords', []), "limit": top_k}
-
-    def _params_venue(self, extracted: Dict, top_k: int) -> Dict:
-        return {"venue_name": extracted.get('venue', ''), "limit": top_k}
-
-    def _params_institution(self, extracted: Dict, top_k: int) -> Dict:
-        return {"institution_name": extracted.get('institution', ''), "limit": top_k}
-
-    def _params_year(self, extracted: Dict, top_k: int) -> Dict:
-        return {"year": extracted.get('year', ''), "limit": top_k}
-
-    def _params_year_range(self, extracted: Dict, top_k: int) -> Dict:
-        return {"year_from": extracted.get('year_from', '1900'), "year_to": extracted.get('year_to', '2099'),
-                "limit": top_k}
-
     def _params_citations(self, extracted: Dict, top_k: int) -> Dict:
         return {"paper_ids": extracted.get('paper_ids', []), "limit": top_k}
-
-    def _params_author_keywords(self, extracted: Dict, top_k: int) -> Dict:
-        return {"author_names": extracted.get('author_names', []), "keywords": extracted.get('keywords', []),
-                "limit": top_k}
 
     def _params_top_cited(self, extracted: Dict, top_k: int) -> Dict:
         return {"limit": top_k}
 
     def _params_coauthor(self, extracted: Dict, top_k: int) -> Dict:
         return {"author_names": extracted.get('author_names', []), "limit": top_k}
+
+    def _params_author_venues(self, extracted: Dict, top_k: int) -> Dict:
+        return {"author_names": extracted.get('author_names', []), "limit": top_k}
+
+    def _params_search(self, extracted: Dict, top_k: int) -> Dict:
+        """Build parameters for the unified search_papers template.
+
+        Since search_papers has no WHERE clause by default (conditions are
+        injected dynamically via _build_or_conditions), this only needs the
+        limit.  All other params are added by _build_or_conditions.
+        """
+        return {"limit": top_k}
 
     # =========================================================================
     # BUILD INTELLIGENT CYPHER — Main entry point for graph search
@@ -1508,13 +1618,10 @@ Write a single paragraph of 5-6 sentences answering the question. No bullet poin
                 "State the paper's exact title, authors, venue, year, and DOI from the evidence.\n"
                 "Include citation count if listed. Summarize the abstract in 1-2 sentences."
             ),
-            "search_by_author": (
-                "List the author's papers found, citing exact titles, venues, and years from the evidence.\n"
-                "Mention the most cited work if citation counts are available."
-            ),
-            "search_by_keywords": (
+            "search_papers": (
                 "Identify which paper(s) best answer the question, citing exact titles and authors.\n"
-                "Summarize the most relevant finding in 2-3 sentences using only the abstracts provided."
+                "Summarize the most relevant finding in 2-3 sentences using only the abstracts provided.\n"
+                "If results span authors, venues, or years, note those dimensions too."
             ),
             "search_citations": (
                 "Describe the citation relationships using only the papers listed in the evidence.\n"
@@ -1523,26 +1630,6 @@ Write a single paragraph of 5-6 sentences answering the question. No bullet poin
             "coauthor_network": (
                 "List the co-authored papers with exact titles, venues, and years from the evidence.\n"
                 "Describe the collaboration scope briefly."
-            ),
-            "search_by_venue": (
-                "List the papers from the venue, citing exact titles and authors from the evidence.\n"
-                "Mention citation counts if available."
-            ),
-            "search_by_institution": (
-                "List papers from the institution with exact titles and authors from the evidence.\n"
-                "Note the research areas covered."
-            ),
-            "search_by_year": (
-                "List the papers from the requested period with exact titles and authors.\n"
-                "Highlight the most cited if counts are available."
-            ),
-            "search_by_year_range": (
-                "List papers from the time range with exact titles and authors.\n"
-                "Note any trends visible from the evidence."
-            ),
-            "search_author_by_keywords": (
-                "List the author's papers matching the topic, citing exact titles and years.\n"
-                "Summarize how the work relates to the topic in 1-2 sentences."
             ),
             "top_cited_papers": (
                 "List the most cited papers with their exact citation counts, titles, and authors.\n"
