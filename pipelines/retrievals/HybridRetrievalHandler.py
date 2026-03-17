@@ -1332,16 +1332,28 @@ class HybridRetrievalHandler:
         """
         prompt = (
             f'Query: "{query}"\n'
-            f'Extract as JSON: {{"paper_ids":[],"author_names":[],"keywords":[],'
+            f'Extract ONLY entities that are EXPLICITLY mentioned in the query.\n'
+            f'Output JSON: {{"paper_ids":[],"author_names":[],"keywords":[],'
             f'"year":"","year_from":"","year_to":"","venue":"","institution":"",'
             f'"wants_citations":false,"wants_coauthors":false,"wants_top_cited":false}}\n'
-            f'Omit empty keys. JSON:'
+            f'CRITICAL RULES:\n'
+            f'- NEVER invent or guess values. Only extract what the user wrote.\n'
+            f'- If a field has no value in the query, leave it empty ([] or "").\n'
+            f'- author_names: only include names explicitly stated in the query.\n'
+            f'- paper_ids: IDs that start with W followed by digits (e.g. W1234567).\n'
+            f'- keywords: only topical terms from the query, NOT author names or paper IDs.\n'
+            f'JSON:'
         )
 
         raw = await run_blocking(
             self.ai_agent.generate_content,
             prompt=prompt,
-            system_prompt='Extract entities from academic queries. Return ONLY valid JSON.',
+            system_prompt=(
+                'You extract entities from academic search queries. '
+                'Return ONLY valid JSON. NEVER invent or hallucinate values. '
+                'If a field is not present in the query, leave it empty. '
+                'Do NOT guess author names, venues, or institutions.'
+            ),
             purpose='entity_extraction',
         )
 
