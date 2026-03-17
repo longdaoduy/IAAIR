@@ -899,7 +899,7 @@ async def list_graph_ai_templates():
 
         # Map of template keys to icons
         icon_map = {
-            'search_by_paper_ids': '🆔', 'search_by_author': '👤',
+            'search_by_author': '👤',
             'search_by_keywords': '🔑', 'search_by_venue': '🏛️',
             'search_by_institution': '🏫', 'search_by_year': '📅',
             'search_citations': '🔗', 'search_author_by_keywords': '👤🔑',

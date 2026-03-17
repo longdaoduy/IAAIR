@@ -45,6 +45,7 @@ class MilvusClient:
 
     def _get_figures_collection(self) -> Optional[Collection]:
         """Get or create cached figures Collection object."""
+        self._ensure_connection()
         if self._figures_collection is None:
             collection_name = "figures_collection"
             if not utility.has_collection(collection_name):
@@ -55,6 +56,7 @@ class MilvusClient:
 
     def _get_tables_collection(self) -> Optional[Collection]:
         """Get or create cached tables Collection object."""
+        self._ensure_connection()
         if self._tables_collection is None:
             collection_name = "tables_collection"
             if not utility.has_collection(collection_name):
@@ -88,6 +90,34 @@ class MilvusClient:
         except Exception as e:
             print(f"❌ Failed to connect to Zilliz: {e}")
             return False
+
+    def _ensure_connection(self):
+        """Re-establish the Zilliz connection on the current thread if needed.
+
+        pymilvus stores connections in thread-local storage.  When search
+        methods are called from a different thread (e.g. via run_blocking /
+        ThreadPoolExecutor), the connection created during startup is not
+        visible.  This method silently reconnects on the current thread so
+        that subsequent pymilvus operations succeed.
+        """
+        try:
+            # Fast check: if the connection already exists on this thread, no-op.
+            addr = connections.get_connection_addr("default")
+            if addr and addr.get("uri"):
+                return
+        except Exception:
+            pass
+
+        # Connection missing on this thread — reconnect using stored config.
+        try:
+            connections.connect(
+                alias="default",
+                uri=self.config.uri,
+                token=self.config.token,
+                secure=True,
+            )
+        except Exception as e:
+            print(f"⚠️ Thread-local Milvus reconnect failed: {e}")
 
     def create_collection_schema(self, embedding_dim: int) -> CollectionSchema:
         """Create collection schema for paper embeddings with hybrid search support.
@@ -797,6 +827,7 @@ class MilvusClient:
         Returns:
             List of search results
         """
+        self._ensure_connection()
         search_params = {
             "metric_type": self.config.metric_type,
             "params": {"nprobe": min(32, max(1, top_k))}
@@ -837,6 +868,7 @@ class MilvusClient:
         Returns:
             List of search results
         """
+        self._ensure_connection()
         try:
             # Generate sparse embedding for the query
             sparse_embedding = self.generate_sparse_embedding(query_text)

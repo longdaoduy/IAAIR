@@ -202,6 +202,7 @@ class HybridRetrievalHandler:
         """
         try:
             if not self.milvus_client.collection:
+                self.milvus_client._ensure_connection()
                 self.milvus_client.collection = Collection(self.milvus_client.config.collection_name)
                 self.milvus_client.collection.load()
 
@@ -519,6 +520,12 @@ class HybridRetrievalHandler:
         def _var_in_mandatory(var: str) -> bool:
             return f'({var}:' in mandatory_match_section or f' {var}:' in mandatory_match_section
 
+        # --- Paper IDs (always safe — references p which is in mandatory MATCH) ---
+        paper_ids = extracted.get('paper_ids', [])
+        if paper_ids and '$paper_ids' not in cypher:
+            or_conditions.append('p.id IN $paper_ids')
+            extra_params['paper_ids'] = paper_ids
+
         # --- Author names ---
         author_names = extracted.get('author_names', [])
         if author_names and '$author_names' not in cypher:
@@ -699,7 +706,7 @@ class HybridRetrievalHandler:
         self, paper_ids: List[str], score_map: Dict[str, float],
         fallback_results: List[Dict]
     ) -> List[Dict]:
-        """Enrich paper IDs with full graph metadata via search_by_paper_ids.
+        """Enrich paper IDs with full graph metadata via direct paper ID lookup.
 
         Falls back to *fallback_results* if the graph query fails.
         Results are re-sorted by vector distance from *score_map*.
@@ -708,14 +715,23 @@ class HybridRetrievalHandler:
             return fallback_results
 
         try:
-            tpl = self.GRAPH_TEMPLATES.get('search_by_paper_ids', {})
-            if tpl:
-                cypher = tpl['cypher'].strip()
-                params = self._params_paper_ids({'paper_ids': paper_ids}, len(paper_ids))
-                results = await run_blocking(self.graph_handler.execute_query, cypher, params)
-                results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
-                logger.info(f"Enriched {len(results)} papers via search_by_paper_ids")
-                return results if results else fallback_results
+            cypher = (
+                "MATCH (p:Paper)\n"
+                "WHERE p.id IN $paper_ids\n"
+                "OPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\n"
+                "OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\n"
+                "RETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n"
+                "       p.doi as doi, p.publication_date as publication_date,\n"
+                "       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n"
+                "       collect(DISTINCT a.name) as authors, v.name as venue\n"
+                "ORDER BY p.cited_by_count DESC"
+            )
+            params = {"paper_ids": paper_ids, "limit": len(paper_ids)}
+            results = await run_blocking(self.graph_handler.execute_query, cypher, params)
+            results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+            logger.info(f"Enriched {len(results)} papers via direct paper ID lookup")
+            if results:
+                return results
         except Exception as e:
             logger.warning(f"Graph enrichment failed ({e}), using raw vector results")
 
@@ -1163,7 +1179,6 @@ class HybridRetrievalHandler:
     # A template is "viable" only when ALL its required entity keys are present
     # in the extracted dict (non-empty).
     TRIGGER_TO_ENTITY_KEYS: Dict[str, List[str]] = {
-        'paper_ids': ['paper_ids'],
         'citations': ['paper_ids', 'wants_citations'],
         'coauthor': ['author_names', 'wants_coauthors'],
         'top_cited': ['wants_top_cited'],
@@ -1208,7 +1223,6 @@ class HybridRetrievalHandler:
     # Priority order for rule-based ranking (most specific → most generic).
     # Templates listed earlier are preferred when multiple are viable.
     TEMPLATE_PRIORITY: List[str] = [
-        'search_by_paper_ids',
         'search_citations',
         'coauthor_network',
         'author_venue_stats',
@@ -1260,6 +1274,18 @@ class HybridRetrievalHandler:
             logger.info(f"Template selected (deterministic): {selected}")
             return selected
 
+        # ── Deterministic overrides for unambiguous intent ──
+        # When the extracted entities clearly match a specialised template,
+        # skip the AI call to avoid mis-routing to search_papers.
+        has_paper_ids = bool(extracted.get('paper_ids'))
+        wants_citations = bool(extracted.get('wants_citations'))
+        wants_coauthors = bool(extracted.get('wants_coauthors'))
+        wants_top_cited = bool(extracted.get('wants_top_cited'))
+
+        if has_paper_ids and wants_citations and 'search_citations' in candidates:
+            logger.info("Template selected (deterministic override): search_citations")
+            return 'search_citations'
+
         # ── Let AI choose from the shortlist ──
         try:
             options = "\n".join(
@@ -1274,8 +1300,7 @@ class HybridRetrievalHandler:
                 f'Pick the single best template from this list:\n'
                 f'{options}\n\n'
                 f'Rules:\n'
-                f'- Use search_papers for any general paper search (by author, keywords, venue, year, etc.)\n'
-                f'- Use search_by_paper_ids ONLY when explicit paper IDs (W...) are given\n'
+                f'- Use search_papers for any general paper search (by author, keywords, venue, year, paper IDs, etc.)\n'
                 f'- Use search_citations ONLY when the user asks about citations\n'
                 f'- Use coauthor_network ONLY when the user asks about co-authors/collaborators\n'
                 f'- Use author_venue_stats ONLY when the user asks which venues an author publishes in\n'
@@ -1627,13 +1652,10 @@ Write a single paragraph of 5-6 sentences answering the question. No bullet poin
         tpl_key = template_info["template_key"]
 
         instructions_map = {
-            "search_by_paper_ids": (
-                "State the paper's exact title, authors, venue, year, and DOI from the evidence.\n"
-                "Include citation count if listed. Summarize the abstract in 1-2 sentences."
-            ),
             "search_papers": (
                 "Identify which paper(s) best answer the question, citing exact titles and authors.\n"
-                "Summarize the most relevant finding in 2-3 sentences using only the abstracts provided.\n"
+                "If looking up specific papers by ID, state the paper's exact title, authors, venue, year, and DOI.\n"
+                "Include citation count if listed. Summarize the most relevant finding in 2-3 sentences using only the abstracts provided.\n"
                 "If results span authors, venues, or years, note those dimensions too."
             ),
             "search_citations": (

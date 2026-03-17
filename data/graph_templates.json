@@ -1,14 +1,8 @@
 {
-  "search_by_paper_ids": {
-    "description": "Look up specific papers by their IDs (e.g. W12345)",
-    "triggers": ["paper_ids"],
-    "cypher": "MATCH (p:Paper)\nWHERE p.id IN $paper_ids\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nORDER BY p.cited_by_count DESC",
-    "param_builder": "_params_paper_ids"
-  },
   "search_papers": {
-    "description": "Search papers by any combination of: author names, keywords (title/abstract), venue/journal, institution, or year. The system dynamically injects OR conditions for every entity found in the query.",
+    "description": "Search papers by any combination of: author names, keywords (title/abstract), venue/journal, institution, paper IDs, or year. The system dynamically injects OR conditions for every entity found in the query.",
     "triggers": [],
-    "cypher": "MATCH (p:Paper)\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nOPTIONAL MATCH (p)-[:ASSOCIATED_WITH]->(inst:Institution)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue,\n       inst.name as institution\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
+    "cypher": "MATCH (p:Paper)\nWITH DISTINCT p\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nOPTIONAL MATCH (p)-[:ASSOCIATED_WITH]->(inst:Institution)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue,\n       inst.name as institution\nORDER BY p.cited_by_count DESC\nLIMIT $limit",
     "param_builder": "_params_search"
   },
   "search_citations": {
