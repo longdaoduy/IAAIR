@@ -647,18 +647,60 @@ class HybridRetrievalHandler:
                     logger.warning(f"Graph query failed ({e}), falling back to vector search")
                     results = []
 
-                graph_paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
+                paper_ids = [r.get('paper_id') for r in results if r.get('paper_id')]
 
-                # If graph failed or returned 0, fall back to multimodal vector search
+                # If graph failed or returned 0, fall back to keyword vector search
                 if not results:
-                    sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
-                    results = visual_data.get('vector_results', [])[:top_k]
-                    logger.info(f"Multimodal vector fallback returned {len(results)} results")
-                    # Skip re-ranking — multimodal search already re-ranked
-                elif graph_paper_ids:
+                    # Search each keyword independently and merge by best distance
+                    vector_score_map = {}  # paper_id → best distance
+                    all_vector_results = []
+                    for keyword in keywords:
+                        kw_results = await self._execute_vector_search_internal(keyword, top_k)
+                        all_vector_results.extend(kw_results)
+                        for paper in kw_results:
+                            p_id = paper.get('paper_id')
+                            dist = paper.get('distance', 0.0)
+                            if p_id not in vector_score_map or dist < vector_score_map[p_id]:
+                                vector_score_map[p_id] = dist
+
+                    # Deduplicate and sort by distance (ascending = most similar)
+                    seen = set()
+                    deduped = []
+                    for r in all_vector_results:
+                        pid = r.get('paper_id')
+                        if pid and pid not in seen:
+                            seen.add(pid)
+                            deduped.append(r)
+                    deduped.sort(key=lambda r: vector_score_map.get(r.get('paper_id'), float('inf')))
+                    paper_ids = [r.get('paper_id') for r in deduped[:top_k] if r.get('paper_id')]
+
+                    # Enrich with graph metadata via search_by_paper_ids
+                    if paper_ids:
+                        try:
+                            paper_ids_template = self.GRAPH_TEMPLATES.get('search_by_paper_ids', {})
+                            if paper_ids_template:
+                                enrich_cypher = paper_ids_template['cypher'].strip()
+                                enrich_params = self._params_paper_ids({'paper_ids': paper_ids}, len(paper_ids))
+                                results = await run_blocking(
+                                    self.graph_handler.execute_query, enrich_cypher, enrich_params
+                                )
+                                # Re-sort enriched results by vector distance
+                                results.sort(
+                                    key=lambda r: vector_score_map.get(r.get('paper_id'), float('inf'))
+                                )
+                                logger.info(f"Vector fallback: enriched {len(results)} papers via search_by_paper_ids")
+                        except Exception as e:
+                            logger.warning(f"Graph enrichment failed ({e}), using raw vector results")
+                            results = deduped[:top_k]
+
+                    if not results:
+                        results = deduped[:top_k]
+
+                    logger.info(f"Keyword vector fallback returned {len(results)} results")
+                elif paper_ids:
                     # Re-rank graph results using vector similarity scores
                     vector_scores = {}
-                    for pid in graph_paper_ids:
+                    for pid in paper_ids:
                         vector_results = await self._execute_vector_search_internal(pid, top_k)
                         for paper in vector_results:
                             p_id = paper.get('paper_id')
@@ -673,7 +715,7 @@ class HybridRetrievalHandler:
                         )
                         results = results[:top_k]
 
-                    visual_data = await self.search_visual_by_text(query, top_k, paper_ids=graph_paper_ids)
+                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=paper_ids)
             else:
                 # search_by_keywords: run both graph and vector, merge and re-rank
                 try:
