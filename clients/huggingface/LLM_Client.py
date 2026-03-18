@@ -125,6 +125,7 @@ class LLMClient:
     PURPOSE_TOKEN_LIMITS = {
         'routing':              32,   # just a label
         'template_selection':   24,   # single template key name
+        'strategy_selection':   24,   # graph_only / vector_first / graph_vector_merge
         'entity_extraction':    150,  # compact JSON dict
         'author_extraction':    64,   # list of names
         'cypher_generation':    128,  # Cypher query + params

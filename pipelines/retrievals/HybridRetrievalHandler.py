@@ -910,13 +910,44 @@ class HybridRetrievalHandler:
             requested_pids = set(extracted.get('paper_ids', []))
             final_pids = []
             score_map: Dict[str, float] = {}
-            if needs_paper_ids and not requested_pids:
-                # ── Branch 1: Vector-first ──
-                # Template needs paper_ids but query has none → discover via vector search
-                logger.info(f"Template '{template_key}' requires paper_ids but none extracted — running vector search first")
+
+            # ── AI-driven strategy selection ──
+            strategy = await self._select_search_strategy(
+                query, extracted, template_key, needs_paper_ids
+            )
+            template_info['search_strategy'] = strategy
+            logger.info(f"Search strategy: {strategy} (template={template_key})")
+
+            if strategy == 'graph_only':
+                # ── Graph-only: run the Neo4j query, no vector search ──
+                logger.info(f"Running graph-only search for template '{template_key}'")
+                try:
+                    results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+                    logger.info(f"Graph-only returned {len(results)} results")
+                except Exception as e:
+                    logger.warning(f"Graph-only query failed ({e})")
+                    results = []
+
+                # Deduplicate by paper_id
+                if results:
+                    seen_go: set = set()
+                    deduped_go: List[Dict] = []
+                    for r in results:
+                        pid = r.get('paper_id')
+                        if pid and pid not in seen_go:
+                            seen_go.add(pid)
+                            deduped_go.append(r)
+                        elif not pid:
+                            deduped_go.append(r)
+                    results = deduped_go
+
+                final_pids = self._extract_paper_ids(results)
+
+            elif strategy == 'vector_first':
+                # ── Vector-first: discover paper IDs via vector search, then graph ──
+                logger.info(f"Running vector-first search for template '{template_key}'")
                 if use_multimodal:
                     sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
-                    # Build score_map from multimodal_scores (higher = better → invert for sort)
                     multimodal_scores = visual_data.get('multimodal_scores', {})
                     score_map = {pid: -score for pid, score in multimodal_scores.items()}
                     vector_results = visual_data.get('vector_results', [])
@@ -943,24 +974,23 @@ class HybridRetrievalHandler:
 
                 if results:
                     # Deduplicate by paper_id
-                    seen_b1: set = set()
-                    deduped_b1: List[Dict] = []
+                    seen_vf: set = set()
+                    deduped_vf: List[Dict] = []
                     for r in results:
                         pid = r.get('paper_id')
-                        if pid and pid not in seen_b1:
-                            seen_b1.add(pid)
-                            deduped_b1.append(r)
+                        if pid and pid not in seen_vf:
+                            seen_vf.add(pid)
+                            deduped_vf.append(r)
                         elif not pid:
-                            deduped_b1.append(r)
-                    results = deduped_b1
+                            deduped_vf.append(r)
+                    results = deduped_vf
                     results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
 
                 final_pids = self._extract_paper_ids(results)
 
             else:
-                # ── Branch 2: Graph + Vector merge ──
-                # Run graph query, run keyword vector search, merge and re-rank
-                logger.info(f"Running graph + vector merge for template '{template_key}'")
+                # ── Graph + Vector merge: run both, merge, re-rank ──
+                logger.info(f"Running graph+vector merge for template '{template_key}'")
                 try:
                     graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
                     logger.info(f"Graph search returned {len(graph_results)} results")
@@ -979,13 +1009,10 @@ class HybridRetrievalHandler:
                 else:
                     vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
 
-                # ── Prioritize graph results over vector-only results ──
-                # Give every graph-discovered paper a score better (lower) than
-                # the best vector score so graph results always rank above
-                # vector-only papers after sorting.
+                # Prioritize graph results over vector-only results
                 if graph_pids and score_map:
                     best_vector = min(score_map.values())
-                    graph_boost = abs(best_vector) + 100.0  # comfortable gap
+                    graph_boost = abs(best_vector) + 100.0
                     for gid in graph_pids:
                         score_map[gid] = min(
                             score_map.get(gid, 0.0),
@@ -996,7 +1023,6 @@ class HybridRetrievalHandler:
                         f"(offset={graph_boost:.1f}) to prioritize over vector-only"
                     )
                 elif graph_pids and not score_map:
-                    # No vector results — assign graph papers a score of 0
                     for gid in graph_pids:
                         score_map[gid] = 0.0
 
@@ -1026,8 +1052,7 @@ class HybridRetrievalHandler:
                         deduped_merged.append(r)
                 merged = deduped_merged
 
-                # Re-rank by vector similarity (defer top_k truncation until
-                # after the requested-paper-ID boost to avoid cutting them off)
+                # Re-rank by score (defer top_k until after requested-paper boost)
                 merged.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
                 results = merged
 
@@ -1459,6 +1484,131 @@ class HybridRetrievalHandler:
         selected = candidates[0]
         logger.info(f"Template selected (priority fallback): {selected}")
         return selected
+
+    # =========================================================================
+    # SEARCH STRATEGY SELECTION — AI picks the retrieval approach
+    # =========================================================================
+
+    VALID_STRATEGIES = ('graph_only', 'vector_first', 'graph_vector_merge')
+
+    async def _select_search_strategy(
+        self, query: str, extracted: Dict, template_key: str, needs_paper_ids: bool
+    ) -> str:
+        """Let the AI agent decide between search strategies.
+
+        Strategies:
+            graph_only         — Run only the Neo4j graph query. Best for
+                                 structured lookups (citation count, specific
+                                 paper by ID, co-author network, venue stats).
+            vector_first       — Discover paper IDs via vector search first,
+                                 then feed them to the graph query. Best when
+                                 the template needs paper IDs but none are
+                                 in the query (topic / keyword searches).
+            graph_vector_merge — Run graph and vector in parallel, merge and
+                                 re-rank. Best for broad exploratory queries
+                                 that benefit from both structured and
+                                 semantic results.
+
+        Returns one of: 'graph_only', 'vector_first', 'graph_vector_merge'
+        """
+        has_paper_ids = bool(extracted.get('paper_ids'))
+
+        # ── Deterministic fast-paths (skip LLM call) ──
+        # When template needs paper_ids but query has none, vector_first is
+        # the only viable path — no point asking the AI.
+        if needs_paper_ids and not has_paper_ids:
+            logger.info("Strategy selected (deterministic): vector_first — template needs paper_ids but none extracted")
+            return 'vector_first'
+
+        # If no AI agent, fall back to simple heuristic
+        if not self.ai_agent:
+            strategy = 'graph_only' if has_paper_ids else 'graph_vector_merge'
+            logger.info(f"Strategy selected (no AI agent): {strategy}")
+            return strategy
+
+        # ── Few-shot AI selection ──
+        try:
+            prompt = (
+                'Pick the best search strategy for this academic paper query.\n\n'
+                'Strategies:\n'
+                '  graph_only         — Structured lookup in the knowledge graph only. '
+                'Fast. Best for: specific paper by ID, citation counts, author collaborations, '
+                'venue statistics, or any query fully answered by graph relationships.\n'
+                '  vector_first       — Discover papers via semantic vector search first, '
+                'then enrich with graph metadata. Best for: topic/keyword searches where '
+                'no paper IDs or author names are given.\n'
+                '  graph_vector_merge — Run both graph and vector search, merge and re-rank. '
+                'Best for: broad exploratory queries that benefit from both structured '
+                'and semantic matching.\n\n'
+                '## Few-shot examples\n'
+                'Query: "How many citations does paper W2100837269 have?"\n'
+                'Entities: {"paper_ids": ["W2100837269"], "wants_citations": true}\n'
+                'Template: search_citations\n'
+                'Strategy: graph_only\n\n'
+                'Query: "Find papers about transformer architectures for medical imaging"\n'
+                'Entities: {"keywords": ["transformer", "medical imaging"]}\n'
+                'Template: search_papers\n'
+                'Strategy: vector_first\n\n'
+                'Query: "What papers has Yoshua Bengio published on deep learning?"\n'
+                'Entities: {"author_names": ["Yoshua Bengio"], "keywords": ["deep learning"]}\n'
+                'Template: search_papers\n'
+                'Strategy: graph_vector_merge\n\n'
+                'Query: "Show me the most cited papers in NeurIPS"\n'
+                'Entities: {"venue": "NeurIPS", "wants_top_cited": true}\n'
+                'Template: top_cited_papers\n'
+                'Strategy: graph_only\n\n'
+                'Query: "papers about attention mechanisms"\n'
+                'Entities: {"keywords": ["attention mechanisms"]}\n'
+                'Template: search_papers\n'
+                'Strategy: vector_first\n\n'
+                'Query: "Find co-authors of Geoffrey Hinton"\n'
+                'Entities: {"author_names": ["Geoffrey Hinton"], "wants_coauthors": true}\n'
+                'Template: coauthor_network\n'
+                'Strategy: graph_only\n\n'
+                'Query: "papers by Yann LeCun on convolutional neural networks since 2020"\n'
+                'Entities: {"author_names": ["Yann LeCun"], "keywords": ["convolutional neural networks"], "year_from": "2020"}\n'
+                'Template: search_papers\n'
+                'Strategy: graph_vector_merge\n\n'
+                f'## Your turn\n'
+                f'Query: "{query}"\n'
+                f'Entities: {extracted}\n'
+                f'Template: {template_key}\n'
+                f'Strategy:'
+            )
+
+            raw = await run_blocking(
+                self.ai_agent.generate_content,
+                prompt=prompt,
+                system_prompt=(
+                    'You are a search strategy router. Output ONLY one of: '
+                    'graph_only, vector_first, graph_vector_merge. '
+                    'No explanation.'
+                ),
+                purpose='strategy_selection',
+                max_tokens=24,
+            )
+
+            if raw:
+                choice = raw.strip().strip('\'" ').lower().replace('-', '_')
+                # Extract valid strategy even if LLM added extra text
+                for valid in self.VALID_STRATEGIES:
+                    if valid in choice:
+                        logger.info(f"Strategy selected (AI): {valid}")
+                        return valid
+                logger.warning(f"AI returned invalid strategy '{choice}', falling back to heuristic")
+
+        except Exception as e:
+            logger.warning(f"AI strategy selection failed ({e}), using heuristic")
+
+        # ── Heuristic fallback ──
+        if has_paper_ids or extracted.get('wants_citations') or extracted.get('wants_coauthors') or extracted.get('wants_top_cited'):
+            fallback = 'graph_only'
+        elif extracted.get('author_names') or extracted.get('venue'):
+            fallback = 'graph_vector_merge'
+        else:
+            fallback = 'vector_first'
+        logger.info(f"Strategy selected (heuristic fallback): {fallback}")
+        return fallback
 
     # =========================================================================
     # ENTITY EXTRACTION — Pull structured data from natural language query
