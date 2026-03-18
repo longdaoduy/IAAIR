@@ -8,7 +8,7 @@
   "search_citations": {
     "description": "Find papers that cite or are cited by a specific paper (citation network)",
     "triggers": ["citations"],
-    "cypher": "MATCH (p:Paper)-[:CITES]->(cited:Paper)\nWHERE p.id IN $paper_ids OR cited.id IN $paper_ids\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (a2:Author)-[:AUTHORED]->(cited)\nRETURN DISTINCT p.id as paper_id, p.title as title,\n       collect(DISTINCT a.name) as authors,\n       cited.id as cited_paper_id, cited.title as cited_title,\n       collect(DISTINCT a2.name) as cited_authors\nLIMIT $limit",
+    "cypher": "MATCH (p:Paper)-[:CITES]->(cited:Paper)\nWHERE p.id IN $paper_ids OR cited.id IN $paper_ids\nWITH DISTINCT p, cited\nOPTIONAL MATCH (a:Author)-[:AUTHORED]->(p)\nOPTIONAL MATCH (p)-[:PUBLISHED_IN]->(v:Venue)\nRETURN DISTINCT p.id as paper_id, p.title as title, p.abstract as abstract,\n       p.doi as doi, p.publication_date as publication_date,\n       p.cited_by_count as cited_by_count, p.pdf_url as pdf_url,\n       collect(DISTINCT a.name) as authors, v.name as venue\nUNION\nMATCH (p:Paper)-[:CITES]->(cited:Paper)\nWHERE p.id IN $paper_ids OR cited.id IN $paper_ids\nWITH DISTINCT cited\nOPTIONAL MATCH (a2:Author)-[:AUTHORED]->(cited)\nOPTIONAL MATCH (cited)-[:PUBLISHED_IN]->(v2:Venue)\nRETURN DISTINCT cited.id as paper_id, cited.title as title, cited.abstract as abstract,\n       cited.doi as doi, cited.publication_date as publication_date,\n       cited.cited_by_count as cited_by_count, cited.pdf_url as pdf_url,\n       collect(DISTINCT a2.name) as authors, v2.name as venue\nLIMIT $limit",
     "param_builder": "_params_citations"
   },
   "top_cited_papers": {
