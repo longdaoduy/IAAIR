@@ -1067,6 +1067,14 @@ class HybridRetrievalHandler:
             template_info['search_strategy'] = strategy
             logger.info(f"Search strategy: {strategy} (template={template_key})")
 
+            # ── Push template & strategy to Prometheus immediately ──
+            # This ensures metrics are recorded even when subsequent
+            # requests hit the cache (cache-hit early-returns don't
+            # carry template_key / search_strategy back to main.py).
+            if self.performance_monitor:
+                self.performance_monitor.record_template_used(template_key)
+                self.performance_monitor.record_search_strategy(strategy)
+
             if strategy == 'graph_only':
                 # ── Graph-only: run the Neo4j query, no vector search ──
                 logger.info(f"Running graph-only search for template '{template_key}'")

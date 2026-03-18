@@ -86,6 +86,16 @@ class PerformanceMonitor:
             else:
                 self.prometheus_integration.record_cache_miss(cache_type)
 
+    def record_template_used(self, template_key: str):
+        """Record which Neo4j template was selected."""
+        if self.prometheus_integration and template_key:
+            self.prometheus_integration.record_template_used(template_key)
+
+    def record_search_strategy(self, strategy: str):
+        """Record which search strategy was used."""
+        if self.prometheus_integration and strategy:
+            self.prometheus_integration.record_search_strategy(strategy)
+
     def record_result_count(self, source: str, count: int):
         """Record number of results from a source (for logging only)."""
         logger.debug(f"Results from {source}: {count}")
