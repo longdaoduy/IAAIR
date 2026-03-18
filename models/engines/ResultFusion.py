@@ -141,7 +141,7 @@ class ResultFusion:
             hybrid_conf = (
                 self.MULTIMODAL_WEIGHT * multimodal_conf +
                 self.GRAPH_WEIGHT * graph_conf +
-                is_requested
+                is_requested *100
             )
 
             # Use hybrid_confidence as the relevance_score for sorting/display
