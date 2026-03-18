@@ -910,6 +910,8 @@ class HybridRetrievalHandler:
             requested_pids = set(extracted.get('paper_ids', []))
             final_pids = []
             score_map: Dict[str, float] = {}
+            # Keep a reference to OR-condition params so they survive param_builder rebuilds
+            _or_extra_params = dict(extra_params) if or_conditions else {}
 
             # ── AI-driven strategy selection ──
             strategy = await self._select_search_strategy(
@@ -958,6 +960,9 @@ class HybridRetrievalHandler:
                 # Inject discovered IDs and rebuild parameters
                 extracted.setdefault('paper_ids', []).extend(sorted_ids)
                 parameters = param_builder(extracted, top_k)
+                # Re-merge OR-condition params lost during param_builder rebuild
+                if _or_extra_params:
+                    parameters.update(_or_extra_params)
                 logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for '{template_key}'")
 
                 # Execute graph query with vector fallback
