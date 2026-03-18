@@ -1070,8 +1070,31 @@ class HybridRetrievalHandler:
                 results = merged
 
                 final_pids = self._extract_paper_ids(results)
+             
+            # ── Prioritize explicitly requested paper IDs ──
+            # When the user's query mentions specific paper IDs, boost their
+            # score so they naturally sort to the top of results.
+            # score_map uses lower = better (distance), so we apply a large
+            # negative offset to guarantee requested papers rank first.
+            if requested_pids and results:
+                # Determine the boost: put requested papers well below the
+                # best score so they always come first after sorting.
+                best_score = min(score_map.values()) if score_map else 0.0
+                boost = abs(best_score) + 1000.0  # large enough gap
+                boosted_count = 0
+                for pid in requested_pids:
+                    score_map[pid] = score_map.get(pid, 0.0) - boost
+                    boosted_count += 1
 
-            # Apply top_k truncation
+                # Re-sort with boosted scores
+                results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+                if boosted_count:
+                    logger.info(
+                        f"Boosted {boosted_count} explicitly requested paper IDs "
+                        f"in score_map (offset={boost:.1f}) — now at top of {len(results)} results"
+                    )
+
+            # Apply top_k truncation after boost (deferred from branches above)
             results = results[:top_k]
             final_pids = self._extract_paper_ids(results)
 
@@ -1079,7 +1102,7 @@ class HybridRetrievalHandler:
                 visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_pids) if final_pids else empty_visual
 
             # Pass explicitly requested paper IDs to ResultFusion so it can
-            # apply a boolean boost in hybrid_conf for these papers.
+            # preserve their top-ranking after re-sorting by relevance_score.
             if requested_pids:
                 visual_data['requested_paper_ids'] = list(requested_pids)
 
