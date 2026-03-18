@@ -16,8 +16,8 @@ class ResultFusion:
     """
 
     # Weights for combining confidence scores into hybrid_confidence
-    MULTIMODAL_WEIGHT = 0.6
-    GRAPH_WEIGHT = 0.4
+    MULTIMODAL_WEIGHT = 0.3
+    GRAPH_WEIGHT = 0.7
 
     @staticmethod
     def _compute_graph_confidence(result: Dict) -> float:
