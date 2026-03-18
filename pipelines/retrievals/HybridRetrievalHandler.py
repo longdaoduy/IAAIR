@@ -908,7 +908,6 @@ class HybridRetrievalHandler:
                 )
             visual_data = None
             requested_pids = set(extracted.get('paper_ids', []))
-            final_pids = []
             score_map: Dict[str, float] = {}
             if needs_paper_ids and not requested_pids:
                 # ── Branch 1: Vector-first ──
