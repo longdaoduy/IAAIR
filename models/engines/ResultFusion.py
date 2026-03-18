@@ -181,6 +181,18 @@ class ResultFusion:
             )
             fused_results.append(search_result)
 
+        # Boost relevance_score for explicitly requested paper IDs so they
+        # always appear at the top of results regardless of multimodal score.
+        requested_pids = set()
+        if visual_data:
+            requested_pids = set(visual_data.get('requested_paper_ids', []))
+        if requested_pids:
+            best_score = max((r.relevance_score for r in fused_results), default=1.0)
+            boost = best_score + 1.0  # guarantee above all other scores
+            for r in fused_results:
+                if r.paper_id in requested_pids:
+                    r.relevance_score = r.relevance_score + boost
+
         # Re-sort by hybrid_confidence (descending) since graph_confidence
         # may change the relative ordering from the original pipeline
         fused_results.sort(key=lambda r: r.relevance_score, reverse=True)

@@ -786,6 +786,10 @@ class HybridRetrievalHandler:
                     visual_data = empty_visual
                     if cached_pids:
                         visual_data = await self.search_visual_by_text(query, top_k, paper_ids=cached_pids)
+                    # Inject requested paper IDs so ResultFusion can boost them
+                    cache_requested = re.findall(r'\b(W\d+)\b', query)
+                    if cache_requested:
+                        visual_data['requested_paper_ids'] = cache_requested
                     return cached_results, template_info, visual_data
 
             if self.performance_monitor:
@@ -807,6 +811,10 @@ class HybridRetrievalHandler:
                     visual_data = empty_visual
                     if cached_pids:
                         visual_data = await self.search_visual_by_text(query, top_k, paper_ids=cached_pids)
+                    # Inject requested paper IDs so ResultFusion can boost them
+                    cypher_requested = re.findall(r'\b(W\d+)\b', query)
+                    if cypher_requested:
+                        visual_data['requested_paper_ids'] = cypher_requested
                     return results, template_info, visual_data
 
             # Step 1: Extract entities — AI first, regex fallback
@@ -871,7 +879,6 @@ class HybridRetrievalHandler:
             # keywords, etc.) don't need this expensive round-trip.
             template_cypher_text = self.GRAPH_TEMPLATES.get(template_key, {}).get('cypher', '')
             needs_paper_ids = '$paper_ids' in template_cypher_text
-            has_paper_ids = bool(extracted.get('paper_ids'))
             keywords = extracted.get('keywords', [])
             template = self.GRAPH_TEMPLATES[template_key]
             logger.info(f"Final template: {template_key} — {template['description']}")
@@ -900,10 +907,13 @@ class HybridRetrievalHandler:
                     f"{or_conditions}"
                 )
             visual_data = None
+            requested_pids = set(extracted.get('paper_ids', []))
             final_pids = []
-            if needs_paper_ids and not has_paper_ids:
+            score_map: Dict[str, float] = {}
+            if needs_paper_ids and not requested_pids:
                 # ── Branch 1: Vector-first ──
                 # Template needs paper_ids but query has none → discover via vector search
+                logger.info(f"Template '{template_key}' requires paper_ids but none extracted — running vector search first")
                 if use_multimodal:
                     sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
                     # Build score_map from multimodal_scores (higher = better → invert for sort)
@@ -932,14 +942,25 @@ class HybridRetrievalHandler:
                     logger.info(f"Graph returned 0, falling back to {len(results)} vector results")
 
                 if results:
+                    # Deduplicate by paper_id
+                    seen_b1: set = set()
+                    deduped_b1: List[Dict] = []
+                    for r in results:
+                        pid = r.get('paper_id')
+                        if pid and pid not in seen_b1:
+                            seen_b1.add(pid)
+                            deduped_b1.append(r)
+                        elif not pid:
+                            deduped_b1.append(r)
+                    results = deduped_b1
                     results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
-                    results = results[:top_k]
 
                 final_pids = self._extract_paper_ids(results)
 
             else:
                 # ── Branch 2: Graph + Vector merge ──
                 # Run graph query, run keyword vector search, merge and re-rank
+                logger.info(f"Running graph + vector merge for template '{template_key}'")
                 try:
                     graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
                     logger.info(f"Graph search returned {len(graph_results)} results")
@@ -971,14 +992,59 @@ class HybridRetrievalHandler:
                     if vr.get('paper_id') not in graph_pids:
                         merged.append(vr)
 
-                # Re-rank by vector similarity
+                # Deduplicate by paper_id (keep first occurrence)
+                seen_pids: set = set()
+                deduped_merged: List[Dict] = []
+                for r in merged:
+                    pid = r.get('paper_id')
+                    if pid and pid not in seen_pids:
+                        seen_pids.add(pid)
+                        deduped_merged.append(r)
+                    elif not pid:
+                        deduped_merged.append(r)
+                merged = deduped_merged
+
+                # Re-rank by vector similarity (defer top_k truncation until
+                # after the requested-paper-ID boost to avoid cutting them off)
                 merged.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
-                results = merged[:top_k]
+                results = merged
 
                 final_pids = self._extract_paper_ids(results)
              
+            # ── Prioritize explicitly requested paper IDs ──
+            # When the user's query mentions specific paper IDs, boost their
+            # score so they naturally sort to the top of results.
+            # score_map uses lower = better (distance), so we apply a large
+            # negative offset to guarantee requested papers rank first.
+            if requested_pids and results:
+                # Determine the boost: put requested papers well below the
+                # best score so they always come first after sorting.
+                best_score = min(score_map.values()) if score_map else 0.0
+                boost = abs(best_score) + 1000.0  # large enough gap
+                boosted_count = 0
+                for pid in requested_pids:
+                    score_map[pid] = score_map.get(pid, 0.0) - boost
+                    boosted_count += 1
+
+                # Re-sort with boosted scores
+                results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+                if boosted_count:
+                    logger.info(
+                        f"Boosted {boosted_count} explicitly requested paper IDs "
+                        f"in score_map (offset={boost:.1f}) — now at top of {len(results)} results"
+                    )
+
+            # Apply top_k truncation after boost (deferred from branches above)
+            results = results[:top_k]
+            final_pids = self._extract_paper_ids(results)
+
             if not visual_data:
                 visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_pids) if final_pids else empty_visual
+
+            # Pass explicitly requested paper IDs to ResultFusion so it can
+            # preserve their top-ranking after re-sorting by relevance_score.
+            if requested_pids:
+                visual_data['requested_paper_ids'] = list(requested_pids)
 
             # Step 5: Cache the result
             if self.cache_manager:
