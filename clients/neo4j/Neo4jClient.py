@@ -77,6 +77,7 @@ class Neo4jClient:
         self._ensure_sync_driver()
         
         try:
+            logger.info(f"Executing query: {query}")
             with self._sync_driver.session() as session:
                 result = session.run(query, parameters or {})
                 records = []
