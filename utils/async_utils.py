@@ -19,7 +19,7 @@ T = TypeVar("T")
 # Shared thread pool for CPU / IO-bound blocking work.
 # Size = min(32, cpu_count + 4) by default in Python 3.8+,
 # but we cap it explicitly so heavy ML inference doesn't starve other tasks.
-_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="iaair-blocking")
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="iaair-blocking")
 
 
 async def run_blocking(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:

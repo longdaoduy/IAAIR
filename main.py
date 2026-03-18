@@ -1393,21 +1393,7 @@ if __name__ == "__main__":
     # Start ngrok tunnel before uvicorn
     # start_ngrok(8000)
 
-    if "--production" in sys.argv:
-        # Production: multi-worker, no reload
-        uvicorn.run(
-            "main:app",
-            host="0.0.0.0",
-            port=8000,
-            workers=4,
-            log_level="info"
-        )
+    if os.getenv("APP_MODE") == "production":
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=2 , log_level="info")
     else:
-        # Development: single worker with auto-reload
-        uvicorn.run(
-            "main:app",
-            host="0.0.0.0",
-            port=8000,
-            reload=True,
-            log_level="info"
-        )
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
