@@ -31,7 +31,7 @@ class ServiceFactory:
         self.neo4j_handler = GraphNeo4jHandler()
         self.milvus_client = MilvusClient()
         self.scibert_client = SciBERTClient()
-        self.clip_client = None
+        self.clip_client = CLIPClient()
         self.mongo_client = None
         self.llms_client = LLMClient()
 
