@@ -18,6 +18,8 @@ class ResultFusion:
     # Weights for combining confidence scores into hybrid_confidence
     MULTIMODAL_WEIGHT = 0.3
     GRAPH_WEIGHT = 0.7
+    # Boolean boost added to hybrid_conf when a paper was explicitly requested
+    REQUESTED_BOOST = 1.0
 
     @staticmethod
     def _compute_graph_confidence(result: Dict) -> float:
@@ -110,6 +112,11 @@ class ResultFusion:
                 paper_visual_evidence.setdefault(pid, []).append(r)
                 paper_tab_count[pid] = paper_tab_count.get(pid, 0) + 1
 
+        # Build set of explicitly requested paper IDs for boolean boost
+        requested_pids = set()
+        if visual_data:
+            requested_pids = set(visual_data.get('requested_paper_ids', []))
+
         # Convert hybrid results to SearchResult objects (preserving existing order)
         fused_results = []
         for result in hybrid_results:
@@ -127,14 +134,18 @@ class ResultFusion:
             # Visual-only score (for display)
             v_score = paper_visual_scores.get(paper_id, 0.0)
 
-            # Hybrid confidence: weighted combination
+            # Boolean boost: 1.0 if paper was explicitly requested in query, else 0.0
+            is_requested = self.REQUESTED_BOOST if paper_id in requested_pids else 0.0
+
+            # Hybrid confidence: weighted combination + boolean requested boost
             hybrid_conf = (
                 self.MULTIMODAL_WEIGHT * multimodal_conf +
-                self.GRAPH_WEIGHT * graph_conf
+                self.GRAPH_WEIGHT * graph_conf +
+                is_requested
             )
 
             # Use hybrid_confidence as the relevance_score for sorting/display
-            relevance_score = min(hybrid_conf, 1.0)
+            relevance_score = hybrid_conf
 
             # Determine source path
             source_path = ['hybrid_search']
@@ -177,24 +188,13 @@ class ResultFusion:
                     'multimodal_confidence': round(multimodal_conf, 4),
                     'graph_confidence': round(graph_conf, 4),
                     'visual_confidence': round(v_score, 4),
+                    'is_requested': is_requested > 0,
                 }
             )
             fused_results.append(search_result)
 
-        # Boost relevance_score for explicitly requested paper IDs so they
-        # always appear at the top of results regardless of multimodal score.
-        requested_pids = set()
-        if visual_data:
-            requested_pids = set(visual_data.get('requested_paper_ids', []))
-        if requested_pids:
-            best_score = max((r.relevance_score for r in fused_results), default=1.0)
-            boost = best_score + 1.0  # guarantee above all other scores
-            for r in fused_results:
-                if r.paper_id in requested_pids:
-                    r.relevance_score = r.relevance_score + boost
-
-        # Re-sort by hybrid_confidence (descending) since graph_confidence
-        # may change the relative ordering from the original pipeline
+        # Re-sort by hybrid_confidence (descending) — requested papers
+        # naturally rank at top due to the boolean boost in hybrid_conf
         fused_results.sort(key=lambda r: r.relevance_score, reverse=True)
 
         return fused_results
