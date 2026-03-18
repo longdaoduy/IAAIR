@@ -1169,22 +1169,22 @@ class HybridRetrievalHandler:
                 else:
                     vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
 
-                # Prioritize graph results over vector-only results
-                if graph_pids and score_map:
-                    best_vector = min(score_map.values())
-                    graph_boost = abs(best_vector) + 100.0
-                    for gid in graph_pids:
-                        score_map[gid] = min(
-                            score_map.get(gid, 0.0),
-                            best_vector - graph_boost
-                        )
-                    logger.info(
-                        f"Boosted {len(graph_pids)} graph papers in score_map "
-                        f"(offset={graph_boost:.1f}) to prioritize over vector-only"
-                    )
-                elif graph_pids and not score_map:
-                    for gid in graph_pids:
-                        score_map[gid] = 0.0
+                # # Prioritize graph results over vector-only results
+                # if graph_pids and score_map:
+                #     best_vector = min(score_map.values())
+                #     graph_boost = abs(best_vector) + 100.0
+                #     for gid in graph_pids:
+                #         score_map[gid] = min(
+                #             score_map.get(gid, 0.0),
+                #             best_vector - graph_boost
+                #         )
+                #     logger.info(
+                #         f"Boosted {len(graph_pids)} graph papers in score_map "
+                #         f"(offset={graph_boost:.1f}) to prioritize over vector-only"
+                #     )
+                # elif graph_pids and not score_map:
+                #     for gid in graph_pids:
+                #         score_map[gid] = 0.0
 
                 vector_only_ids = [pid for pid in self._extract_paper_ids(vector_results) if pid not in graph_pids]
 
@@ -1258,7 +1258,7 @@ class HybridRetrievalHandler:
             # Re-sort by hybrid_confidence (descending) — graph_confidence
             # may change ordering compared to the raw distance sort.
             results.sort(
-                key=lambda r: r.get('_relevance_score', 0.0), reverse=True
+                key=lambda r: r.get('_relevance_score', 0.0), reverse=False
             )
 
             # Boost explicitly requested paper IDs to top of relevance-sorted list
