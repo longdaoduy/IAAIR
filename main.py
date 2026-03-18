@@ -1362,25 +1362,25 @@ async def get_llm_stats(factory: ServiceFactory = Depends(get_services)):
 # NGROK TUNNEL SETUP
 # ===============================================================================
 
-def start_ngrok(port: int = 8000):
-    """Start ngrok tunnel and return public URL."""
-    try:
-        from pyngrok import ngrok
-
-        ngrok.set_auth_token("3ApO0xfxobpgobKXjS3fsAiLDy7_5fyBT8kZyQUKz9Jf8HikS")
-
-        # Clean up old tunnels
-        for t in ngrok.get_tunnels():
-            ngrok.disconnect(t.public_url)
-
-        public_url = ngrok.connect(port, domain="dressily-duskish-felisha.ngrok-free.dev")
-        logger.info(f"🚀 ngrok public URL: {public_url}")
-        print(f"🚀 Public URL: {public_url}")
-        return public_url
-    except Exception as e:
-        logger.warning(f"ngrok tunnel failed: {e}")
-        print(f"⚠️  ngrok failed: {e} — running on localhost only")
-        return None
+# def start_ngrok(port: int = 8000):
+#     """Start ngrok tunnel and return public URL."""
+#     try:
+#         from pyngrok import ngrok
+#
+#         ngrok.set_auth_token("3ApO0xfxobpgobKXjS3fsAiLDy7_5fyBT8kZyQUKz9Jf8HikS")
+#
+#         # Clean up old tunnels
+#         for t in ngrok.get_tunnels():
+#             ngrok.disconnect(t.public_url)
+#
+#         public_url = ngrok.connect(port, domain="dressily-duskish-felisha.ngrok-free.dev")
+#         logger.info(f"🚀 ngrok public URL: {public_url}")
+#         print(f"🚀 Public URL: {public_url}")
+#         return public_url
+#     except Exception as e:
+#         logger.warning(f"ngrok tunnel failed: {e}")
+#         print(f"⚠️  ngrok failed: {e} — running on localhost only")
+#         return None
 
 
 # ===============================================================================
@@ -1391,7 +1391,7 @@ if __name__ == "__main__":
     import sys
 
     # Start ngrok tunnel before uvicorn
-    start_ngrok(8000)
+    # start_ngrok(8000)
 
     if "--production" in sys.argv:
         # Production: multi-worker, no reload
