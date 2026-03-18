@@ -98,6 +98,14 @@ class PrometheusMetrics:
             registry=self.registry,
         )
 
+        # -- 6b. Search strategy usage --
+        self.search_strategy_total = Counter(
+            'iaair_search_strategy_total',
+            'Number of times each search strategy was used',
+            ['search_strategy'],
+            registry=self.registry,
+        )
+
         # -- 7. Results retrieved --
         self.results_count = Histogram(
             'iaair_results_count',
@@ -137,6 +145,10 @@ class PrometheusMetrics:
     def record_template_used(self, template_key: str):
         with self._lock:
             self.template_usage.labels(template_key=template_key).inc()
+
+    def record_search_strategy(self, strategy: str):
+        with self._lock:
+            self.search_strategy_total.labels(search_strategy=strategy).inc()
 
     def record_results(self, count: int):
         with self._lock:

@@ -37,12 +37,14 @@ class PerformanceMonitor:
         """Mark the start of a hybrid search request."""
         self._search_start = time.time()
 
-    def finish_search_tracking(self, result_count: int = 0, template_key: str = None):
+    def finish_search_tracking(self, result_count: int = 0, template_key: str = None,
+                               search_strategy: str = None):
         """Mark the end of a hybrid search request and push metrics.
 
         Args:
             result_count: Number of results returned to the user.
             template_key: The Neo4j template that was selected.
+            search_strategy: The search strategy used (graph_only / vector_first / graph_vector_merge).
         """
         if self._search_start is None:
             return
@@ -59,6 +61,8 @@ class PerformanceMonitor:
                 self.prometheus_integration.record_results(result_count)
             if template_key:
                 self.prometheus_integration.record_template_used(template_key)
+            if search_strategy:
+                self.prometheus_integration.record_search_strategy(search_strategy)
 
     @contextmanager
     def track_operation(self, operation_name: str):

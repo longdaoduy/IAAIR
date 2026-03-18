@@ -7,6 +7,7 @@ with intelligent query routing and AI response generation.
 
 from typing import Dict, List, Optional
 import logging
+import math
 import os
 import re
 import json
@@ -750,6 +751,152 @@ class HybridRetrievalHandler:
         """Extract non-empty paper_id values from result dicts."""
         return [r.get('paper_id') for r in results if r.get('paper_id')]
 
+    # ── Confidence scoring (computed here, not in ResultFusion) ─────────
+
+    # Weights for combining confidence scores into hybrid_confidence
+    MULTIMODAL_WEIGHT = 0.6
+    GRAPH_WEIGHT = 0.4
+
+    @staticmethod
+    def _compute_graph_confidence(result: Dict) -> float:
+        """Compute graph confidence from Neo4j metadata quality.
+
+        Measures how rich and complete the graph data is for this paper.
+        A paper with authors, venue, DOI, abstract, and high citations
+        gets a higher graph confidence than one with sparse metadata.
+
+        Returns:
+            float in [0, 1]
+        """
+        score = 0.0
+
+        if result.get('title'):
+            score += 0.15
+        if result.get('abstract'):
+            score += 0.15
+
+        authors = result.get('authors', []) or []
+        if authors:
+            score += min(0.20, 0.05 * len(authors))
+
+        if result.get('venue'):
+            score += 0.15
+        if result.get('doi'):
+            score += 0.10
+        if result.get('publication_date'):
+            score += 0.05
+
+        cited_by = result.get('cited_by_count', 0) or 0
+        if cited_by > 0:
+            score += min(0.20, 0.05 * math.log10(1 + cited_by))
+
+        return min(score, 1.0)
+
+    def _compute_final_scores(
+        self,
+        results: List[Dict],
+        visual_data: Dict,
+        score_map: Dict[str, float],
+        strategy: str,
+    ) -> List[Dict]:
+        """Compute and attach final confidence scores to each result dict.
+
+        Enriches every result dict in-place with:
+            _multimodal_confidence, _graph_confidence, _visual_confidence,
+            _hybrid_confidence (= relevance_score),
+            _matched_figures, _matched_tables, _visual_evidence, _source_path,
+            _confidence_scores
+
+        These prefixed keys are consumed by ResultFusion.fuse_results()
+        to build SearchResult objects without re-computing anything.
+
+        Args:
+            results: List of result dicts from the search branches.
+            visual_data: Cross-modal visual search data.
+            score_map: {paper_id: distance} from vector search (lower = better).
+            strategy: The search strategy used.
+
+        Returns:
+            The same list (mutated in-place) for convenience.
+        """
+        multimodal_scores = visual_data.get('multimodal_scores', {})
+        paper_visual_scores = visual_data.get('paper_visual_scores', {})
+        figure_results = visual_data.get('figure_results', [])
+        table_results = visual_data.get('table_results', [])
+
+        # Build per-paper visual evidence lookup
+        paper_visual_evidence: Dict[str, list] = {}
+        paper_fig_count: Dict[str, int] = {}
+        paper_tab_count: Dict[str, int] = {}
+        for r in figure_results:
+            pid = r.get('paper_id')
+            if pid:
+                paper_visual_evidence.setdefault(pid, []).append(r)
+                paper_fig_count[pid] = paper_fig_count.get(pid, 0) + 1
+        for r in table_results:
+            pid = r.get('paper_id')
+            if pid:
+                paper_visual_evidence.setdefault(pid, []).append(r)
+                paper_tab_count[pid] = paper_tab_count.get(pid, 0) + 1
+
+        for result in results:
+            paper_id = result.get('paper_id') or result.get('id')
+            if not paper_id:
+                continue
+
+            # Multimodal confidence (vector + visual re-ranking, 0-1)
+            multimodal_conf = multimodal_scores.get(paper_id, 0.0)
+
+            # Graph confidence (metadata completeness, 0-1)
+            graph_conf = self._compute_graph_confidence(result)
+
+            # Visual-only score
+            v_score = paper_visual_scores.get(paper_id, 0.0)
+
+            # Hybrid confidence: weighted combination
+            hybrid_conf = (
+                self.MULTIMODAL_WEIGHT * multimodal_conf
+                + self.GRAPH_WEIGHT * graph_conf
+            )
+            relevance_score = min(hybrid_conf, 1.0)
+
+            # Source path
+            source_path = ['hybrid_search']
+            if multimodal_conf > 0:
+                source_path.append('multimodal_search')
+            if v_score > 0:
+                source_path.append('visual_search')
+
+            # Trim visual evidence
+            trimmed_evidence = []
+            for ve in paper_visual_evidence.get(paper_id, [])[:6]:
+                trimmed_evidence.append({
+                    'id': ve.get('id', ''),
+                    'description': (ve.get('description', '') or '')[:200],
+                    'similarity_score': ve.get('similarity_score', 0.0),
+                    'collection': ve.get('collection', ''),
+                    'search_type': ve.get('search_type', ''),
+                })
+
+            # Attach computed scores to the result dict
+            result['_multimodal_confidence'] = round(multimodal_conf, 4)
+            result['_graph_confidence'] = round(graph_conf, 4)
+            result['_visual_confidence'] = round(v_score, 4)
+            result['_hybrid_confidence'] = round(relevance_score, 4)
+            result['_relevance_score'] = round(relevance_score, 4)
+            result['_matched_figures'] = paper_fig_count.get(paper_id, 0)
+            result['_matched_tables'] = paper_tab_count.get(paper_id, 0)
+            result['_visual_evidence'] = trimmed_evidence
+            result['_source_path'] = source_path
+            result['_confidence_scores'] = {
+                'hybrid_confidence': round(relevance_score, 4),
+                'multimodal_confidence': round(multimodal_conf, 4),
+                'graph_confidence': round(graph_conf, 4),
+                'visual_confidence': round(v_score, 4),
+            }
+
+        return results
+
     async def _execute_hybrid_search_internal(self, query: str, top_k: int,
                                                template_cypher: str = None,
                                                use_multimodal: bool = False) -> tuple:
@@ -1093,10 +1240,32 @@ class HybridRetrievalHandler:
             if not visual_data:
                 visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_pids) if final_pids else empty_visual
 
-            # Pass explicitly requested paper IDs to ResultFusion so it can
-            # preserve their top-ranking after re-sorting by relevance_score.
+            # Pass explicitly requested paper IDs so ResultFusion can preserve them.
             if requested_pids:
                 visual_data['requested_paper_ids'] = list(requested_pids)
+
+            # ── Compute final confidence scores here (not in ResultFusion) ──
+            self._compute_final_scores(results, visual_data, score_map, strategy)
+
+            # Re-sort by hybrid_confidence (descending) — graph_confidence
+            # may change ordering compared to the raw distance sort.
+            results.sort(
+                key=lambda r: r.get('_relevance_score', 0.0), reverse=True
+            )
+
+            # Boost explicitly requested paper IDs to top of relevance-sorted list
+            if requested_pids:
+                best_rel = max(
+                    (r.get('_relevance_score', 0.0) for r in results), default=1.0
+                )
+                boost_val = best_rel + 1.0
+                for r in results:
+                    pid = r.get('paper_id') or r.get('id')
+                    if pid in requested_pids:
+                        r['_relevance_score'] = r.get('_relevance_score', 0.0) + boost_val
+                results.sort(
+                    key=lambda r: r.get('_relevance_score', 0.0), reverse=True
+                )
 
             # Step 5: Cache the result
             if self.cache_manager:

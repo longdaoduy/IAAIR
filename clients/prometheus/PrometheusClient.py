@@ -63,6 +63,10 @@ class PrometheusMonitoring:
         """Record which Neo4j template was selected."""
         self.metrics.record_template_used(template_key)
 
+    def record_search_strategy(self, strategy: str):
+        """Record which search strategy was used (graph_only / vector_first / graph_vector_merge)."""
+        self.metrics.record_search_strategy(strategy)
+
     def record_results(self, count: int):
         """Record number of results returned."""
         self.metrics.record_results(count)

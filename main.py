@@ -548,7 +548,8 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         # Finish performance tracking — push search duration, result count, template to Prometheus
         factory.performance_monitor.finish_search_tracking(
             result_count=len(fused_results),
-            template_key=template_info.get('template_key')
+            template_key=template_info.get('template_key'),
+            search_strategy=template_info.get('search_strategy')
         )
 
         logger.info(f"Hybrid search completed. Found {len(fused_results)} results in {total_time:.2f}s")

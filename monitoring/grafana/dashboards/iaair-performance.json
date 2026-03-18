@@ -182,15 +182,27 @@
       },
       {
         "id": 8,
-        "title": "Routing Strategy Usage",
+        "title": "Search Strategy Usage",
         "type": "piechart",
         "targets": [
           {
-            "expr": "increase(iaair_requests_total[1h])",
-            "legendFormat": "{{routing_strategy}}"
+            "expr": "increase(iaair_search_strategy_total[1h])",
+            "legendFormat": "{{search_strategy}}"
           }
         ],
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 16}
+      },
+      {
+        "id": 11,
+        "title": "Template Usage",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "increase(iaair_template_usage_total[1h])",
+            "legendFormat": "{{template_key}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 16}
       },
       {
         "id": 9,

@@ -38,15 +38,33 @@ class LLMClient:
         self._llm_call_log = deque(maxlen=1000)  # bounded ring buffer
         self._llm_total_time = 0.0  # cumulative seconds
 
-        # Prometheus integration (optional — works without it)
-        self._prometheus = None
-        try:
-            from clients.prometheus.PrometheusClient import get_prometheus_integration
-            self._prometheus = get_prometheus_integration()
-        except Exception:
-            pass
+        # Prometheus integration (optional — resolved lazily because
+        # initialize_prometheus() may not have been called yet when
+        # LLMClient is constructed).
+        self.__prometheus = None
+        self.__prometheus_resolved = False
 
         self._load_model()
+
+    @property
+    def _prometheus(self):
+        """Lazy-resolve Prometheus integration.
+
+        ``initialize_prometheus()`` is typically called inside
+        ``PerformanceMonitor.__init__``, which may run *after* ``LLMClient``
+        is constructed.  By resolving lazily we guarantee the singleton is
+        picked up as soon as it exists.
+        """
+        if not self.__prometheus_resolved:
+            try:
+                from clients.prometheus.PrometheusClient import get_prometheus_integration
+                instance = get_prometheus_integration()
+                if instance is not None:
+                    self.__prometheus = instance
+                    self.__prometheus_resolved = True
+            except Exception:
+                pass
+        return self.__prometheus
 
     def _load_model(self):
         logger.info(f"Loading model: {self.model_name}")
