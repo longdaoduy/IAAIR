@@ -118,8 +118,13 @@ class ResultFusion:
                 continue
 
             # ── Confidence scores ──
-            # Multimodal confidence: from vector+visual re-ranking (0-1 range)
-            multimodal_conf = multimodal_scores.get(paper_id, 0.0)
+            # Multimodal confidence: pre-computed similarity score from
+            # HybridRetrievalHandler (already higher=better).
+            # Falls back to the per-result similarity_score injected by the handler,
+            # or to the multimodal_scores map from visual_data.
+            multimodal_conf = result.get('similarity_score', multimodal_scores.get(paper_id, 0.0))
+            # Clamp to [0, 1] — boosted scores for graph/requested papers may exceed 1.0
+            multimodal_conf = min(max(multimodal_conf, 0.0), 1.0)
 
             # Graph confidence: from Neo4j metadata quality (0-1 range)
             graph_conf = self._compute_graph_confidence(result)

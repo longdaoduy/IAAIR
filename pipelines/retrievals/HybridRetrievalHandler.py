@@ -675,8 +675,8 @@ class HybridRetrievalHandler:
 
         Returns:
             (deduped_results, score_map) where deduped_results is a list of
-            paper dicts sorted by best distance (ascending) and score_map is
-            {paper_id: best_distance}.
+            paper dicts sorted by best similarity (descending) and score_map is
+            {paper_id: best_similarity_score} (higher = better, 0-1 range).
         """
         score_map: Dict[str, float] = {}
         all_results: List[Dict] = []
@@ -690,16 +690,16 @@ class HybridRetrievalHandler:
             kw_results = await self._execute_vector_search_internal(kw, top_k)
             all_results.extend(kw_results)
 
-        # Build score map (keep best / lowest distance per paper)
+        # Build score map (keep best / highest similarity per paper)
         for paper in all_results:
             pid = paper.get('paper_id')
             if not pid:
                 continue
-            dist = paper.get('distance', 0.0)
-            if pid not in score_map or dist < score_map[pid]:
-                score_map[pid] = dist
+            sim = paper.get('similarity_score', 0.0)
+            if pid not in score_map or sim > score_map[pid]:
+                score_map[pid] = sim
 
-        # Deduplicate, sort by distance, trim to top_k
+        # Deduplicate, sort by similarity descending, trim to top_k
         seen: set = set()
         deduped: List[Dict] = []
         for r in all_results:
@@ -707,7 +707,7 @@ class HybridRetrievalHandler:
             if pid and pid not in seen:
                 seen.add(pid)
                 deduped.append(r)
-        deduped.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+        deduped.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
         return deduped[:top_k], score_map
 
     async def _enrich_via_graph(
@@ -717,7 +717,7 @@ class HybridRetrievalHandler:
         """Enrich paper IDs with full graph metadata via direct paper ID lookup.
 
         Falls back to *fallback_results* if the graph query fails.
-        Results are re-sorted by vector distance from *score_map*.
+        Results are re-sorted by similarity score from *score_map* (higher = better).
         """
         if not paper_ids:
             return fallback_results
@@ -736,7 +736,7 @@ class HybridRetrievalHandler:
             )
             params = {"paper_ids": paper_ids, "limit": len(paper_ids)}
             results = await run_blocking(self.graph_handler.execute_query, cypher, params)
-            results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+            results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
             logger.info(f"Enriched {len(results)} papers via direct paper ID lookup")
             if results:
                 return results
@@ -958,8 +958,8 @@ class HybridRetrievalHandler:
                 logger.info(f"Running vector-first search for template '{template_key}'")
                 if use_multimodal:
                     sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
-                    multimodal_scores = visual_data.get('multimodal_scores', {})
-                    score_map = {pid: -score for pid, score in multimodal_scores.items()}
+                    # multimodal_scores are already similarity (higher=better)
+                    score_map = visual_data.get('multimodal_scores', {})
                     vector_results = visual_data.get('vector_results', [])
                 else:
                     vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
@@ -997,7 +997,7 @@ class HybridRetrievalHandler:
                         elif not pid:
                             deduped_vf.append(r)
                     results = deduped_vf
-                    results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+                    results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
 
                 final_pids = self._extract_paper_ids(results)
 
@@ -1016,20 +1016,21 @@ class HybridRetrievalHandler:
                 # Keyword vector search (or multimodal)
                 if use_multimodal:
                     sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
-                    multimodal_scores = visual_data.get('multimodal_scores', {})
-                    score_map = {pid: -score for pid, score in multimodal_scores.items()}
+                    # multimodal_scores are already similarity (higher=better)
+                    score_map = visual_data.get('multimodal_scores', {})
                     vector_results = visual_data.get('vector_results', [])
                 else:
                     vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
 
                 # Prioritize graph results over vector-only results
+                # score_map is similarity-based (higher=better), so boost graph papers above the best vector score
                 if graph_pids and score_map:
-                    best_vector = min(score_map.values())
-                    graph_boost = abs(best_vector) + 100.0
+                    best_vector = max(score_map.values())
+                    graph_boost = best_vector + 100.0
                     for gid in graph_pids:
-                        score_map[gid] = min(
+                        score_map[gid] = max(
                             score_map.get(gid, 0.0),
-                            best_vector - graph_boost
+                            graph_boost
                         )
                     logger.info(
                         f"Boosted {len(graph_pids)} graph papers in score_map "
@@ -1037,7 +1038,7 @@ class HybridRetrievalHandler:
                     )
                 elif graph_pids and not score_map:
                     for gid in graph_pids:
-                        score_map[gid] = 0.0
+                        score_map[gid] = 1.0
 
                 vector_only_ids = [pid for pid in self._extract_paper_ids(vector_results) if pid not in graph_pids]
 
@@ -1065,8 +1066,8 @@ class HybridRetrievalHandler:
                         deduped_merged.append(r)
                 merged = deduped_merged
 
-                # Re-rank by score (defer top_k until after requested-paper boost)
-                merged.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+                # Re-rank by similarity score descending (defer top_k until after requested-paper boost)
+                merged.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
                 results = merged
 
                 final_pids = self._extract_paper_ids(results)
@@ -1074,20 +1075,20 @@ class HybridRetrievalHandler:
             # ── Prioritize explicitly requested paper IDs ──
             # When the user's query mentions specific paper IDs, boost their
             # score so they naturally sort to the top of results.
-            # score_map uses lower = better (distance), so we apply a large
-            # negative offset to guarantee requested papers rank first.
+            # score_map uses higher = better (similarity), so we apply a large
+            # positive offset to guarantee requested papers rank first.
             if requested_pids and results:
-                # Determine the boost: put requested papers well below the
+                # Determine the boost: put requested papers well above the
                 # best score so they always come first after sorting.
-                best_score = min(score_map.values()) if score_map else 0.0
-                boost = abs(best_score) + 1000.0  # large enough gap
+                best_score = max(score_map.values()) if score_map else 1.0
+                boost = best_score + 1000.0  # large enough gap
                 boosted_count = 0
                 for pid in requested_pids:
-                    score_map[pid] = score_map.get(pid, 0.0) - boost
+                    score_map[pid] = score_map.get(pid, 0.0) + boost
                     boosted_count += 1
 
-                # Re-sort with boosted scores
-                results.sort(key=lambda r: score_map.get(r.get('paper_id'), float('inf')))
+                # Re-sort with boosted scores (descending)
+                results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
                 if boosted_count:
                     logger.info(
                         f"Boosted {boosted_count} explicitly requested paper IDs "
@@ -1098,8 +1099,21 @@ class HybridRetrievalHandler:
             results = results[:top_k]
             final_pids = self._extract_paper_ids(results)
 
+            # ── Inject similarity_score into each result dict ──
+            # This allows downstream consumers (MockDataEvaluator, ResultFusion)
+            # to read the pre-computed similarity directly without recalculation.
+            for r in results:
+                pid = r.get('paper_id')
+                if pid and pid in score_map:
+                    r['similarity_score'] = score_map[pid]
+
             if not visual_data:
                 visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_pids) if final_pids else empty_visual
+
+            # Pass score_map as multimodal_scores so ResultFusion can use
+            # them directly as multimodal_confidence without recalculation.
+            if score_map:
+                visual_data['multimodal_scores'] = score_map
 
             # Pass explicitly requested paper IDs to ResultFusion so it can
             # preserve their top-ranking after re-sorting by relevance_score.
