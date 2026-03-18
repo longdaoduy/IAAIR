@@ -1026,7 +1026,7 @@ class HybridRetrievalHandler:
                 # score_map is similarity-based (higher=better), so boost graph papers above the best vector score
                 if graph_pids and score_map:
                     best_vector = max(score_map.values())
-                    graph_boost = best_vector + 100.0
+                    graph_boost = best_vector + 1.0
                     for gid in graph_pids:
                         score_map[gid] = max(
                             score_map.get(gid, 0.0),
