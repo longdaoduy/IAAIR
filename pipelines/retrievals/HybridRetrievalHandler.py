@@ -917,6 +917,7 @@ class HybridRetrievalHandler:
             strategy = await self._select_search_strategy(
                 query, extracted, template_key, needs_paper_ids
             )
+            strategy = 'vector_first'
             template_info['search_strategy'] = strategy
             logger.info(f"Search strategy: {strategy} (template={template_key})")
 
