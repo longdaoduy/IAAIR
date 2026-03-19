@@ -122,7 +122,7 @@ class ResultFusion:
             # HybridRetrievalHandler (already higher=better).
             # Falls back to the per-result similarity_score injected by the handler,
             # or to the multimodal_scores map from visual_data.
-            multimodal_conf = result.get('similarity_score', multimodal_scores.get(paper_id, 0.0))
+            multimodal_conf = multimodal_scores.get(paper_id, 0.0)
             # Clamp to [0, 1] — boosted scores for graph/requested papers may exceed 1.0
             multimodal_conf = min(max(multimodal_conf, 0.0), 1.0)
 
@@ -133,7 +133,7 @@ class ResultFusion:
             v_score = paper_visual_scores.get(paper_id, 0.0)
 
             # Hybrid confidence: weighted combination
-            hybrid_conf = result.get('similarity_score', multimodal_scores.get(paper_id, 0.0))
+            hybrid_conf = result.get('similarity_score', 0.0)
 
             # Use hybrid_confidence as the relevance_score for sorting/display
             relevance_score = min(hybrid_conf, 1.0)
