@@ -244,7 +244,7 @@ class HybridRetrievalHandler:
             return []
 
     async def execute_hybrid_search(self, query: str, top_k: int, template_cypher: str = None,
-                                     use_multimodal: bool = True,
+                                     use_multimodal: bool = False,
                                      search_strategy: str = None) -> tuple:
         """Execute neo4j search using Cypher query with intelligent query parsing and caching.
 
