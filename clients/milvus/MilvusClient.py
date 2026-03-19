@@ -857,6 +857,57 @@ class MilvusClient:
         print(f"🔍 Dense search found {len(formatted_results)} similar papers")
         return formatted_results
 
+    def _dense_search_filtered(self, query_embedding: List[float], paper_ids: List[str], top_k: int) -> List[Dict]:
+        """Perform dense vector search filtered to specific paper IDs.
+
+        Computes similarity between the query embedding and the stored
+        embeddings of the given paper IDs only.
+
+        Args:
+            query_embedding: Dense query embedding
+            paper_ids: List of paper IDs to restrict the search to
+            top_k: Maximum number of results to return
+
+        Returns:
+            List of search results with similarity_score (higher = better)
+        """
+        self._ensure_connection()
+        if not paper_ids:
+            return []
+
+        # Build Milvus filter expression for paper IDs
+        ids_str = ', '.join(f'"{pid}"' for pid in paper_ids)
+        expr = f"id in [{ids_str}]"
+
+        search_params = {
+            "metric_type": self.config.metric_type,
+            "params": {"nprobe": min(32, max(1, top_k))}
+        }
+
+        results = self.collection.search(
+            data=[query_embedding],
+            anns_field="dense_embedding",
+            param=search_params,
+            limit=min(top_k, len(paper_ids)),
+            expr=expr,
+            output_fields=["id", "title", "abstract"]
+        )
+
+        formatted_results = []
+        if results and len(results[0]) > 0:
+            for hit in results[0]:
+                formatted_results.append({
+                    "paper_id": hit.entity.get("id"),
+                    "title": hit.entity.get("title"),
+                    "abstract": hit.entity.get("abstract"),
+                    "similarity_score": float(hit.score),
+                    "distance": float(hit.distance),
+                    "search_type": "dense_filtered"
+                })
+
+        print(f"🔍 Filtered dense search found {len(formatted_results)}/{len(paper_ids)} papers")
+        return formatted_results
+
     def _hybrid_search(self, query_text: str, dense_embedding: List[float], top_k: int) -> List[Dict]:
         """Perform hybrid search combining dense and sparse vectors.
         

@@ -745,6 +745,58 @@ class HybridRetrievalHandler:
 
         return fallback_results
 
+    async def _compute_similarity_scores(
+        self, query: str, paper_ids: List[str]
+    ) -> Dict[str, float]:
+        """Compute vector similarity scores for specific paper IDs.
+
+        Generates the query embedding and performs a filtered dense search
+        in Milvus scoped to the given paper IDs.  This is the graph-first
+        counterpart of _keyword_vector_search: instead of discovering papers
+        via vector search, it scores papers already found by the graph.
+
+        Args:
+            query: Natural language query text
+            paper_ids: Paper IDs to compute similarity for
+
+        Returns:
+            {paper_id: similarity_score} dict (higher = better)
+        """
+        if not paper_ids or not self.milvus_client:
+            return {}
+
+        try:
+            # Generate query embedding (with cache)
+            query_embedding = None
+            if self.cache_manager:
+                query_embedding = self.cache_manager.get_embedding(query)
+
+            if query_embedding is None:
+                query_embedding = await run_blocking(
+                    self.embedding_client.generate_text_embedding, query
+                )
+                if self.cache_manager and query_embedding is not None:
+                    self.cache_manager.cache_embedding(query, query_embedding)
+
+            if query_embedding is None:
+                return {}
+
+            # Filtered dense search against only the given paper IDs
+            results = await run_blocking(
+                self.milvus_client._dense_search_filtered,
+                query_embedding, paper_ids, len(paper_ids)
+            )
+
+            score_map = {
+                r['paper_id']: r.get('similarity_score', 0.0)
+                for r in results if r.get('paper_id')
+            }
+            return score_map
+
+        except Exception as e:
+            logger.warning(f"Similarity score computation failed: {e}")
+            return {}
+
     @staticmethod
     def _extract_paper_ids(results: List[Dict]) -> List[str]:
         """Extract non-empty paper_id values from result dicts."""
@@ -917,7 +969,7 @@ class HybridRetrievalHandler:
             strategy = await self._select_search_strategy(
                 query, extracted, template_key, needs_paper_ids
             )
-            strategy = 'vector_first'
+            strategy = 'graph_only'
             template_info['search_strategy'] = strategy
             logger.info(f"Search strategy: {strategy} (template={template_key})")
 
@@ -930,13 +982,13 @@ class HybridRetrievalHandler:
                 self.performance_monitor.record_search_strategy(strategy)
 
             if strategy == 'graph_only':
-                # ── Graph-only: run the Neo4j query, no vector search ──
-                logger.info(f"Running graph-only search for template '{template_key}'")
+                # ── Graph-first: run Neo4j query, then compute vector similarity ──
+                logger.info(f"Running graph-first search for template '{template_key}'")
                 try:
                     results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-                    logger.info(f"Graph-only returned {len(results)} results")
+                    logger.info(f"Graph-first returned {len(results)} results")
                 except Exception as e:
-                    logger.warning(f"Graph-only query failed ({e})")
+                    logger.warning(f"Graph-first query failed ({e})")
                     results = []
 
                 # Deduplicate by paper_id
@@ -951,6 +1003,21 @@ class HybridRetrievalHandler:
                         elif not pid:
                             deduped_go.append(r)
                     results = deduped_go
+
+                # Compute vector similarity for graph-discovered papers
+                graph_pids = self._extract_paper_ids(results)
+                if graph_pids:
+                    score_map = await self._compute_similarity_scores(query, graph_pids)
+                    if score_map:
+                        # Sort by similarity (descending) — best semantic match first
+                        results.sort(
+                            key=lambda r: score_map.get(r.get('paper_id'), 0.0),
+                            reverse=True
+                        )
+                        logger.info(
+                            f"Computed similarity for {len(score_map)}/{len(graph_pids)} "
+                            f"graph papers (scores: {min(score_map.values()):.3f}–{max(score_map.values()):.3f})"
+                        )
 
                 final_pids = self._extract_paper_ids(results)
 

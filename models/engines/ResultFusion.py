@@ -133,10 +133,7 @@ class ResultFusion:
             v_score = paper_visual_scores.get(paper_id, 0.0)
 
             # Hybrid confidence: weighted combination
-            hybrid_conf = (
-                self.MULTIMODAL_WEIGHT * multimodal_conf +
-                self.GRAPH_WEIGHT * graph_conf
-            )
+            hybrid_conf = result.get('similarity_score', multimodal_scores.get(paper_id, 0.0))
 
             # Use hybrid_confidence as the relevance_score for sorting/display
             relevance_score = min(hybrid_conf, 1.0)
