@@ -953,7 +953,7 @@ class HybridRetrievalHandler:
 
                 final_pids = self._extract_paper_ids(results)
 
-            else:
+            elif strategy == 'vector_first':
                 # ── Vector-first: discover paper IDs via vector search, then graph ──
                 logger.info(f"Running vector-first search for template '{template_key}'")
                 if use_multimodal:
@@ -1000,77 +1000,77 @@ class HybridRetrievalHandler:
                     results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
 
                 final_pids = self._extract_paper_ids(results)
-            #
-            # else:
-            #     # ── Graph + Vector merge: run both, merge, re-rank ──
-            #     logger.info(f"Running graph+vector merge for template '{template_key}'")
-            #     try:
-            #         graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-            #         logger.info(f"Graph search returned {len(graph_results)} results")
-            #     except Exception as e:
-            #         logger.warning(f"Graph query failed ({e}), continuing with vector-only")
-            #         graph_results = []
-            #
-            #     graph_pids = set(self._extract_paper_ids(graph_results))
-            #
-            #     # Keyword vector search (or multimodal)
-            #     if use_multimodal:
-            #         sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
-            #         # multimodal_scores are already similarity (higher=better)
-            #         score_map = visual_data.get('multimodal_scores', {})
-            #         vector_results = visual_data.get('vector_results', [])
-            #     else:
-            #         vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
-            #
-            #     # Prioritize graph results over vector-only results
-            #     # score_map is similarity-based (higher=better), so boost graph papers above the best vector score
-            #     if graph_pids and score_map:
-            #         best_vector = max(score_map.values())
-            #         graph_boost = best_vector + 1.0
-            #         for gid in graph_pids:
-            #             score_map[gid] = max(
-            #                 score_map.get(gid, 0.0),
-            #                 graph_boost
-            #             )
-            #         logger.info(
-            #             f"Boosted {len(graph_pids)} graph papers in score_map "
-            #             f"(offset={graph_boost:.1f}) to prioritize over vector-only"
-            #         )
-            #     elif graph_pids and not score_map:
-            #         for gid in graph_pids:
-            #             score_map[gid] = 1.0
-            #
-            #     vector_only_ids = [pid for pid in self._extract_paper_ids(vector_results) if pid not in graph_pids]
-            #
-            #     # Enrich vector-only papers with graph metadata
-            #     vector_enriched = await self._enrich_via_graph(
-            #         vector_only_ids, score_map,
-            #         [r for r in vector_results if r.get('paper_id') not in graph_pids]
-            #     )
-            #
-            #     # Merge: graph results + enriched vector-only results
-            #     merged = list(graph_results)
-            #     for vr in vector_enriched:
-            #         if vr.get('paper_id') not in graph_pids:
-            #             merged.append(vr)
-            #
-            #     # Deduplicate by paper_id (keep first occurrence)
-            #     seen_pids: set = set()
-            #     deduped_merged: List[Dict] = []
-            #     for r in merged:
-            #         pid = r.get('paper_id')
-            #         if pid and pid not in seen_pids:
-            #             seen_pids.add(pid)
-            #             deduped_merged.append(r)
-            #         elif not pid:
-            #             deduped_merged.append(r)
-            #     merged = deduped_merged
-            #
-            #     # Re-rank by similarity score descending (defer top_k until after requested-paper boost)
-            #     merged.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
-            #     results = merged
-            #
-            #     final_pids = self._extract_paper_ids(results)
+
+            else:
+                # ── Graph + Vector merge: run both, merge, re-rank ──
+                logger.info(f"Running graph+vector merge for template '{template_key}'")
+                try:
+                    graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+                    logger.info(f"Graph search returned {len(graph_results)} results")
+                except Exception as e:
+                    logger.warning(f"Graph query failed ({e}), continuing with vector-only")
+                    graph_results = []
+
+                graph_pids = set(self._extract_paper_ids(graph_results))
+
+                # Keyword vector search (or multimodal)
+                if use_multimodal:
+                    sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
+                    # multimodal_scores are already similarity (higher=better)
+                    score_map = visual_data.get('multimodal_scores', {})
+                    vector_results = visual_data.get('vector_results', [])
+                else:
+                    vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
+
+                # Prioritize graph results over vector-only results
+                # score_map is similarity-based (higher=better), so boost graph papers above the best vector score
+                if graph_pids and score_map:
+                    best_vector = max(score_map.values())
+                    graph_boost = best_vector + 1.0
+                    for gid in graph_pids:
+                        score_map[gid] = max(
+                            score_map.get(gid, 0.0),
+                            graph_boost
+                        )
+                    logger.info(
+                        f"Boosted {len(graph_pids)} graph papers in score_map "
+                        f"(offset={graph_boost:.1f}) to prioritize over vector-only"
+                    )
+                elif graph_pids and not score_map:
+                    for gid in graph_pids:
+                        score_map[gid] = 1.0
+
+                vector_only_ids = [pid for pid in self._extract_paper_ids(vector_results) if pid not in graph_pids]
+
+                # Enrich vector-only papers with graph metadata
+                vector_enriched = await self._enrich_via_graph(
+                    vector_only_ids, score_map,
+                    [r for r in vector_results if r.get('paper_id') not in graph_pids]
+                )
+
+                # Merge: graph results + enriched vector-only results
+                merged = list(graph_results)
+                for vr in vector_enriched:
+                    if vr.get('paper_id') not in graph_pids:
+                        merged.append(vr)
+
+                # Deduplicate by paper_id (keep first occurrence)
+                seen_pids: set = set()
+                deduped_merged: List[Dict] = []
+                for r in merged:
+                    pid = r.get('paper_id')
+                    if pid and pid not in seen_pids:
+                        seen_pids.add(pid)
+                        deduped_merged.append(r)
+                    elif not pid:
+                        deduped_merged.append(r)
+                merged = deduped_merged
+
+                # Re-rank by similarity score descending (defer top_k until after requested-paper boost)
+                merged.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
+                results = merged
+
+                final_pids = self._extract_paper_ids(results)
              
             # ── Prioritize explicitly requested paper IDs ──
             # When the user's query mentions specific paper IDs, boost their
