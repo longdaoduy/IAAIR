@@ -244,7 +244,8 @@ class HybridRetrievalHandler:
             return []
 
     async def execute_hybrid_search(self, query: str, top_k: int, template_cypher: str = None,
-                                     use_multimodal: bool = True) -> tuple:
+                                     use_multimodal: bool = True,
+                                     search_strategy: str = None) -> tuple:
         """Execute neo4j search using Cypher query with intelligent query parsing and caching.
 
         Args:
@@ -253,6 +254,8 @@ class HybridRetrievalHandler:
             template_cypher: Optional template key or raw Cypher text
             use_multimodal: When True, use CLIP cross-modal visual search for
                 vector-first discovery; when False, use keyword-only SciBERT search.
+            search_strategy: Optional user-chosen strategy ('graph_only', 'vector_first',
+                'graph_vector_merge'). When None, AI selects automatically.
 
         Returns:
             (results, template_info, visual_data) tuple where template_info
@@ -263,9 +266,9 @@ class HybridRetrievalHandler:
         """
         if self.performance_monitor:
             with self.performance_monitor.track_operation('graph_search'):
-                return await self._execute_hybrid_search_internal(query, top_k, template_cypher, use_multimodal)
+                return await self._execute_hybrid_search_internal(query, top_k, template_cypher, use_multimodal, search_strategy)
         else:
-            return await self._execute_hybrid_search_internal(query, top_k, template_cypher, use_multimodal)
+            return await self._execute_hybrid_search_internal(query, top_k, template_cypher, use_multimodal, search_strategy)
 
     def _refine_template_with_conditions(self, query: str, template_cypher: str, top_k: int,
                                          paper_ids: Optional[List[str]] = None) -> tuple:
@@ -804,7 +807,8 @@ class HybridRetrievalHandler:
 
     async def _execute_hybrid_search_internal(self, query: str, top_k: int,
                                                template_cypher: str = None,
-                                               use_multimodal: bool = False) -> tuple:
+                                               use_multimodal: bool = False,
+                                               search_strategy: str = None) -> tuple:
         """Internal neo4j search implementation with caching.
 
         Args:
@@ -813,6 +817,8 @@ class HybridRetrievalHandler:
             template_cypher: Optional template key or raw Cypher text
             use_multimodal: When True, use CLIP cross-modal visual search for
                 vector-first discovery; when False, use keyword-only SciBERT search.
+            search_strategy: Optional user-chosen strategy ('graph_only', 'vector_first',
+                'graph_vector_merge'). When None, AI selects automatically.
 
         Returns:
             (results, template_info, visual_data) tuple where template_info
@@ -965,11 +971,15 @@ class HybridRetrievalHandler:
             # Keep a reference to OR-condition params so they survive param_builder rebuilds
             _or_extra_params = dict(extra_params) if or_conditions else {}
 
-            # ── AI-driven strategy selection ──
-            strategy = await self._select_search_strategy(
-                query, extracted, template_key, needs_paper_ids
-            )
-            strategy = 'graph_vector_merge'
+            # ── Strategy selection: user-chosen or AI-driven ──
+            if search_strategy and search_strategy in self.VALID_STRATEGIES:
+                strategy = search_strategy
+                logger.info(f"Using user-selected search strategy: {strategy}")
+            else:
+                strategy = await self._select_search_strategy(
+                    query, extracted, template_key, needs_paper_ids
+                )
+                logger.info(f"AI selected search strategy: {strategy}")
             template_info['search_strategy'] = strategy
             logger.info(f"Search strategy: {strategy} (template={template_key})")
 

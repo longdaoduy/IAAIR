@@ -504,6 +504,15 @@
                         </select>
                     </div>
                     <div class="option-group">
+                        <label>Strategy</label>
+                        <select id="searchStrategy">
+                            <option value="" selected>Auto (AI)</option>
+                            <option value="graph_only">Graph First</option>
+                            <option value="vector_first">Vector First</option>
+                            <option value="graph_vector_merge">Graph + Vector Merge</option>
+                        </select>
+                    </div>
+                    <div class="option-group">
                         <label>AI Response</label>
                         <label class="toggle">
                             <input type="checkbox" id="enableAI" checked>
@@ -906,6 +915,10 @@ async function doSearch() {
             top_k: parseInt(document.getElementById('topK').value),
             enable_ai_response: document.getElementById('enableAI').checked
         };
+
+        // Attach search strategy if user selected one
+        const strategy = document.getElementById('searchStrategy').value;
+        if (strategy) body.search_strategy = strategy;
 
         // Attach neo4j template if a template is selected (works with any strategy)
         if (selectedGraphTemplate) {

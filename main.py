@@ -429,7 +429,8 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         hybrid_results, template_info, visual_data = await factory.retrieval_handler.execute_hybrid_search(
             query=request.query,
             template_cypher=request.graph_template,
-            top_k=request.top_k
+            top_k=request.top_k,
+            search_strategy=request.search_strategy
         )
 
         logger.info(f"Template used: {template_info}")
