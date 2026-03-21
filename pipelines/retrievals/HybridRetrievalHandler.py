@@ -1080,8 +1080,10 @@ class HybridRetrievalHandler:
                 final_pids = self._extract_paper_ids(results)
 
             else:
-                # ── Graph + Vector merge: run both, merge, re-rank ──
+                # ── Graph + Vector merge: run both, compute similarity for all, re-rank ──
                 logger.info(f"Running graph+vector merge for template '{template_key}'")
+
+                # 1. Run graph search
                 try:
                     graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
                     logger.info(f"Graph search returned {len(graph_results)} results")
@@ -1091,64 +1093,80 @@ class HybridRetrievalHandler:
 
                 graph_pids = set(self._extract_paper_ids(graph_results))
 
-                # Keyword vector search (or multimodal)
+                # 2. Run keyword vector search
                 if use_multimodal:
                     sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
-                    # multimodal_scores are already similarity (higher=better)
                     score_map = visual_data.get('multimodal_scores', {})
                     vector_results = visual_data.get('vector_results', [])
                 else:
                     vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
 
-                # Prioritize graph results over vector-only results
-                # score_map is similarity-based (higher=better), so boost graph papers above the best vector score
-                if graph_pids and score_map:
-                    best_vector = max(score_map.values())
-                    graph_boost = best_vector + 1.0
-                    for gid in graph_pids:
-                        score_map[gid] = max(
-                            score_map.get(gid, 0.0),
-                            graph_boost
-                        )
+                vector_pids = set(self._extract_paper_ids(vector_results))
+
+                # 3. Compute vector similarity for graph-only papers (not already in score_map)
+                graph_only_pids = [pid for pid in graph_pids if pid not in score_map]
+                if graph_only_pids:
+                    graph_sim_scores = await self._compute_similarity_scores(query, graph_only_pids)
+                    score_map.update(graph_sim_scores)
                     logger.info(
-                        f"Boosted {len(graph_pids)} graph papers in score_map "
-                        f"(offset={graph_boost:.1f}) to prioritize over vector-only"
+                        f"Computed similarity for {len(graph_sim_scores)}/{len(graph_only_pids)} "
+                        f"graph-only papers"
                     )
-                elif graph_pids and not score_map:
-                    for gid in graph_pids:
-                        score_map[gid] = 1.0
 
-                vector_only_ids = [pid for pid in self._extract_paper_ids(vector_results) if pid not in graph_pids]
-
-                # Enrich vector-only papers with graph metadata
-                vector_enriched = await self._enrich_via_graph(
-                    vector_only_ids, score_map,
-                    [r for r in vector_results if r.get('paper_id') not in graph_pids]
-                )
-
-                # Merge: graph results + enriched vector-only results
-                merged = list(graph_results)
-                for vr in vector_enriched:
-                    if vr.get('paper_id') not in graph_pids:
-                        merged.append(vr)
-
-                # Deduplicate by paper_id (keep first occurrence)
-                seen_pids: set = set()
-                deduped_merged: List[Dict] = []
-                for r in merged:
+                # 4. Merge all results into a single list, deduplicated by paper_id
+                # Build a lookup: paper_id → best result dict (graph results have richer metadata)
+                result_by_pid: Dict[str, Dict] = {}
+                # Add graph results first (they have full metadata from Neo4j)
+                for r in graph_results:
                     pid = r.get('paper_id')
-                    if pid and pid not in seen_pids:
-                        seen_pids.add(pid)
-                        deduped_merged.append(r)
-                    elif not pid:
-                        deduped_merged.append(r)
-                merged = deduped_merged
+                    if pid and pid not in result_by_pid:
+                        result_by_pid[pid] = r
+                # Add vector results (only if not already present from graph)
+                for r in vector_results:
+                    pid = r.get('paper_id')
+                    if pid and pid not in result_by_pid:
+                        result_by_pid[pid] = r
 
-                # Re-rank by similarity score descending (defer top_k until after requested-paper boost)
+                # 5. Re-rank all papers by similarity score (higher = better)
+                merged = list(result_by_pid.values())
                 merged.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
-                results = merged
 
+                # 6. Enrich vector-only papers that lack metadata
+                # After sorting, check which papers in the final list came from
+                # vector search only and are missing key metadata fields.
+                pids_needing_metadata = [
+                    r.get('paper_id') for r in merged
+                    if r.get('paper_id')
+                    and r.get('paper_id') not in graph_pids
+                    and not r.get('title')
+                ]
+                if pids_needing_metadata:
+                    enriched = await self._enrich_via_graph(
+                        pids_needing_metadata, score_map,
+                        []  # no fallback needed, we keep originals
+                    )
+                    enriched_by_pid = {r.get('paper_id'): r for r in enriched if r.get('paper_id')}
+                    # Replace sparse vector results with enriched versions
+                    merged = [
+                        enriched_by_pid.get(r.get('paper_id'), r) for r in merged
+                    ]
+                    # Re-sort after enrichment (order preserved via score_map)
+                    merged.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
+                    logger.info(
+                        f"Enriched {len(enriched_by_pid)} vector-only papers with graph metadata"
+                    )
+
+                results = merged
                 final_pids = self._extract_paper_ids(results)
+
+                logger.info(
+                    f"Merge complete: {len(graph_pids)} graph + {len(vector_pids)} vector → "
+                    f"{len(results)} merged (scores: "
+                    f"{min(score_map.values()):.3f}–{max(score_map.values()):.3f})"
+                    if score_map else
+                    f"Merge complete: {len(graph_pids)} graph + {len(vector_pids)} vector → "
+                    f"{len(results)} merged (no scores)"
+                )
              
             # ── Prioritize explicitly requested paper IDs ──
             # When the user's query mentions specific paper IDs, boost their
