@@ -254,8 +254,8 @@ class HybridRetrievalHandler:
             template_cypher: Optional template key or raw Cypher text
             use_multimodal: When True, use CLIP cross-modal visual search for
                 vector-first discovery; when False, use keyword-only SciBERT search.
-            search_strategy: Optional user-chosen strategy ('graph_only', 'vector_first',
-                'graph_vector_merge'). When None, AI selects automatically.
+            search_strategy: Optional user-chosen strategy ('graph_only', 'vector_first').
+                When None, AI selects automatically.
 
         Returns:
             (results, template_info, visual_data) tuple where template_info
@@ -817,8 +817,8 @@ class HybridRetrievalHandler:
             template_cypher: Optional template key or raw Cypher text
             use_multimodal: When True, use CLIP cross-modal visual search for
                 vector-first discovery; when False, use keyword-only SciBERT search.
-            search_strategy: Optional user-chosen strategy ('graph_only', 'vector_first',
-                'graph_vector_merge'). When None, AI selects automatically.
+            search_strategy: Optional user-chosen strategy ('graph_only', 'vector_first').
+                When None, AI selects automatically.
 
         Returns:
             (results, template_info, visual_data) tuple where template_info
@@ -1031,7 +1031,7 @@ class HybridRetrievalHandler:
 
                 final_pids = self._extract_paper_ids(results)
 
-            elif strategy == 'vector_first':
+            else:
                 # ── Vector-first: discover paper IDs via vector search, then graph ──
                 logger.info(f"Running vector-first search for template '{template_key}'")
                 if use_multimodal:
@@ -1078,95 +1078,6 @@ class HybridRetrievalHandler:
                     results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
 
                 final_pids = self._extract_paper_ids(results)
-
-            else:
-                # ── Graph + Vector merge: run both, compute similarity for all, re-rank ──
-                logger.info(f"Running graph+vector merge for template '{template_key}'")
-
-                # 1. Run graph search
-                try:
-                    graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-                    logger.info(f"Graph search returned {len(graph_results)} results")
-                except Exception as e:
-                    logger.warning(f"Graph query failed ({e}), continuing with vector-only")
-                    graph_results = []
-
-                graph_pids = set(self._extract_paper_ids(graph_results))
-
-                # 2. Run keyword vector search
-                if use_multimodal:
-                    sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
-                    score_map = visual_data.get('multimodal_scores', {})
-                    vector_results = visual_data.get('vector_results', [])
-                else:
-                    vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
-
-                vector_pids = set(self._extract_paper_ids(vector_results))
-
-                # 3. Compute vector similarity for graph-only papers (not already in score_map)
-                graph_only_pids = [pid for pid in graph_pids if pid not in score_map]
-                if graph_only_pids:
-                    graph_sim_scores = await self._compute_similarity_scores(query, graph_only_pids)
-                    score_map.update(graph_sim_scores)
-                    logger.info(
-                        f"Computed similarity for {len(graph_sim_scores)}/{len(graph_only_pids)} "
-                        f"graph-only papers"
-                    )
-
-                # 4. Merge all results into a single list, deduplicated by paper_id
-                # Build a lookup: paper_id → best result dict (graph results have richer metadata)
-                result_by_pid: Dict[str, Dict] = {}
-                # Add graph results first (they have full metadata from Neo4j)
-                for r in graph_results:
-                    pid = r.get('paper_id')
-                    if pid and pid not in result_by_pid:
-                        result_by_pid[pid] = r
-                # Add vector results (only if not already present from graph)
-                for r in vector_results:
-                    pid = r.get('paper_id')
-                    if pid and pid not in result_by_pid:
-                        result_by_pid[pid] = r
-
-                # 5. Re-rank all papers by similarity score (higher = better)
-                merged = list(result_by_pid.values())
-                merged.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
-
-                # 6. Enrich vector-only papers that lack metadata
-                # After sorting, check which papers in the final list came from
-                # vector search only and are missing key metadata fields.
-                pids_needing_metadata = [
-                    r.get('paper_id') for r in merged
-                    if r.get('paper_id')
-                    and r.get('paper_id') not in graph_pids
-                    and not r.get('title')
-                ]
-                if pids_needing_metadata:
-                    enriched = await self._enrich_via_graph(
-                        pids_needing_metadata, score_map,
-                        []  # no fallback needed, we keep originals
-                    )
-                    enriched_by_pid = {r.get('paper_id'): r for r in enriched if r.get('paper_id')}
-                    # Replace sparse vector results with enriched versions
-                    merged = [
-                        enriched_by_pid.get(r.get('paper_id'), r) for r in merged
-                    ]
-                    # Re-sort after enrichment (order preserved via score_map)
-                    merged.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
-                    logger.info(
-                        f"Enriched {len(enriched_by_pid)} vector-only papers with graph metadata"
-                    )
-
-                results = merged
-                final_pids = self._extract_paper_ids(results)
-
-                logger.info(
-                    f"Merge complete: {len(graph_pids)} graph + {len(vector_pids)} vector → "
-                    f"{len(results)} merged (scores: "
-                    f"{min(score_map.values()):.3f}–{max(score_map.values()):.3f})"
-                    if score_map else
-                    f"Merge complete: {len(graph_pids)} graph + {len(vector_pids)} vector → "
-                    f"{len(results)} merged (no scores)"
-                )
              
             # ── Prioritize explicitly requested paper IDs ──
             # When the user's query mentions specific paper IDs, boost their
@@ -1612,7 +1523,7 @@ class HybridRetrievalHandler:
     # SEARCH STRATEGY SELECTION — AI picks the retrieval approach
     # =========================================================================
 
-    VALID_STRATEGIES = ('graph_only', 'vector_first', 'graph_vector_merge')
+    VALID_STRATEGIES = ('graph_only', 'vector_first')
 
     async def _select_search_strategy(
         self, query: str, extracted: Dict, template_key: str, needs_paper_ids: bool
@@ -1620,19 +1531,17 @@ class HybridRetrievalHandler:
         """Let the AI agent decide between search strategies.
 
         Strategies:
-            graph_only         — Run only the Neo4j graph query. Best for
-                                 structured lookups (citation count, specific
-                                 paper by ID, co-author network, venue stats).
+            graph_only         — Run the Neo4j graph query, then compute
+                                 vector similarity for discovered papers.
+                                 Best for structured lookups (citation count,
+                                 specific paper by ID, co-author network,
+                                 venue stats) or when entities are explicit.
             vector_first       — Discover paper IDs via vector search first,
-                                 then feed them to the graph query. Best when
+                                 then enrich with graph metadata. Best when
                                  the template needs paper IDs but none are
                                  in the query (topic / keyword searches).
-            graph_vector_merge — Run graph and vector in parallel, merge and
-                                 re-rank. Best for broad exploratory queries
-                                 that benefit from both structured and
-                                 semantic results.
 
-        Returns one of: 'graph_only', 'vector_first', 'graph_vector_merge'
+        Returns one of: 'graph_only', 'vector_first'
         """
         has_paper_ids = bool(extracted.get('paper_ids'))
 
@@ -1645,7 +1554,7 @@ class HybridRetrievalHandler:
 
         # If no AI agent, fall back to simple heuristic
         if not self.ai_agent:
-            strategy = 'graph_only' if has_paper_ids else 'graph_vector_merge'
+            strategy = 'graph_only' if has_paper_ids else 'vector_first'
             logger.info(f"Strategy selected (no AI agent): {strategy}")
             return strategy
 
@@ -1654,15 +1563,13 @@ class HybridRetrievalHandler:
             prompt = (
                 'Pick the best search strategy for this academic paper query.\n\n'
                 'Strategies:\n'
-                '  graph_only         — Structured lookup in the knowledge graph only. '
-                'Fast. Best for: specific paper by ID, citation counts, author collaborations, '
-                'venue statistics, or any query fully answered by graph relationships.\n'
-                '  vector_first       — Discover papers via semantic vector search first, '
-                'then enrich with graph metadata. Best for: topic/keyword searches where '
-                'no paper IDs or author names are given.\n'
-                '  graph_vector_merge — Run both graph and vector search, merge and re-rank. '
-                'Best for: broad exploratory queries that benefit from both structured '
-                'and semantic matching.\n\n'
+                '  graph_only         — Graph-first: run Neo4j query, then compute '
+                'vector similarity for discovered papers. Best for: specific paper by ID, '
+                'citation counts, author collaborations, venue statistics, author searches, '
+                'or any query with explicit entities (names, IDs, venues).\n'
+                '  vector_first       — Vector-first: discover papers via semantic vector '
+                'search, then enrich with graph metadata. Best for: topic/keyword searches '
+                'where no paper IDs or author names are given.\n\n'
                 '## Few-shot examples\n'
                 'Query: "How many citations does paper W2100837269 have?"\n'
                 'Entities: {"paper_ids": ["W2100837269"], "wants_citations": true}\n'
@@ -1675,7 +1582,7 @@ class HybridRetrievalHandler:
                 'Query: "What papers has Yoshua Bengio published on deep learning?"\n'
                 'Entities: {"author_names": ["Yoshua Bengio"], "keywords": ["deep learning"]}\n'
                 'Template: search_papers\n'
-                'Strategy: graph_vector_merge\n\n'
+                'Strategy: graph_only\n\n'
                 'Query: "Show me the most cited papers in NeurIPS"\n'
                 'Entities: {"venue": "NeurIPS", "wants_top_cited": true}\n'
                 'Template: top_cited_papers\n'
@@ -1691,7 +1598,7 @@ class HybridRetrievalHandler:
                 'Query: "papers by Yann LeCun on convolutional neural networks since 2020"\n'
                 'Entities: {"author_names": ["Yann LeCun"], "keywords": ["convolutional neural networks"], "year_from": "2020"}\n'
                 'Template: search_papers\n'
-                'Strategy: graph_vector_merge\n\n'
+                'Strategy: graph_only\n\n'
                 f'## Your turn\n'
                 f'Query: "{query}"\n'
                 f'Entities: {extracted}\n'
@@ -1704,7 +1611,7 @@ class HybridRetrievalHandler:
                 prompt=prompt,
                 system_prompt=(
                     'You are a search strategy router. Output ONLY one of: '
-                    'graph_only, vector_first, graph_vector_merge. '
+                    'graph_only, vector_first. '
                     'No explanation.'
                 ),
                 purpose='strategy_selection',
@@ -1727,7 +1634,7 @@ class HybridRetrievalHandler:
         if has_paper_ids or extracted.get('wants_citations') or extracted.get('wants_coauthors') or extracted.get('wants_top_cited'):
             fallback = 'graph_only'
         elif extracted.get('author_names') or extracted.get('venue'):
-            fallback = 'graph_vector_merge'
+            fallback = 'graph_only'
         else:
             fallback = 'vector_first'
         logger.info(f"Strategy selected (heuristic fallback): {fallback}")

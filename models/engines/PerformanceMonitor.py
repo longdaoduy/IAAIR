@@ -44,7 +44,7 @@ class PerformanceMonitor:
         Args:
             result_count: Number of results returned to the user.
             template_key: The Neo4j template that was selected.
-            search_strategy: The search strategy used (graph_only / vector_first / graph_vector_merge).
+            search_strategy: The search strategy used (graph_only / vector_first).
         """
         if self._search_start is None:
             return

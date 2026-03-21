@@ -64,7 +64,7 @@ class PrometheusMonitoring:
         self.metrics.record_template_used(template_key)
 
     def record_search_strategy(self, strategy: str):
-        """Record which search strategy was used (graph_only / vector_first / graph_vector_merge)."""
+        """Record which search strategy was used (graph_only / vector_first)."""
         self.metrics.record_search_strategy(strategy)
 
     def record_results(self, count: int):

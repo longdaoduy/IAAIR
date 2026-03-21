@@ -13,5 +13,5 @@ class HybridSearchRequest(BaseModel):
     fusion_weights: Optional[Dict[str, float]] = Field(None, description="Custom fusion weights")
     # include_provenance: bool = Field(False, description="Include detailed provenance")
     graph_template: Optional[str] = Field(None, description="Cypher template for neo4j search. AI will extract filter conditions from the query and inject them.")
-    search_strategy: Optional[str] = Field(None, description="Search strategy: 'graph_only', 'vector_first', 'graph_vector_merge', or None for AI auto-selection.")
+    search_strategy: Optional[str] = Field(None, description="Search strategy: 'graph_only', 'vector_first', or None for AI auto-selection.")
     # paper_ids: Optional[List[str]] = Field(None, description="Optional paper IDs to filter neo4j template results. Added as WHERE p.id IN ... clause.")
