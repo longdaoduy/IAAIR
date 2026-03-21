@@ -1528,117 +1528,54 @@ class HybridRetrievalHandler:
     async def _select_search_strategy(
         self, query: str, extracted: Dict, template_key: str, needs_paper_ids: bool
     ) -> str:
-        """Let the AI agent decide between search strategies.
+        """Select the search strategy based on query content.
 
         Strategies:
-            graph_only         — Run the Neo4j graph query, then compute
-                                 vector similarity for discovered papers.
-                                 Best for structured lookups (citation count,
-                                 specific paper by ID, co-author network,
-                                 venue stats) or when entities are explicit.
-            vector_first       — Discover paper IDs via vector search first,
-                                 then enrich with graph metadata. Best when
-                                 the template needs paper IDs but none are
-                                 in the query (topic / keyword searches).
+            graph_only   — Run the Neo4j graph query, then compute vector
+                           similarity for discovered papers. Used when the
+                           query has any explicit entities (author names,
+                           paper IDs, venues, years, intent flags).
+            vector_first — Discover paper IDs via semantic vector search,
+                           then enrich with graph metadata. Used only when
+                           the query is purely topic/keyword-based with no
+                           explicit entities.
 
         Returns one of: 'graph_only', 'vector_first'
         """
+        # ── Purely deterministic: vector_first only for pure topic searches ──
+        # A query is "pure topic" when it has ONLY keywords and nothing else.
         has_paper_ids = bool(extracted.get('paper_ids'))
+        has_authors = bool(extracted.get('author_names'))
+        has_venue = bool(extracted.get('venue'))
+        has_institution = bool(extracted.get('institution'))
+        has_year = bool(extracted.get('year') or extracted.get('year_from'))
+        has_intent = bool(
+            extracted.get('wants_citations')
+            or extracted.get('wants_coauthors')
+            or extracted.get('wants_top_cited')
+        )
 
-        # ── Deterministic fast-paths (skip LLM call) ──
-        # When template needs paper_ids but query has none, vector_first is
-        # the only viable path — no point asking the AI.
-        if needs_paper_ids and not has_paper_ids:
-            logger.info("Strategy selected (deterministic): vector_first — template needs paper_ids but none extracted")
-            return 'vector_first'
+        has_explicit_entities = (
+            has_paper_ids or has_authors or has_venue
+            or has_institution or has_year or has_intent
+        )
 
-        # If no AI agent, fall back to simple heuristic
-        if not self.ai_agent:
-            strategy = 'graph_only' if has_paper_ids else 'vector_first'
-            logger.info(f"Strategy selected (no AI agent): {strategy}")
-            return strategy
-
-        # ── Few-shot AI selection ──
-        try:
-            prompt = (
-                'Pick the best search strategy for this academic paper query.\n\n'
-                'Strategies:\n'
-                '  graph_only         — Graph-first: run Neo4j query, then compute '
-                'vector similarity for discovered papers. Best for: specific paper by ID, '
-                'citation counts, author collaborations, venue statistics, author searches, '
-                'or any query with explicit entities (names, IDs, venues).\n'
-                '  vector_first       — Vector-first: discover papers via semantic vector '
-                'search, then enrich with graph metadata. Best for: topic/keyword searches '
-                'where no paper IDs or author names are given.\n\n'
-                '## Few-shot examples\n'
-                'Query: "How many citations does paper W2100837269 have?"\n'
-                'Entities: {"paper_ids": ["W2100837269"], "wants_citations": true}\n'
-                'Template: search_citations\n'
-                'Strategy: graph_only\n\n'
-                'Query: "Find papers about transformer architectures for medical imaging"\n'
-                'Entities: {"keywords": ["transformer", "medical imaging"]}\n'
-                'Template: search_papers\n'
-                'Strategy: vector_first\n\n'
-                'Query: "What papers has Yoshua Bengio published on deep learning?"\n'
-                'Entities: {"author_names": ["Yoshua Bengio"], "keywords": ["deep learning"]}\n'
-                'Template: search_papers\n'
-                'Strategy: graph_only\n\n'
-                'Query: "Show me the most cited papers in NeurIPS"\n'
-                'Entities: {"venue": "NeurIPS", "wants_top_cited": true}\n'
-                'Template: top_cited_papers\n'
-                'Strategy: graph_only\n\n'
-                'Query: "papers about attention mechanisms"\n'
-                'Entities: {"keywords": ["attention mechanisms"]}\n'
-                'Template: search_papers\n'
-                'Strategy: vector_first\n\n'
-                'Query: "Find co-authors of Geoffrey Hinton"\n'
-                'Entities: {"author_names": ["Geoffrey Hinton"], "wants_coauthors": true}\n'
-                'Template: coauthor_network\n'
-                'Strategy: graph_only\n\n'
-                'Query: "papers by Yann LeCun on convolutional neural networks since 2020"\n'
-                'Entities: {"author_names": ["Yann LeCun"], "keywords": ["convolutional neural networks"], "year_from": "2020"}\n'
-                'Template: search_papers\n'
-                'Strategy: graph_only\n\n'
-                f'## Your turn\n'
-                f'Query: "{query}"\n'
-                f'Entities: {extracted}\n'
-                f'Template: {template_key}\n'
-                f'Strategy:'
+        if has_explicit_entities:
+            logger.info(
+                f"Strategy selected (deterministic): graph_only — "
+                f"explicit entities found: "
+                f"{'paper_ids ' if has_paper_ids else ''}"
+                f"{'authors ' if has_authors else ''}"
+                f"{'venue ' if has_venue else ''}"
+                f"{'institution ' if has_institution else ''}"
+                f"{'year ' if has_year else ''}"
+                f"{'intent ' if has_intent else ''}"
             )
+            return 'graph_only'
 
-            raw = await run_blocking(
-                self.ai_agent.generate_content,
-                prompt=prompt,
-                system_prompt=(
-                    'You are a search strategy router. Output ONLY one of: '
-                    'graph_only, vector_first. '
-                    'No explanation.'
-                ),
-                purpose='strategy_selection',
-                max_tokens=24,
-            )
-
-            if raw:
-                choice = raw.strip().strip('\'" ').lower().replace('-', '_')
-                # Extract valid strategy even if LLM added extra text
-                for valid in self.VALID_STRATEGIES:
-                    if valid in choice:
-                        logger.info(f"Strategy selected (AI): {valid}")
-                        return valid
-                logger.warning(f"AI returned invalid strategy '{choice}', falling back to heuristic")
-
-        except Exception as e:
-            logger.warning(f"AI strategy selection failed ({e}), using heuristic")
-
-        # ── Heuristic fallback ──
-        if has_paper_ids or extracted.get('wants_citations') or extracted.get('wants_coauthors') or extracted.get('wants_top_cited'):
-            fallback = 'graph_only'
-        elif extracted.get('author_names') or extracted.get('venue'):
-            fallback = 'graph_only'
-        else:
-            fallback = 'vector_first'
-        logger.info(f"Strategy selected (heuristic fallback): {fallback}")
-        return fallback
+        # Pure topic/keyword query → use vector search to discover papers
+        logger.info("Strategy selected (deterministic): vector_first — pure topic/keyword query")
+        return 'vector_first'
 
     # =========================================================================
     # ENTITY EXTRACTION — Pull structured data from natural language query
