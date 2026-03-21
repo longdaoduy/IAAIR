@@ -49,8 +49,7 @@ class ServiceFactory:
         self.attribution_tracker = None
 
         # Complex Handlers
-        self.ingestion_handler = None
-        # self.ingestion_handler = IngestionHandler(self.scibert_client, self.clip_client, self.milvus_client)
+        self.ingestion_handler = IngestionHandler(self.scibert_client, self.clip_client, self.milvus_client)
         self.embedding_handler = EmbeddingSciBERTHandler(self.scibert_client)
         self.retrieval_handler = HybridRetrievalHandler(
             self.milvus_client,
