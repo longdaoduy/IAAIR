@@ -99,11 +99,14 @@ class MilvusClient:
         ThreadPoolExecutor), the connection created during startup is not
         visible.  This method silently reconnects on the current thread so
         that subsequent pymilvus operations succeed.
+
+        Also lazily loads the papers collection if it has not been loaded yet.
         """
         try:
             # Fast check: if the connection already exists on this thread, no-op.
             addr = connections.get_connection_addr("default")
             if addr and addr.get("uri"):
+                self._ensure_collection()
                 return
         except Exception:
             pass
@@ -118,6 +121,21 @@ class MilvusClient:
             )
         except Exception as e:
             print(f"⚠️ Thread-local Milvus reconnect failed: {e}")
+
+        self._ensure_collection()
+
+    def _ensure_collection(self):
+        """Lazily load the papers collection if not already loaded."""
+        if self.collection is not None:
+            return
+        try:
+            collection_name = self.config.collection_name
+            if utility.has_collection(collection_name):
+                self.collection = Collection(collection_name)
+                self.collection.load()
+                print(f"📋 Lazy-loaded collection: {collection_name}")
+        except Exception as e:
+            print(f"⚠️ Failed to lazy-load collection: {e}")
 
     def create_collection_schema(self, embedding_dim: int) -> CollectionSchema:
         """Create collection schema for paper embeddings with hybrid search support.
