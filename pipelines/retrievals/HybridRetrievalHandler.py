@@ -1080,7 +1080,7 @@ class HybridRetrievalHandler:
                 final_pids = self._extract_paper_ids(results)
 
             else:
-                # ── Graph + Vector merge: run both, re-rank by multimodal score ──
+                # ── Graph + Vector merge: run both, merge, re-rank ──
                 logger.info(f"Running graph+vector merge for template '{template_key}'")
                 try:
                     graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
@@ -1091,22 +1091,38 @@ class HybridRetrievalHandler:
 
                 graph_pids = set(self._extract_paper_ids(graph_results))
 
-                # Keyword vector search
-                vector_results, vector_score_map = await self._keyword_vector_search(query, keywords, top_k)
-                vector_pids = set(self._extract_paper_ids(vector_results))
+                # Keyword vector search (or multimodal)
+                if use_multimodal:
+                    sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
+                    # multimodal_scores are already similarity (higher=better)
+                    score_map = visual_data.get('multimodal_scores', {})
+                    vector_results = visual_data.get('vector_results', [])
+                else:
+                    vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
 
-                # Compute similarity for graph-only papers not covered by vector search
-                graph_only_pids = [pid for pid in graph_pids if pid not in vector_score_map]
-                if graph_only_pids:
-                    graph_sim = await self._compute_similarity_scores(query, graph_only_pids)
-                    vector_score_map.update(graph_sim)
-                    logger.info(f"Computed similarity for {len(graph_sim)} graph-only papers")
+                # Prioritize graph results over vector-only results
+                # score_map is similarity-based (higher=better), so boost graph papers above the best vector score
+                if graph_pids and score_map:
+                    best_vector = max(score_map.values())
+                    graph_boost = best_vector + 1.0
+                    for gid in graph_pids:
+                        score_map[gid] = max(
+                            score_map.get(gid, 0.0),
+                            graph_boost
+                        )
+                    logger.info(
+                        f"Boosted {len(graph_pids)} graph papers in score_map "
+                        f"(offset={graph_boost:.1f}) to prioritize over vector-only"
+                    )
+                elif graph_pids and not score_map:
+                    for gid in graph_pids:
+                        score_map[gid] = 1.0
 
                 vector_only_ids = [pid for pid in self._extract_paper_ids(vector_results) if pid not in graph_pids]
 
                 # Enrich vector-only papers with graph metadata
                 vector_enriched = await self._enrich_via_graph(
-                    vector_only_ids, vector_score_map,
+                    vector_only_ids, score_map,
                     [r for r in vector_results if r.get('paper_id') not in graph_pids]
                 )
 
@@ -1128,31 +1144,7 @@ class HybridRetrievalHandler:
                         deduped_merged.append(r)
                 merged = deduped_merged
 
-                # Run visual search (CLIP figures + tables) scoped to all merged papers
-                all_merged_pids = self._extract_paper_ids(merged)
-                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=all_merged_pids)
-                paper_visual_scores = visual_data.get('paper_visual_scores', {})
-
-                # Build multimodal score: vector_similarity * 0.7 + visual_score * 0.3
-                vector_weight = 0.7
-                visual_weight = 0.3
-                for pid in all_merged_pids:
-                    vec_sim = vector_score_map.get(pid, 0.0)
-                    vis_score = paper_visual_scores.get(pid, 0.0)
-                    score_map[pid] = vector_weight * vec_sim + visual_weight * vis_score
-
-                logger.info(
-                    f"Multimodal re-rank: {len(all_merged_pids)} papers "
-                    f"(graph: {len(graph_pids)}, vector: {len(vector_pids)}, "
-                    f"visual evidence: {len(paper_visual_scores)}, "
-                    f"figures: {len(visual_data.get('figure_results', []))}, "
-                    f"tables: {len(visual_data.get('table_results', []))})"
-                )
-
-                # Store multimodal scores for downstream (ResultFusion)
-                visual_data['multimodal_scores'] = dict(score_map)
-
-                # Re-rank by multimodal score descending
+                # Re-rank by similarity score descending (defer top_k until after requested-paper boost)
                 merged.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
                 results = merged
 
