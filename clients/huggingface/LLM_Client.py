@@ -283,7 +283,7 @@ class LLMClient:
             'total_llm_time_sec': round(self._llm_total_time, 3),
             'avg_time_per_call_sec': round(self._llm_total_time / max(1, self._llm_call_count), 3),
             'by_purpose': by_purpose,
-            'recent_calls': self._llm_call_log[-10:]  # last 10 calls
+            'recent_calls': list(self._llm_call_log)[-10:]  # last 10 calls
         }
     
     def reset_llm_stats(self):
