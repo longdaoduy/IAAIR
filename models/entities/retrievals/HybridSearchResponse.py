@@ -24,3 +24,10 @@ class HybridSearchResponse(BaseModel):
     verification_results: List[Dict[str, Any]] = []  # [{claim, label, raw_label}]
     verification_summary: Dict[str, Any] = {}  # {total, supported, contradicted, no_evidence, verdict}
     verification_time_seconds: Optional[float] = None
+    # Attribution stats
+    attribution_stats: Dict[str, Any] = {}  # {total, high_confidence, papers_attributed}
+    # Conversation context
+    session_id: Optional[str] = None
+    conversation_turn: Optional[int] = None  # which turn this is in the session
+    # Input sanitization warnings
+    query_warnings: List[str] = []

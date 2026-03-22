@@ -1,5 +1,7 @@
 import math
+import re
 from models.entities.retrievals.SearchResult import SearchResult
+from models.entities.retrievals.AttributionSpan import AttributionSpan
 from typing import Dict, List, Optional
 
 
@@ -18,6 +20,132 @@ class ResultFusion:
     # Weights for combining confidence scores into hybrid_confidence
     MULTIMODAL_WEIGHT = 0.3
     GRAPH_WEIGHT = 0.7
+
+    @staticmethod
+    def build_attributions(ai_response: str, fused_results: List[SearchResult]) -> List[SearchResult]:
+        """Build attribution spans by matching AI response text to source papers.
+
+        Scans the AI response for references to each paper's title, authors,
+        or bracket citations (e.g. [1], [2]) and populates the `attributions`
+        field on each matching SearchResult.
+
+        Args:
+            ai_response: The generated AI answer text
+            fused_results: SearchResult objects from fusion step
+
+        Returns:
+            The same fused_results list with `attributions` populated
+        """
+        if not ai_response or not fused_results:
+            return fused_results
+
+        response_lower = ai_response.lower()
+
+        for idx, result in enumerate(fused_results):
+            spans = []
+
+            # 1. Title match — find if the paper's title appears in the AI response
+            title = (result.title or '').strip()
+            if title and len(title) > 10:
+                # Try exact substring match (case-insensitive)
+                title_lower = title.lower()
+                pos = response_lower.find(title_lower)
+                if pos != -1:
+                    spans.append(AttributionSpan(
+                        text=ai_response[pos:pos + len(title)],
+                        source_id=result.paper_id,
+                        source_type='paper',
+                        confidence=0.95,
+                        char_start=pos,
+                        char_end=pos + len(title),
+                        supporting_passages=[title],
+                    ))
+                else:
+                    # Try partial title match (first 5+ significant words)
+                    title_words = [w for w in title_lower.split() if len(w) > 3]
+                    if len(title_words) >= 3:
+                        # Check if 60%+ of significant title words appear in response
+                        matched_words = [w for w in title_words if w in response_lower]
+                        if len(matched_words) >= len(title_words) * 0.6:
+                            spans.append(AttributionSpan(
+                                text=f"Partial title match: {', '.join(matched_words[:5])}",
+                                source_id=result.paper_id,
+                                source_type='paper',
+                                confidence=0.6,
+                                char_start=0,
+                                char_end=0,
+                                supporting_passages=[title],
+                            ))
+
+            # 2. Author match — check if any author name appears in the response
+            for author in (result.authors or []):
+                if not author or len(author) < 3:
+                    continue
+                author_lower = author.lower()
+                pos = response_lower.find(author_lower)
+                if pos != -1:
+                    spans.append(AttributionSpan(
+                        text=ai_response[pos:pos + len(author)],
+                        source_id=result.paper_id,
+                        source_type='paper',
+                        confidence=0.85,
+                        char_start=pos,
+                        char_end=pos + len(author),
+                        supporting_passages=[f"Author: {author}"],
+                    ))
+                    break  # one author match per paper is enough
+
+            # 3. Bracket citation match — e.g. [1], [2] in the AI response
+            bracket_pattern = re.compile(r'\[' + str(idx + 1) + r'\]')
+            for m in bracket_pattern.finditer(ai_response):
+                spans.append(AttributionSpan(
+                    text=m.group(),
+                    source_id=result.paper_id,
+                    source_type='paper',
+                    confidence=0.90,
+                    char_start=m.start(),
+                    char_end=m.end(),
+                    supporting_passages=[f"Citation reference [{idx + 1}]"],
+                ))
+
+            # 4. Abstract content match — check if key phrases from the abstract
+            # appear in the response (indicates the LLM used this paper's content)
+            abstract = (result.abstract or '').strip()
+            if abstract and len(abstract) > 50:
+                # Extract key phrases (3+ word sequences)
+                abstract_lower = abstract.lower()
+                # Find 4-word windows that appear in both abstract and response
+                abstract_words = abstract_lower.split()
+                for i in range(len(abstract_words) - 3):
+                    phrase = ' '.join(abstract_words[i:i + 4])
+                    if len(phrase) > 15 and phrase in response_lower:
+                        pos = response_lower.find(phrase)
+                        spans.append(AttributionSpan(
+                            text=ai_response[pos:pos + len(phrase)],
+                            source_id=result.paper_id,
+                            source_type='abstract',
+                            confidence=0.75,
+                            char_start=pos,
+                            char_end=pos + len(phrase),
+                            supporting_passages=[phrase],
+                        ))
+                        break  # one content match per paper is enough
+
+            # Deduplicate spans by char_start
+            seen_starts = set()
+            unique_spans = []
+            for s in spans:
+                if s.char_start not in seen_starts:
+                    seen_starts.add(s.char_start)
+                    unique_spans.append(s)
+
+            result.attributions = unique_spans
+
+            # Update source_path if attributions found
+            if unique_spans and 'attributed' not in result.source_path:
+                result.source_path.append('attributed')
+
+        return fused_results
 
     @staticmethod
     def _compute_graph_confidence(result: Dict) -> float:

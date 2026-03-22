@@ -14,4 +14,5 @@ class HybridSearchRequest(BaseModel):
     # include_provenance: bool = Field(False, description="Include detailed provenance")
     graph_template: Optional[str] = Field(None, description="Cypher template for neo4j search. AI will extract filter conditions from the query and inject them.")
     search_strategy: Optional[str] = Field(None, description="Search strategy: 'graph_only', 'vector_first', or None for AI auto-selection.")
+    session_id: Optional[str] = Field(None, description="Session ID for multi-turn conversation memory. Enables follow-up questions with context from prior turns.")
     # paper_ids: Optional[List[str]] = Field(None, description="Optional paper IDs to filter neo4j template results. Added as WHERE p.id IN ... clause.")

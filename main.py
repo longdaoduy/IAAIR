@@ -49,12 +49,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from models.engines.ServiceFactory import ServiceFactory
 from pipelines.evaluations.MockDataEvaluator import MockDataEvaluator
+from models.engines.ConversationMemory import ConversationMemory
+from pipelines.retrievals.HybridRetrievalHandler import sanitize_query
 from utils.async_utils import run_blocking
 import time
 from typing import Callable
 
 # Global factory container
 services = ServiceFactory()
+conversation_memory = ConversationMemory()
 
 
 class RequestCounterMiddleware(BaseHTTPMiddleware):
@@ -418,7 +421,17 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
     7. Comprehensive performance monitoring and caching
     """
     start_time = datetime.now()
+    query_warnings = []
     try:
+        # ── Input sanitization (Fix #7: Guardrails) ──
+        try:
+            sanitized_query, query_warnings = sanitize_query(request.query)
+            if sanitized_query != request.query:
+                logger.info(f"Query sanitized: {query_warnings}")
+                request.query = sanitized_query
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+
         logger.info(f"Starting hybrid search for query: '{request.query}'")
 
         # Start Prometheus search tracking
@@ -511,6 +524,13 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         verification_summary = {}
         verification_time = None
 
+        # ── Conversation memory (Fix #2: Multi-turn) ──
+        conversation_context = ""
+        if request.session_id:
+            conversation_context = conversation_memory.get_context(request.session_id)
+            if conversation_context:
+                logger.info(f"Injecting conversation context for session {request.session_id[:8]}...")
+
         if request.enable_ai_response and fused_results:
             response_start = datetime.now()
 
@@ -525,10 +545,17 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             else:
                 factory.performance_monitor.record_cache_hit('ai_response', False)
                 with factory.performance_monitor.track_operation('ai_response'):
-                    # 1. Generate the raw synthesis
+                    # 1. Generate the raw synthesis with conversation context
                     ai_response = await factory.retrieval_handler.generate_ai_response(
                         request.query, fused_results, template_info=template_info,
+                        conversation_context=conversation_context,
                     )
+
+                    # 1b. Build attributions (Fix #6) — map AI text to source papers
+                    if ai_response:
+                        fused_results = factory.result_fusion.build_attributions(
+                            ai_response, fused_results
+                        )
 
                     # 2. SciFact verification — check claims against retrieved evidence
                     if ai_response:
@@ -605,6 +632,34 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         # Combine all visual results for the response
         all_visual_results = visual_figures + visual_tables
 
+        # ── Record conversation turn (Fix #2: Multi-turn) ──
+        conversation_turn = None
+        if request.session_id:
+            paper_ids = [r.paper_id for r in fused_results[:10]]
+            conversation_memory.add_turn(
+                session_id=request.session_id,
+                query=request.query,
+                ai_response=ai_response,
+                template_key=template_info.get('template_key'),
+                paper_ids=paper_ids,
+            )
+            turns = conversation_memory._sessions.get(request.session_id, [])
+            conversation_turn = len(turns)
+
+        # ── Attribution stats (Fix #6) ──
+        attribution_stats = {}
+        total_attr = sum(len(r.attributions) for r in fused_results)
+        if total_attr > 0:
+            high_conf = sum(
+                1 for r in fused_results for a in r.attributions if a.confidence >= 0.8
+            )
+            papers_attributed = sum(1 for r in fused_results if r.attributions)
+            attribution_stats = {
+                'total_attributions': total_attr,
+                'high_confidence_attributions': high_conf,
+                'papers_attributed': papers_attributed,
+            }
+
         return HybridSearchResponse(
             success=True,
             # message=f"Hybrid search completed using {routing_strategy.value} strategy",
@@ -623,6 +678,10 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             verification_results=verification_results,
             verification_summary=verification_summary,
             verification_time_seconds=verification_time,
+            attribution_stats=attribution_stats,
+            session_id=request.session_id,
+            conversation_turn=conversation_turn,
+            query_warnings=query_warnings,
         )
 
     except Exception as e:
@@ -1341,6 +1400,34 @@ async def get_prometheus_metrics(factory: ServiceFactory = Depends(get_services)
         raise HTTPException(status_code=500, detail=f"Failed to serve metrics: {str(e)}")
 
 
+# ===============================================================================
+# CONVERSATION MEMORY ENDPOINTS
+# ===============================================================================
+
+@app.get("/conversation/stats")
+async def get_conversation_stats():
+    """Get conversation memory statistics."""
+    return {
+        "success": True,
+        "active_sessions": conversation_memory.get_session_count(),
+        "total_turns": conversation_memory.get_total_turns(),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/conversation/clear")
+async def clear_conversation(session_id: Optional[str] = None):
+    """Clear conversation memory.
+
+    Args:
+        session_id: If provided, clears only that session. Otherwise clears all.
+    """
+    if session_id:
+        conversation_memory.clear_session(session_id)
+        return {"success": True, "message": f"Session {session_id} cleared"}
+    else:
+        conversation_memory.clear_all()
+        return {"success": True, "message": "All conversation memory cleared"}
 
 
 # ===============================================================================
