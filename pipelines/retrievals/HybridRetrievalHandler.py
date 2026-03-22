@@ -32,7 +32,7 @@ class HybridRetrievalHandler:
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
-        # self.ai_agent = None
+        self.verify_agent = LLMClient()
         # self.ai_agent = None
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
@@ -1999,7 +1999,7 @@ Label this claim as exactly ONE of the following:
 Respond with ONLY the label (SUPPORTED, CONTRADICTED, or NO_EVIDENCE)."""
 
             raw_label = await run_blocking(
-                self.ai_agent.generate_content, logic_prompt,
+                self.verify_agent.generate_content, logic_prompt,
                 purpose='scifact_verification'
             )
             label = self._parse_verification_label(raw_label)
