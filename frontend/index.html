@@ -1109,37 +1109,37 @@ function renderSearchResults(d) {
             <div class="ai-response-header"><span class="icon">✨</span><h4>AI-Generated Answer</h4></div>
             <div class="ai-response-body">${escHtml(d.ai_response)}</div>`;
 
-        // Verification results
-        const vs2 = d.verification_summary || {};
-        const vr = d.verification_results || [];
-        if (vs2.total_claims > 0) {
-            const verdictMap = {
-                'FULLY_SUPPORTED': { icon: '✅', text: 'Fully Supported', cls: 'supported' },
-                'PARTIALLY_SUPPORTED': { icon: '⚠️', text: 'Partially Supported', cls: 'partial' },
-                'CONTRADICTED': { icon: '❌', text: 'Contradicted', cls: 'contradicted' },
-                'NO_EVIDENCE': { icon: '❓', text: 'No Evidence', cls: 'neutral' },
-                'NO_CLAIMS': { icon: '➖', text: 'No Claims', cls: 'neutral' },
-            };
-            const vi = verdictMap[vs2.verdict] || verdictMap['NO_EVIDENCE'];
-            html += `<div class="verification-box">
-                <div class="verification-header">
-                    <span>🔬 SciFact Verification</span>
-                    <span class="verdict-badge ${vi.cls}">${vi.icon} ${vi.text}</span>
-                    ${d.verification_time_seconds ? `<span style="margin-left:auto;font-size:11px;color:var(--text-dim)">⏱ ${d.verification_time_seconds.toFixed(1)}s</span>` : ''}
-                </div>
-                <div style="display:flex;gap:12px;margin-bottom:10px;font-size:12px">
-                    <span style="color:#22c55e">✓ ${vs2.supported || 0} supported</span>
-                    <span style="color:#ef4444">✗ ${vs2.contradicted || 0} contradicted</span>
-                    <span style="color:#94a3b8">? ${vs2.no_evidence || 0} no evidence</span>
-                </div>`;
-            for (const c of vr) {
-                html += `<div class="claim-item">
-                    <span class="claim-label ${c.label}">${c.label}</span>
-                    <span style="color:var(--text-muted)">${escHtml(c.claim)}</span>
-                </div>`;
-            }
-            html += `</div>`;
-        }
+        // // Verification results
+        // const vs2 = d.verification_summary || {};
+        // const vr = d.verification_results || [];
+        // if (vs2.total_claims > 0) {
+        //     const verdictMap = {
+        //         'FULLY_SUPPORTED': { icon: '✅', text: 'Fully Supported', cls: 'supported' },
+        //         'PARTIALLY_SUPPORTED': { icon: '⚠️', text: 'Partially Supported', cls: 'partial' },
+        //         'CONTRADICTED': { icon: '❌', text: 'Contradicted', cls: 'contradicted' },
+        //         'NO_EVIDENCE': { icon: '❓', text: 'No Evidence', cls: 'neutral' },
+        //         'NO_CLAIMS': { icon: '➖', text: 'No Claims', cls: 'neutral' },
+        //     };
+        //     const vi = verdictMap[vs2.verdict] || verdictMap['NO_EVIDENCE'];
+        //     html += `<div class="verification-box">
+        //         <div class="verification-header">
+        //             <span>🔬 SciFact Verification</span>
+        //             <span class="verdict-badge ${vi.cls}">${vi.icon} ${vi.text}</span>
+        //             ${d.verification_time_seconds ? `<span style="margin-left:auto;font-size:11px;color:var(--text-dim)">⏱ ${d.verification_time_seconds.toFixed(1)}s</span>` : ''}
+        //         </div>
+        //         <div style="display:flex;gap:12px;margin-bottom:10px;font-size:12px">
+        //             <span style="color:#22c55e">✓ ${vs2.supported || 0} supported</span>
+        //             <span style="color:#ef4444">✗ ${vs2.contradicted || 0} contradicted</span>
+        //             <span style="color:#94a3b8">? ${vs2.no_evidence || 0} no evidence</span>
+        //         </div>`;
+        //     for (const c of vr) {
+        //         html += `<div class="claim-item">
+        //             <span class="claim-label ${c.label}">${c.label}</span>
+        //             <span style="color:var(--text-muted)">${escHtml(c.claim)}</span>
+        //         </div>`;
+        //     }
+        //     html += `</div>`;
+        // }
 
         html += `</div>`;
     }
