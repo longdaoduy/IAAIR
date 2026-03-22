@@ -805,6 +805,186 @@ class HybridRetrievalHandler:
         """Extract non-empty paper_id values from result dicts."""
         return [r.get('paper_id') for r in results if r.get('paper_id')]
 
+    @staticmethod
+    def _deduplicate_results(results: List[Dict]) -> List[Dict]:
+        """Deduplicate results by paper_id, preserving order."""
+        seen: set = set()
+        deduped: List[Dict] = []
+        for r in results:
+            pid = r.get('paper_id')
+            if pid and pid not in seen:
+                seen.add(pid)
+                deduped.append(r)
+            elif not pid:
+                deduped.append(r)
+        return deduped
+
+    async def _vector_discover(
+        self, query: str, keywords: List[str], top_k: int, use_multimodal: bool
+    ) -> tuple:
+        """Run vector search (multimodal or keyword) to discover paper IDs.
+
+        Returns:
+            (sorted_ids, score_map, vector_results, visual_data) where
+            visual_data is only set when use_multimodal is True.
+        """
+        visual_data = None
+        if use_multimodal:
+            sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
+            score_map = visual_data.get('multimodal_scores', {})
+            vector_results = visual_data.get('vector_results', [])
+        else:
+            vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
+            sorted_ids = self._extract_paper_ids(vector_results)
+        return sorted_ids, score_map, vector_results, visual_data
+
+    async def _build_cache_visual_data(
+        self, query: str, top_k: int, results: List[Dict]
+    ) -> Dict:
+        """Build visual_data for cache-hit early returns.
+
+        Runs visual search on result paper IDs and injects any explicitly
+        requested paper IDs from the query for ResultFusion boosting.
+        """
+        empty_visual = {"figure_results": [], "table_results": [], "paper_visual_scores": {}}
+        pids = self._extract_paper_ids(results)
+        visual_data = empty_visual
+        if pids:
+            visual_data = await self.search_visual_by_text(query, top_k, paper_ids=pids)
+        requested = re.findall(r'\b(W\d+)\b', query)
+        if requested:
+            visual_data['requested_paper_ids'] = requested
+        return visual_data
+
+    # ── Strategy execution methods ─────────────────────────────────────────
+
+    async def _execute_graph_first(
+        self, query: str, cypher_query: str, parameters: Dict,
+        keywords: List[str], top_k: int, use_multimodal: bool,
+        template_key: str, template_info: Dict
+    ) -> tuple:
+        """Graph-first strategy: run Neo4j, compute similarity, fallback to vector.
+
+        Returns:
+            (results, score_map, visual_data) tuple
+        """
+        visual_data = None
+        score_map: Dict[str, float] = {}
+
+        logger.info(f"Running graph-first search for template '{template_key}'")
+        try:
+            results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+            logger.info(f"Graph-first returned {len(results)} results")
+        except Exception as e:
+            logger.warning(f"Graph-first query failed ({e})")
+            results = []
+
+        results = self._deduplicate_results(results)
+
+        # Compute vector similarity for graph-discovered papers
+        graph_pids = self._extract_paper_ids(results)
+        if graph_pids:
+            score_map = await self._compute_similarity_scores(query, graph_pids)
+            if score_map:
+                results.sort(
+                    key=lambda r: score_map.get(r.get('paper_id'), 0.0),
+                    reverse=True
+                )
+                logger.info(
+                    f"Computed similarity for {len(score_map)}/{len(graph_pids)} "
+                    f"graph papers (scores: {min(score_map.values()):.3f}–{max(score_map.values()):.3f})"
+                )
+
+        # Fallback: graph returned 0 results → try vector-first
+        if not results:
+            logger.warning(
+                f"Graph-only returned 0 results for '{template_key}', "
+                f"falling back to vector-first search"
+            )
+            template_info['search_strategy'] = 'vector_first (fallback)'
+            if self.performance_monitor:
+                self.performance_monitor.record_search_strategy('vector_first_fallback')
+
+            sorted_ids, score_map, vector_results, visual_data = await self._vector_discover(
+                query, keywords, top_k, use_multimodal
+            )
+            if sorted_ids:
+                results = await self._enrich_via_graph(sorted_ids, score_map, vector_results)
+                logger.info(
+                    f"Vector-first fallback found {len(results)} results "
+                    f"(from {len(sorted_ids)} vector discoveries)"
+                )
+            else:
+                logger.warning("Vector-first fallback also returned 0 results")
+
+        return results, score_map, visual_data
+
+    async def _execute_vector_first(
+        self, query: str, cypher_query: str, keywords: List[str],
+        top_k: int, use_multimodal: bool, template_key: str,
+        extracted: Dict, param_builder, or_extra_params: Dict
+    ) -> tuple:
+        """Vector-first strategy: discover via vector search, enrich via graph.
+
+        Returns:
+            (results, score_map, visual_data) tuple
+        """
+        logger.info(f"Running vector-first search for template '{template_key}'")
+        sorted_ids, score_map, vector_results, visual_data = await self._vector_discover(
+            query, keywords, top_k, use_multimodal
+        )
+
+        # Inject discovered IDs and rebuild parameters
+        extracted.setdefault('paper_ids', []).extend(sorted_ids)
+        parameters = param_builder(extracted, top_k)
+        if or_extra_params:
+            parameters.update(or_extra_params)
+        logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for '{template_key}'")
+
+        # Execute graph query with vector fallback
+        try:
+            results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+            logger.info(f"Graph search returned {len(results)} results")
+        except Exception as e:
+            logger.warning(f"Graph query failed ({e}), falling back to vector results")
+            results = []
+
+        if not results and vector_results:
+            results = vector_results
+            logger.info(f"Graph returned 0, falling back to {len(results)} vector results")
+
+        results = self._deduplicate_results(results)
+        results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
+
+        return results, score_map, visual_data
+
+    @staticmethod
+    def _boost_requested_papers(
+        results: List[Dict], score_map: Dict[str, float],
+        requested_pids: set
+    ) -> tuple:
+        """Boost explicitly requested paper IDs to the top of results.
+
+        Applies a large positive offset so requested papers always sort first.
+
+        Returns:
+            (results, score_map) with boosted scores and re-sorted results
+        """
+        if not requested_pids or not results:
+            return results, score_map
+
+        best_score = max(score_map.values()) if score_map else 1.0
+        boost = best_score + 1000.0
+        for pid in requested_pids:
+            score_map[pid] = score_map.get(pid, 0.0) + boost
+
+        results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
+        logger.info(
+            f"Boosted {len(requested_pids)} explicitly requested paper IDs "
+            f"(offset={boost:.1f}) — now at top of {len(results)} results"
+        )
+        return results, score_map
+
     async def _execute_hybrid_search_internal(self, query: str, top_k: int,
                                                template_cypher: str = None,
                                                use_multimodal: bool = False,
@@ -839,15 +1019,7 @@ class HybridRetrievalHandler:
                         self.performance_monitor.record_cache_hit('search', True)
                         self.performance_monitor.record_result_count('neo4j', len(cached_results))
                     logger.debug(f"Graph search cache hit for: {query[:50]}...")
-                    # Still run visual search on cached paper IDs so figures/tables show up
-                    cached_pids = [r.get('paper_id') for r in cached_results if r.get('paper_id')]
-                    visual_data = empty_visual
-                    if cached_pids:
-                        visual_data = await self.search_visual_by_text(query, top_k, paper_ids=cached_pids)
-                    # Inject requested paper IDs so ResultFusion can boost them
-                    cache_requested = re.findall(r'\b(W\d+)\b', query)
-                    if cache_requested:
-                        visual_data['requested_paper_ids'] = cache_requested
+                    visual_data = await self._build_cache_visual_data(query, top_k, cached_results)
                     return cached_results, template_info, visual_data
 
             if self.performance_monitor:
@@ -865,14 +1037,7 @@ class HybridRetrievalHandler:
                     logger.info(f"Cypher cache HIT for: {query[:50]}...")
                     # Execute the cached Cypher and return proper (results, template_info, visual_data)
                     results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-                    cached_pids = [r.get('paper_id') for r in results if r.get('paper_id')]
-                    visual_data = empty_visual
-                    if cached_pids:
-                        visual_data = await self.search_visual_by_text(query, top_k, paper_ids=cached_pids)
-                    # Inject requested paper IDs so ResultFusion can boost them
-                    cypher_requested = re.findall(r'\b(W\d+)\b', query)
-                    if cypher_requested:
-                        visual_data['requested_paper_ids'] = cypher_requested
+                    visual_data = await self._build_cache_visual_data(query, top_k, results)
                     return results, template_info, visual_data
 
             # Step 1: Extract entities — AI first, regex fallback
@@ -930,11 +1095,7 @@ class HybridRetrievalHandler:
 
             logger.info(f"Selected template: {template_key}")
 
-            # Step 3: Vector-first for keyword queries
-            # Only run keyword → vector search when the selected template
-            # requires $paper_ids but none were extracted from the query.
-            # Templates with their own structured filters (author, venue, year,
-            # keywords, etc.) don't need this expensive round-trip.
+            # Step 3: Prepare template, parameters, and Cypher query
             template_cypher_text = self.GRAPH_TEMPLATES.get(template_key, {}).get('cypher', '')
             needs_paper_ids = '$paper_ids' in template_cypher_text
             keywords = extracted.get('keywords', [])
@@ -964,178 +1125,68 @@ class HybridRetrievalHandler:
                     f"Injected {len(or_conditions)} OR conditions into '{template_key}': "
                     f"{or_conditions}"
                 )
-            visual_data = None
             requested_pids = set(extracted.get('paper_ids', []))
-            final_pids = []
-            score_map: Dict[str, float] = {}
-            # Keep a reference to OR-condition params so they survive param_builder rebuilds
             _or_extra_params = dict(extra_params) if or_conditions else {}
 
-            # ── Strategy selection: user-chosen or AI-driven ──
+            # ── Strategy selection ──
             if search_strategy and search_strategy in self.VALID_STRATEGIES:
                 strategy = search_strategy
-                logger.info(f"Using user-selected search strategy: {strategy}")
             else:
                 strategy = await self._select_search_strategy(
                     query, extracted, template_key, needs_paper_ids
                 )
-                logger.info(f"AI selected search strategy: {strategy}")
             template_info['search_strategy'] = strategy
             logger.info(f"Search strategy: {strategy} (template={template_key})")
 
-            # ── Push template & strategy to Prometheus immediately ──
-            # This ensures metrics are recorded even when subsequent
-            # requests hit the cache (cache-hit early-returns don't
-            # carry template_key / search_strategy back to main.py).
+            # Record metrics
             if self.performance_monitor:
                 self.performance_monitor.record_template_used(template_key)
                 self.performance_monitor.record_search_strategy(strategy)
 
             if strategy == 'graph_only':
-                # ── Graph-first: run Neo4j query, then compute vector similarity ──
-                logger.info(f"Running graph-first search for template '{template_key}'")
-                try:
-                    results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-                    logger.info(f"Graph-first returned {len(results)} results")
-                except Exception as e:
-                    logger.warning(f"Graph-first query failed ({e})")
-                    results = []
-
-                # Deduplicate by paper_id
-                if results:
-                    seen_go: set = set()
-                    deduped_go: List[Dict] = []
-                    for r in results:
-                        pid = r.get('paper_id')
-                        if pid and pid not in seen_go:
-                            seen_go.add(pid)
-                            deduped_go.append(r)
-                        elif not pid:
-                            deduped_go.append(r)
-                    results = deduped_go
-
-                # Compute vector similarity for graph-discovered papers
-                graph_pids = self._extract_paper_ids(results)
-                if graph_pids:
-                    score_map = await self._compute_similarity_scores(query, graph_pids)
-                    if score_map:
-                        # Sort by similarity (descending) — best semantic match first
-                        results.sort(
-                            key=lambda r: score_map.get(r.get('paper_id'), 0.0),
-                            reverse=True
-                        )
-                        logger.info(
-                            f"Computed similarity for {len(score_map)}/{len(graph_pids)} "
-                            f"graph papers (scores: {min(score_map.values()):.3f}–{max(score_map.values()):.3f})"
-                        )
-
-                final_pids = self._extract_paper_ids(results)
-
+                results, score_map, visual_data = await self._execute_graph_first(
+                    query, cypher_query, parameters, keywords, top_k,
+                    use_multimodal, template_key, template_info
+                )
             else:
-                # ── Vector-first: discover paper IDs via vector search, then graph ──
-                logger.info(f"Running vector-first search for template '{template_key}'")
-                if use_multimodal:
-                    sorted_ids, visual_data = await self.execute_multimodal_vector_search(query, keywords, top_k)
-                    # multimodal_scores are already similarity (higher=better)
-                    score_map = visual_data.get('multimodal_scores', {})
-                    vector_results = visual_data.get('vector_results', [])
-                else:
-                    vector_results, score_map = await self._keyword_vector_search(query, keywords, top_k)
-                    sorted_ids = self._extract_paper_ids(vector_results)
+                results, score_map, visual_data = await self._execute_vector_first(
+                    query, cypher_query, keywords, top_k, use_multimodal,
+                    template_key, extracted, param_builder, _or_extra_params
+                )
 
-                # Inject discovered IDs and rebuild parameters
-                extracted.setdefault('paper_ids', []).extend(sorted_ids)
-                parameters = param_builder(extracted, top_k)
-                # Re-merge OR-condition params lost during param_builder rebuild
-                if _or_extra_params:
-                    parameters.update(_or_extra_params)
-                logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for '{template_key}'")
-
-                # Execute graph query with vector fallback
-                try:
-                    results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-                    logger.info(f"Graph search returned {len(results)} results")
-                except Exception as e:
-                    logger.warning(f"Graph query failed ({e}), falling back to vector results")
-                    results = []
-
-                if not results and vector_results:
-                    results = vector_results
-                    logger.info(f"Graph returned 0, falling back to {len(results)} vector results")
-
-                if results:
-                    # Deduplicate by paper_id
-                    seen_vf: set = set()
-                    deduped_vf: List[Dict] = []
-                    for r in results:
-                        pid = r.get('paper_id')
-                        if pid and pid not in seen_vf:
-                            seen_vf.add(pid)
-                            deduped_vf.append(r)
-                        elif not pid:
-                            deduped_vf.append(r)
-                    results = deduped_vf
-                    results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
-
-                final_pids = self._extract_paper_ids(results)
-             
-            # ── Prioritize explicitly requested paper IDs ──
-            # When the user's query mentions specific paper IDs, boost their
-            # score so they naturally sort to the top of results.
-            # score_map uses higher = better (similarity), so we apply a large
-            # positive offset to guarantee requested papers rank first.
-            if requested_pids and results:
-                # Determine the boost: put requested papers well above the
-                # best score so they always come first after sorting.
-                best_score = max(score_map.values()) if score_map else 1.0
-                boost = best_score + 1000.0  # large enough gap
-                boosted_count = 0
-                for pid in requested_pids:
-                    score_map[pid] = score_map.get(pid, 0.0) + boost
-                    boosted_count += 1
-
-                # Re-sort with boosted scores (descending)
-                results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
-                if boosted_count:
-                    logger.info(
-                        f"Boosted {boosted_count} explicitly requested paper IDs "
-                        f"in score_map (offset={boost:.1f}) — now at top of {len(results)} results"
-                    )
-
-            # Apply top_k truncation after boost (deferred from branches above)
+            # ── Post-processing: boost, truncate, inject scores ──
+            results, score_map = self._boost_requested_papers(
+                results, score_map, requested_pids
+            )
             results = results[:top_k]
-            final_pids = self._extract_paper_ids(results)
 
-            # ── Inject similarity_score into each result dict ──
-            # This allows downstream consumers (MockDataEvaluator, ResultFusion)
-            # to read the pre-computed similarity directly without recalculation.
+            # Inject similarity_score into each result for downstream consumers
             for r in results:
                 pid = r.get('paper_id')
                 if pid and pid in score_map:
                     r['similarity_score'] = score_map[pid]
 
+            # Build visual_data if not already set by the strategy branch
             if not visual_data:
-                visual_data = await self.search_visual_by_text(query, top_k, paper_ids=final_pids) if final_pids else empty_visual
+                final_pids = self._extract_paper_ids(results)
+                visual_data = (
+                    await self.search_visual_by_text(query, top_k, paper_ids=final_pids)
+                    if final_pids else empty_visual
+                )
 
-            # Pass score_map as multimodal_scores so ResultFusion can use
-            # them directly as multimodal_confidence without recalculation.
+            # Attach score_map and requested IDs for ResultFusion
             if score_map:
                 visual_data['multimodal_scores'] = score_map
-
-            # Pass explicitly requested paper IDs to ResultFusion so it can
-            # preserve their top-ranking after re-sorting by relevance_score.
             if requested_pids:
                 visual_data['requested_paper_ids'] = list(requested_pids)
 
-            # Step 5: Cache the result
+            # Cache results
             if self.cache_manager:
                 self.cache_manager.cache_cypher(query, top_k, cypher_query, parameters)
-
-            # Cache results
-            if self.cache_manager and results:
-                self.cache_manager.cache_search_results(
-                    query, results, top_k, use_hybrid=False, routing_strategy="neo4j"
-                )
+                if results:
+                    self.cache_manager.cache_search_results(
+                        query, results, top_k, use_hybrid=False, routing_strategy="neo4j"
+                    )
 
             if self.performance_monitor:
                 self.performance_monitor.record_result_count('neo4j', len(results))
