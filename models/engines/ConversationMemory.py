@@ -171,6 +171,34 @@ class ConversationMemory:
                     pids.append(pid)
         return pids
 
+    def get_history(self, session_id: str) -> List[Dict]:
+        """Get conversation history as a list of dicts for API response.
+
+        Args:
+            session_id: Client session identifier
+
+        Returns:
+            List of turn dicts with query, ai_response, template_key,
+            paper_ids, and timestamp for each turn.
+        """
+        if not session_id or session_id not in self._sessions:
+            return []
+
+        self._evict_expired()
+
+        turns = self._sessions.get(session_id, [])
+        return [
+            {
+                "turn": i,
+                "query": turn.query,
+                "ai_response": turn.ai_response_summary,
+                "template_key": turn.template_key,
+                "paper_ids": turn.paper_ids,
+                "timestamp": turn.timestamp,
+            }
+            for i, turn in enumerate(turns, 1)
+        ]
+
     def get_session_count(self) -> int:
         """Number of active sessions."""
         return len(self._sessions)

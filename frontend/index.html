@@ -171,7 +171,7 @@
         .ai-response-header h4 { font-size: 14px; color: var(--accent-light); }
         .ai-response-body { font-size: 14px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
 
-        /* ── Verification ── */
+        /* ── Verification ──
         .verification-box {
             background: var(--bg-card); border: 1px solid var(--border);
             border-radius: var(--radius-sm); padding: 16px; margin-top: 16px;
@@ -196,7 +196,7 @@
         }
         .claim-label.SUPPORTED { background: rgba(34,197,94,0.15); color: #22c55e; }
         .claim-label.CONTRADICTED { background: rgba(239,68,68,0.15); color: #ef4444; }
-        .claim-label.NO_EVIDENCE { background: rgba(148,163,184,0.15); color: #94a3b8; }
+        .claim-label.NO_EVIDENCE { background: rgba(148,163,184,0.15); color: #94a3b8; } */
 
         /* ── Paper Cards ── */
         .paper-card {
@@ -432,6 +432,21 @@
         }
         .graph-template-preview.visible { display: block; }
 
+        /* ── Conversation History ── */
+        .conv-history { margin-bottom: 16px; }
+        .conv-history-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+        .conv-history-header h4 { font-size: 14px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; }
+        .conv-history-toggle { font-size: 12px; color: var(--text-dim); cursor: pointer; background: none; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 3px 10px; transition: var(--transition); }
+        .conv-history-toggle:hover { color: var(--accent-light); border-color: var(--accent); }
+        .conv-turn { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px; margin-bottom: 6px; font-size: 13px; transition: var(--transition); }
+        .conv-turn:hover { border-color: rgba(99,102,241,0.3); }
+        .conv-turn-query { color: var(--accent-light); font-weight: 500; cursor: pointer; }
+        .conv-turn-query:hover { text-decoration: underline; }
+        .conv-turn-response { color: var(--text-muted); margin-top: 4px; font-size: 12px; line-height: 1.5; }
+        .conv-turn-meta { display: flex; gap: 8px; margin-top: 4px; font-size: 11px; color: var(--text-dim); }
+        .conv-clear-btn { font-size: 11px; color: var(--red); cursor: pointer; background: none; border: none; padding: 0; }
+        .conv-clear-btn:hover { text-decoration: underline; }
+
         /* ── Responsive ── */
         @media (max-width: 768px) {
             .sidebar { display: none; }
@@ -559,6 +574,18 @@
                         <input type="text" id="graphTemplatePaperIds" placeholder="W123456, W789012, ..."
                             style="width:100%;padding:8px 14px;border-radius:var(--radius-sm);background:var(--bg-input);border:1px solid var(--border);color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;outline:none">
                     </div>
+                </div>
+
+                <!-- Conversation History -->
+                <div class="conv-history" id="convHistorySection" style="display:none">
+                    <div class="conv-history-header">
+                        <h4>💬 Conversation History</h4>
+                        <div style="display:flex;gap:6px;align-items:center">
+                            <button class="conv-history-toggle" onclick="toggleConvHistory()" id="convToggleBtn">Hide</button>
+                            <button class="conv-clear-btn" onclick="clearConvHistory()">✕ Clear</button>
+                        </div>
+                    </div>
+                    <div id="convHistoryBody"></div>
                 </div>
 
                 <div id="searchLoading" class="loading" style="display:none">
@@ -924,6 +951,69 @@ function selectGraphTemplate(key) {
 
 // loadGraphSearchTemplates is called in Init section at bottom (after escHtml is defined)
 
+// ── Conversation History ──
+let convHistoryVisible = true;
+
+async function loadConversationHistory() {
+    try {
+        const r = await fetch(API + '/conversation/history?session_id=' + encodeURIComponent(SESSION_ID));
+        const d = await r.json();
+        const section = document.getElementById('convHistorySection');
+        const body = document.getElementById('convHistoryBody');
+
+        if (!d.success || !d.turns || d.turns.length === 0) {
+            section.style.display = 'none';
+            return;
+        }
+
+        section.style.display = 'block';
+        if (!convHistoryVisible) {
+            body.style.display = 'none';
+        }
+
+        let html = '';
+        for (const t of d.turns) {
+            const timeStr = new Date(t.timestamp * 1000).toLocaleTimeString();
+            html += `<div class="conv-turn">
+                <div class="conv-turn-query" onclick="replayQuery('${escHtml(t.query)}')">Turn ${t.turn}: ${escHtml(t.query)}</div>
+                ${t.ai_response ? `<div class="conv-turn-response">${escHtml(t.ai_response)}</div>` : ''}
+                <div class="conv-turn-meta">
+                    <span>⏱ ${timeStr}</span>
+                    ${t.template_key ? `<span>🕸️ ${escHtml(t.template_key)}</span>` : ''}
+                    ${t.paper_ids && t.paper_ids.length > 0 ? `<span>📄 ${t.paper_ids.length} papers</span>` : ''}
+                </div>
+            </div>`;
+        }
+        body.innerHTML = html;
+    } catch (e) {
+        console.warn('Failed to load conversation history:', e);
+    }
+}
+
+function toggleConvHistory() {
+    convHistoryVisible = !convHistoryVisible;
+    const body = document.getElementById('convHistoryBody');
+    const btn = document.getElementById('convToggleBtn');
+    body.style.display = convHistoryVisible ? 'block' : 'none';
+    btn.textContent = convHistoryVisible ? 'Hide' : 'Show';
+}
+
+async function clearConvHistory() {
+    if (!confirm('Clear conversation history for this session?')) return;
+    try {
+        await fetch(API + '/conversation/clear?session_id=' + encodeURIComponent(SESSION_ID), { method: 'POST' });
+        document.getElementById('convHistorySection').style.display = 'none';
+        document.getElementById('convHistoryBody').innerHTML = '';
+    } catch (e) {
+        console.warn('Failed to clear conversation:', e);
+    }
+}
+
+function replayQuery(query) {
+    document.getElementById('searchInput').value = query;
+    document.getElementById('searchInput').focus();
+}
+
 // ── Hybrid Search ──
 async function doSearch() {
     const query = document.getElementById('searchInput').value.trim();
@@ -972,6 +1062,7 @@ async function doSearch() {
         if (!r.ok) throw new Error(d.detail || 'Search failed');
 
         renderSearchResults(d);
+        loadConversationHistory();  // refresh conversation history after each search
     } catch (e) {
         resultsDiv.innerHTML = `<div class="ai-response" style="border-color:var(--red)">
             <div class="ai-response-header"><span class="icon">❌</span><h4>Error</h4></div>
@@ -1694,6 +1785,7 @@ checkHealth();
 setInterval(checkHealth, 30000);
 loadSavedTemplates();
 loadGraphSearchTemplates();
+loadConversationHistory();
 </script>
 </body>
 </html>

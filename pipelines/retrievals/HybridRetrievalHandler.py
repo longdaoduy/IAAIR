@@ -103,7 +103,7 @@ class HybridRetrievalHandler:
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
-        self.verify_agent = LLMClient()
+        # self.verify_agent = LLMClient()
         # self.ai_agent = None
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
@@ -199,6 +199,16 @@ class HybridRetrievalHandler:
             if not all_vector_scores:
                 logger.warning("Multi-modal vector search: no results from SciBERT")
                 return [], empty_visual
+
+            # Deduplicate vector results — same paper can appear for different keywords
+            seen_pids = set()
+            unique_vector_results = []
+            for r in all_vector_results:
+                pid = r.get('paper_id')
+                if pid and pid not in seen_pids:
+                    seen_pids.add(pid)
+                    unique_vector_results.append(r)
+            all_vector_results = unique_vector_results
 
             # ── Step 2: Cross-modal visual search scoped to vector search papers ──
             vector_paper_ids = list(all_vector_scores.keys())
@@ -1005,8 +1015,10 @@ class HybridRetrievalHandler:
             query, keywords, top_k, use_multimodal
         )
 
-        # Inject discovered IDs and rebuild parameters
-        extracted.setdefault('paper_ids', []).extend(sorted_ids)
+        # Inject discovered IDs and rebuild parameters (deduplicate)
+        existing_pids = set(extracted.get('paper_ids', []))
+        new_ids = [pid for pid in sorted_ids if pid not in existing_pids]
+        extracted.setdefault('paper_ids', []).extend(new_ids)
         parameters = param_builder(extracted, top_k)
         if or_extra_params:
             parameters.update(or_extra_params)
@@ -2097,7 +2109,7 @@ Label this claim as exactly ONE of the following:
 Respond with ONLY the label (SUPPORTED, CONTRADICTED, or NO_EVIDENCE)."""
 
             raw_label = await run_blocking(
-                self.verify_agent.generate_content, logic_prompt,
+                self.ai_agent.generate_content, logic_prompt,
                 purpose='scifact_verification'
             )
             label = self._parse_verification_label(raw_label)

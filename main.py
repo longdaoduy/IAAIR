@@ -1430,6 +1430,22 @@ async def clear_conversation(session_id: Optional[str] = None):
         return {"success": True, "message": "All conversation memory cleared"}
 
 
+@app.get("/conversation/history")
+async def get_conversation_history(session_id: str):
+    """Get conversation history for a session.
+
+    Args:
+        session_id: The session ID to retrieve history for.
+    """
+    turns = conversation_memory.get_history(session_id)
+    return {
+        "success": True,
+        "session_id": session_id,
+        "turns": turns,
+        "total_turns": len(turns),
+    }
+
+
 # ===============================================================================
 # MODEL MANAGEMENT ENDPOINTS
 # ===============================================================================
