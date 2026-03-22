@@ -1136,6 +1136,7 @@ class HybridRetrievalHandler:
                     query, extracted, template_key, needs_paper_ids
                 )
             template_info['search_strategy'] = strategy
+            template_info['search_strategy'] = 'graph_only'
             logger.info(f"Search strategy: {strategy} (template={template_key})")
 
             # Record metrics
