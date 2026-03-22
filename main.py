@@ -507,11 +507,15 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
         # Step 6: Generate AI response with caching
         ai_response = None
         response_generation_time = None
+        verification_results = []
+        verification_summary = {}
+        verification_time = None
+
         if request.enable_ai_response and fused_results:
             response_start = datetime.now()
 
             # Check AI response cache
-            results_hash = str(hash(str([r.paper_id for r in fused_results[:5]])))  # Simple hash of top results
+            results_hash = str(hash(str([r.paper_id for r in fused_results[:5]])))
             cached_response = factory.cache_manager.get_ai_response(request.query, results_hash)
 
             if cached_response:
@@ -521,28 +525,71 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             else:
                 factory.performance_monitor.record_cache_hit('ai_response', False)
                 with factory.performance_monitor.track_operation('ai_response'):
-                    # 1. Generate the raw synthesis (with visual evidence context)
+                    # 1. Generate the raw synthesis
                     ai_response = await factory.retrieval_handler.generate_ai_response(
                         request.query, fused_results, template_info=template_info,
                     )
 
-                    # if ai_response:
-                    # # 2. PERFORM SCIFACT VERIFICATION FIRST (Week 5/7 requirement)
-                    # # This reduces the 10-30% hallucination rate cited in the proposal
-                    # # Convert SearchResult objects to dictionaries for verification
-                    #     papers_for_verification = [result.dict() for result in fused_results]
-                    #     verification_results = await factory.retrieval_handler.verify_claims_scifact(ai_response,
-                    #                                                                                 papers_for_verification)                        # 3. Check for CONTRADICTED labels (The Error Taxonomy pass)
-                    #     is_valid = all(v['label'] != 'CONTRADICTED' for v in verification_results)
-                    #
-                    #     if is_valid:
-                    #         # 4. Only cache if the answer is grounded in evidence
-                    #         factory.cache_manager.cache_ai_response(request.query, results_hash, ai_response)
-                    #         # Log to Provenance Ledger (Week 6)
-                    #         # factory.retrieval_handler.record_verified_response(ai_response, verification_results)
-                    #     else:
-                    #         # Handle hallucination (Red-team mitigation)
-                    #         ai_response = "The retrieved evidence contradicts the potential answer. Refining search..."
+                    # 2. SciFact verification — check claims against retrieved evidence
+                    if ai_response:
+                        verification_start = datetime.now()
+                        try:
+                            papers_for_verification = [result.dict() for result in fused_results[:10]]
+                            verification_results = await factory.retrieval_handler.verify_claims_scifact(
+                                ai_response, papers_for_verification
+                            )
+
+                            # Build summary counts
+                            label_counts = {'SUPPORTED': 0, 'CONTRADICTED': 0, 'NO_EVIDENCE': 0}
+                            for v in verification_results:
+                                lbl = v.get('label', 'NO_EVIDENCE')
+                                label_counts[lbl] = label_counts.get(lbl, 0) + 1
+                                # Push each label to Prometheus
+                                factory.performance_monitor.record_verification_label(lbl)
+
+                            total_claims = len(verification_results)
+                            has_contradiction = label_counts['CONTRADICTED'] > 0
+
+                            # Determine overall verdict
+                            if total_claims == 0:
+                                verdict = 'NO_CLAIMS'
+                            elif has_contradiction:
+                                verdict = 'CONTRADICTED'
+                            elif label_counts['SUPPORTED'] == total_claims:
+                                verdict = 'FULLY_SUPPORTED'
+                            elif label_counts['SUPPORTED'] > 0:
+                                verdict = 'PARTIALLY_SUPPORTED'
+                            else:
+                                verdict = 'NO_EVIDENCE'
+
+                            verification_summary = {
+                                'total_claims': total_claims,
+                                'supported': label_counts['SUPPORTED'],
+                                'contradicted': label_counts['CONTRADICTED'],
+                                'no_evidence': label_counts['NO_EVIDENCE'],
+                                'verdict': verdict,
+                            }
+
+                            logger.info(
+                                f"Verification: {label_counts['SUPPORTED']}✓ "
+                                f"{label_counts['CONTRADICTED']}✗ "
+                                f"{label_counts['NO_EVIDENCE']}? → {verdict}"
+                            )
+
+                            # Only cache if no contradictions
+                            if not has_contradiction:
+                                factory.cache_manager.cache_ai_response(
+                                    request.query, results_hash, ai_response
+                                )
+                            else:
+                                logger.warning("AI response has contradicted claims — not cached")
+
+                        except Exception as ve:
+                            logger.error(f"Verification failed: {ve}")
+                            verification_summary = {'error': str(ve)}
+
+                        verification_time = (datetime.now() - verification_start).total_seconds()
+                        factory.performance_monitor.record_verification_duration(verification_time)
 
             response_generation_time = (datetime.now() - response_start).total_seconds()
 
@@ -573,7 +620,9 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
             fusion_stats=fusion_stats,
             visual_results=all_visual_results,
             visual_stats=visual_stats,
-            # attribution_stats=attribution_stats
+            verification_results=verification_results,
+            verification_summary=verification_summary,
+            verification_time_seconds=verification_time,
         )
 
     except Exception as e:

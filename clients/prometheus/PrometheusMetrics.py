@@ -114,6 +114,21 @@ class PrometheusMetrics:
             registry=self.registry,
         )
 
+        # -- 8. Verification labels --
+        self.verification_labels_total = Counter(
+            'iaair_verification_labels_total',
+            'SciFact verification label counts',
+            ['label'],
+            registry=self.registry,
+        )
+
+        self.verification_duration = Histogram(
+            'iaair_verification_duration_seconds',
+            'SciFact verification latency in seconds',
+            buckets=[1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0],
+            registry=self.registry,
+        )
+
     # -- Recording helpers --
 
     def record_search(self, duration: float):
@@ -153,6 +168,16 @@ class PrometheusMetrics:
     def record_results(self, count: int):
         with self._lock:
             self.results_count.observe(count)
+
+    def record_verification_label(self, label: str):
+        """Record a SciFact verification label (SUPPORTED/CONTRADICTED/NO_EVIDENCE)."""
+        with self._lock:
+            self.verification_labels_total.labels(label=label).inc()
+
+    def record_verification_duration(self, duration: float):
+        """Record SciFact verification duration."""
+        with self._lock:
+            self.verification_duration.observe(duration)
 
     def get_metrics(self) -> str:
         """Return metrics in Prometheus exposition format."""

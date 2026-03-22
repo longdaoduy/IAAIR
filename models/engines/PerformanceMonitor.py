@@ -111,3 +111,13 @@ class PerformanceMonitor:
         """Record an AI agent call with purpose, duration, and token count."""
         if self.prometheus_integration:
             self.prometheus_integration.record_ai_call(purpose, duration, tokens)
+
+    def record_verification_label(self, label: str):
+        """Record a SciFact verification label (SUPPORTED/CONTRADICTED/NO_EVIDENCE)."""
+        if self.prometheus_integration:
+            self.prometheus_integration.record_verification_label(label)
+
+    def record_verification_duration(self, duration: float):
+        """Record SciFact verification latency."""
+        if self.prometheus_integration:
+            self.prometheus_integration.record_verification_duration(duration)

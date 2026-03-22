@@ -71,6 +71,14 @@ class PrometheusMonitoring:
         """Record number of results returned."""
         self.metrics.record_results(count)
 
+    def record_verification_label(self, label: str):
+        """Record a SciFact verification label."""
+        self.metrics.record_verification_label(label)
+
+    def record_verification_duration(self, duration: float):
+        """Record SciFact verification latency."""
+        self.metrics.record_verification_duration(duration)
+
     def update_cache_metrics(self, cache_stats: Dict[str, Dict[str, Any]]):
         """Bulk-update cache size gauges from cache_manager stats."""
         for cache_type, stats in cache_stats.items():

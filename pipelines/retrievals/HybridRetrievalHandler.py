@@ -1970,37 +1970,63 @@ Write a single paragraph of 5-6 sentences answering the question. No bullet poin
             "- Cite specific papers and authors when relevant"
         ))
 
+    VALID_VERIFICATION_LABELS = ('SUPPORTED', 'CONTRADICTED', 'NO_EVIDENCE')
+
     async def verify_claims_scifact(self, ai_answer: str, context_papers: List) -> List[Dict]:
         """
         Implements SciFact-style verification by breaking the AI response into
         atomic claims and checking them against the retrieved substrate.
+
+        Returns list of dicts with keys: claim, label, raw_label
+        where label ∈ {SUPPORTED, CONTRADICTED, NO_EVIDENCE}
         """
-        # Step 1: Claim Extraction
-        # Use a prompt to break the response into individual facts
         claims = await self.extract_atomic_claims(ai_answer)
+        if not claims:
+            return []
 
         verification_results = []
 
         for claim in claims:
-            # Step 2: Evidence Alignment
-            # Compare the claim against the 'top k' abstracts and neo4j metadata
             logic_prompt = f"""
-            Claim: {claim}
-            Evidence: {self._format_papers_for_prompt(context_papers)}
+Claim: {claim}
+Evidence: {self._format_papers_for_prompt(context_papers)}
 
-            Label this claim as:
-            - SUPPORTED: If the evidence explicitly confirms the claim.
-            - CONTRADICTED: If the evidence explicitly refutes the claim.
-            - NO_EVIDENCE: If the evidence is relevant but doesn't prove/disprove it.
-            """
+Label this claim as exactly ONE of the following:
+- SUPPORTED: If the evidence explicitly confirms the claim.
+- CONTRADICTED: If the evidence explicitly refutes the claim.
+- NO_EVIDENCE: If the evidence is relevant but doesn't prove/disprove it.
 
-            label = await run_blocking(
+Respond with ONLY the label (SUPPORTED, CONTRADICTED, or NO_EVIDENCE)."""
+
+            raw_label = await run_blocking(
                 self.ai_agent.generate_content, logic_prompt,
                 purpose='scifact_verification'
             )
-            verification_results.append({"claim": claim, "label": label})
+            label = self._parse_verification_label(raw_label)
+            verification_results.append({
+                "claim": claim,
+                "label": label,
+                "raw_label": (raw_label or '').strip()[:100]
+            })
 
         return verification_results
+
+    @staticmethod
+    def _parse_verification_label(raw: str) -> str:
+        """Parse raw LLM output into a clean verification label."""
+        if not raw:
+            return 'NO_EVIDENCE'
+        text = raw.strip().upper()
+        # Direct match
+        for label in ('SUPPORTED', 'CONTRADICTED', 'NO_EVIDENCE'):
+            if label in text:
+                return label
+        # Fuzzy fallback
+        if 'SUPPORT' in text or 'CONFIRM' in text:
+            return 'SUPPORTED'
+        if 'CONTRADICT' in text or 'REFUTE' in text:
+            return 'CONTRADICTED'
+        return 'NO_EVIDENCE'
 
     async def extract_atomic_claims(self, ai_answer: str) -> List[str]:
         """

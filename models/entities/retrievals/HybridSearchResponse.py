@@ -20,4 +20,7 @@ class HybridSearchResponse(BaseModel):
     # Visual evidence from cross-modal search
     visual_results: List[Dict[str, Any]] = []  # Matched figures/tables
     visual_stats: Dict[str, Any] = {}  # Visual search statistics
-    # attribution_stats: Dict[str, Any] = {}
+    # SciFact verification results
+    verification_results: List[Dict[str, Any]] = []  # [{claim, label, raw_label}]
+    verification_summary: Dict[str, Any] = {}  # {total, supported, contradicted, no_evidence, verdict}
+    verification_time_seconds: Optional[float] = None
