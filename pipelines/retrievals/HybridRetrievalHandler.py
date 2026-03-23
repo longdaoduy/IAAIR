@@ -1015,10 +1015,8 @@ class HybridRetrievalHandler:
             query, keywords, top_k, use_multimodal
         )
 
-        # Inject discovered IDs and rebuild parameters (deduplicate)
-        existing_pids = set(extracted.get('paper_ids', []))
-        new_ids = [pid for pid in sorted_ids if pid not in existing_pids]
-        extracted.setdefault('paper_ids', []).extend(new_ids)
+        # Inject discovered IDs and rebuild parameters
+        extracted.setdefault('paper_ids', []).extend(sorted_ids)
         parameters = param_builder(extracted, top_k)
         if or_extra_params:
             parameters.update(or_extra_params)
@@ -1026,32 +1024,18 @@ class HybridRetrievalHandler:
 
         # Execute graph query with vector fallback
         try:
-            graph_results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
-            logger.info(f"Graph search returned {len(graph_results)} results")
+            results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
+            logger.info(f"Graph search returned {len(results)} results")
         except Exception as e:
             logger.warning(f"Graph query failed ({e}), falling back to vector results")
-            graph_results = []
+            results = []
 
-        # Merge: graph-enriched papers on top, then vector-only papers that
-        # the graph didn't return (preserving all vector discoveries).
-        graph_pids = {r.get('paper_id') for r in graph_results if r.get('paper_id')}
-        vector_only = [r for r in vector_results if r.get('paper_id') not in graph_pids]
+        if not results and vector_results:
+            results = vector_results
+            logger.info(f"Graph returned 0, falling back to {len(results)} vector results")
 
-        # Boost graph-found papers so they rank above vector-only papers
-        if graph_pids and score_map:
-            best_score = max(score_map.values()) if score_map else 1.0
-            graph_boost = best_score + 100.0
-            for pid in graph_pids:
-                score_map[pid] = score_map.get(pid, 0.0) + graph_boost
-
-        results = graph_results + vector_only
         results = self._deduplicate_results(results)
         results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
-
-        logger.info(
-            f"Vector-first merged: {len(graph_results)} graph + "
-            f"{len(vector_only)} vector-only = {len(results)} total"
-        )
 
         return results, score_map, visual_data
 
