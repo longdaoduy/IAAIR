@@ -20,6 +20,77 @@ from utils.async_utils import run_blocking
 
 logger = logging.getLogger(__name__)
 
+# ── Query guardrails ──────────────────────────────────────────────────────
+# Maximum allowed query length (chars)
+MAX_QUERY_LENGTH = 1000
+
+# Patterns that indicate prompt injection attempts
+_PROMPT_INJECTION_PATTERNS = [
+    re.compile(r'ignore\s+(all\s+)?previous\s+instructions', re.IGNORECASE),
+    re.compile(r'ignore\s+the\s+above', re.IGNORECASE),
+    re.compile(r'disregard\s+(all\s+)?(prior|previous|above)', re.IGNORECASE),
+    re.compile(r'you\s+are\s+now\s+', re.IGNORECASE),
+    re.compile(r'act\s+as\s+(if\s+you\s+are|a)\s+', re.IGNORECASE),
+    re.compile(r'pretend\s+(to\s+be|you\s+are)', re.IGNORECASE),
+    re.compile(r'system\s*:\s*', re.IGNORECASE),
+    re.compile(r'<\s*system\s*>', re.IGNORECASE),
+    re.compile(r'\bDAN\b.*\bjailbreak\b', re.IGNORECASE),
+    re.compile(r'forget\s+(everything|all|your)\s+(previous|instructions|rules)', re.IGNORECASE),
+    re.compile(r'override\s+(your\s+)?(system|instructions|rules)', re.IGNORECASE),
+    re.compile(r'new\s+instruction[s]?\s*:', re.IGNORECASE),
+]
+
+# Cypher injection patterns (dangerous Cypher keywords in user input)
+_CYPHER_INJECTION_PATTERNS = [
+    re.compile(r'\b(DELETE|DETACH|DROP|CREATE|SET|REMOVE|MERGE)\b', re.IGNORECASE),
+    re.compile(r'\bCALL\s*\{', re.IGNORECASE),
+    re.compile(r'\bCALL\s+db\b', re.IGNORECASE),
+    re.compile(r'\bCALL\s+apoc\b', re.IGNORECASE),
+    re.compile(r'//.*\n.*MATCH', re.IGNORECASE),  # comment injection
+]
+
+
+def sanitize_query(query: str) -> tuple:
+    """Validate and sanitize a user query.
+
+    Returns:
+        (sanitized_query, warnings) where warnings is a list of strings.
+        Raises ValueError if the query is rejected outright.
+    """
+    warnings = []
+
+    if not query or not query.strip():
+        raise ValueError("Query cannot be empty")
+
+    # Length check
+    if len(query) > MAX_QUERY_LENGTH:
+        query = query[:MAX_QUERY_LENGTH]
+        warnings.append(f"Query truncated to {MAX_QUERY_LENGTH} characters")
+
+    # Strip control characters (keep newlines/tabs for readability)
+    cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', query)
+    if cleaned != query:
+        warnings.append("Control characters removed from query")
+        query = cleaned
+
+    # Check for prompt injection
+    for pattern in _PROMPT_INJECTION_PATTERNS:
+        if pattern.search(query):
+            raise ValueError(
+                "Query rejected: contains disallowed instructions. "
+                "Please ask a genuine academic research question."
+            )
+
+    # Check for Cypher injection
+    for pattern in _CYPHER_INJECTION_PATTERNS:
+        if pattern.search(query):
+            # Don't reject — the user might be discussing these terms academically
+            # but strip the dangerous keyword
+            warnings.append("Query contains potential Cypher injection pattern — sanitized")
+            query = pattern.sub('[FILTERED]', query)
+
+    return query.strip(), warnings
+
 
 class HybridRetrievalHandler:
     """Unified handler for milvus and neo4j-based retrievals operations."""
@@ -128,6 +199,16 @@ class HybridRetrievalHandler:
             if not all_vector_scores:
                 logger.warning("Multi-modal vector search: no results from SciBERT")
                 return [], empty_visual
+
+            # Deduplicate vector results — same paper can appear for different keywords
+            seen_pids = set()
+            unique_vector_results = []
+            for r in all_vector_results:
+                pid = r.get('paper_id')
+                if pid and pid not in seen_pids:
+                    seen_pids.add(pid)
+                    unique_vector_results.append(r)
+            all_vector_results = unique_vector_results
 
             # ── Step 2: Cross-modal visual search scoped to vector search papers ──
             vector_paper_ids = list(all_vector_scores.keys())
