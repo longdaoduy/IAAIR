@@ -1980,8 +1980,8 @@ class HybridRetrievalHandler:
                 "- Do NOT repeat or rephrase the question.\n"
                 "- Do NOT start with phrases like 'Based on the search results' or 'According to'.\n"
                 "- ONLY state facts from the provided evidence. NEVER invent authors, dates, or findings.\n"
-                "- Cite papers using their EXACT title and authors from the evidence.\n"
-                "- Reference papers by their number in brackets, e.g. [1], [2].\n"
+                # "- Cite papers using their EXACT title and authors from the evidence.\n"
+                # "- Reference papers by their number in brackets, e.g. [1], [2].\n"
                 "- If evidence is insufficient, say so in one sentence."
             )
             prompt = f"""Question: "{query}"
