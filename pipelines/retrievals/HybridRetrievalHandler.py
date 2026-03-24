@@ -1981,6 +1981,7 @@ class HybridRetrievalHandler:
                 "- Do NOT start with phrases like 'Based on the search results' or 'According to'.\n"
                 "- ONLY state facts from the provided evidence. NEVER invent authors, dates, or findings.\n"
                 "- Cite papers using their EXACT title and authors from the evidence.\n"
+                "- Reference papers by their number in brackets, e.g. [1], [2].\n"
                 "- If evidence is insufficient, say so in one sentence."
             )
             prompt = f"""Question: "{query}"
@@ -1995,7 +1996,7 @@ Write a single paragraph of 5-6 sentences answering the question. No bullet poin
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
-                self.ai_agent.generate_content,
+                self.answer_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
                 purpose='answer_synthesis',
