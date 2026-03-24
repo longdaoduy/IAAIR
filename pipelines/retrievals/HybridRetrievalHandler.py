@@ -2068,6 +2068,17 @@ Answer:"""
         verification_results = []
 
         for claim in claims:
+            # 1. Try deterministic metadata matching first (fast, reliable)
+            deterministic_label = self._verify_claim_by_metadata(claim, context_papers)
+            if deterministic_label:
+                verification_results.append({
+                    "claim": claim,
+                    "label": deterministic_label,
+                    "raw_label": f"[deterministic] {deterministic_label}"
+                })
+                continue
+
+            # 2. Fall back to LLM-based verification for abstract/finding claims
             logic_prompt = f"""You are a fact-checker. Given the claim and evidence below, output exactly one word: SUPPORTED, CONTRADICTED, or NO_EVIDENCE.
 
 Rules:
@@ -2094,6 +2105,125 @@ Label:"""
             })
 
         return verification_results
+
+    @staticmethod
+    def _verify_claim_by_metadata(claim: str, papers: List[Dict]) -> Optional[str]:
+        """Deterministic verification by matching claim text against paper metadata.
+
+        Returns 'SUPPORTED' if the claim can be verified from metadata fields,
+        or None if LLM-based verification is needed.
+        """
+        claim_lower = claim.lower().strip()
+
+        # Collect all metadata tokens from evidence papers
+        all_author_names = []
+        all_titles = []
+        all_venues = []
+        all_paper_ids = []
+        all_dois = []
+        all_dates = []
+
+        for p in papers:
+            paper_id = (p.get('paper_id', '') or p.get('id', '') or '').strip()
+            if paper_id:
+                all_paper_ids.append(paper_id.lower())
+
+            title = (p.get('title', '') or '').strip()
+            if title:
+                all_titles.append(title.lower())
+
+            venue = (p.get('venue', '') or '').strip()
+            if venue:
+                all_venues.append(venue.lower())
+
+            doi = (p.get('doi', '') or '').strip()
+            if doi:
+                all_dois.append(doi.lower())
+
+            pub_date = (p.get('publication_date', '') or '').strip()
+            if pub_date:
+                all_dates.append(pub_date.lower())
+                # Also extract just the year
+                if len(pub_date) >= 4:
+                    all_dates.append(pub_date[:4])
+
+            authors = p.get('authors', []) or []
+            for author in authors:
+                if isinstance(author, str) and author.strip():
+                    all_author_names.append(author.strip().lower())
+                    # Also add last name only for partial matches
+                    parts = author.strip().split()
+                    if len(parts) > 1:
+                        all_author_names.append(parts[-1].lower())
+
+        # Count how many metadata fields are referenced in the claim
+        matches = 0
+        match_types = []
+
+        # Check paper IDs (e.g., "W1775749144")
+        for pid in all_paper_ids:
+            if pid in claim_lower:
+                matches += 1
+                match_types.append('paper_id')
+                break
+
+        # Check author names
+        author_matches = 0
+        for name in all_author_names:
+            if len(name) > 2 and name in claim_lower:
+                author_matches += 1
+        if author_matches >= 1:
+            matches += 1
+            match_types.append('author')
+
+        # Check titles
+        for title in all_titles:
+            # Check if a significant portion of the title appears in the claim
+            title_words = [w for w in title.split() if len(w) > 3]
+            if title_words:
+                word_matches = sum(1 for w in title_words if w in claim_lower)
+                if word_matches >= len(title_words) * 0.5 or word_matches >= 3:
+                    matches += 1
+                    match_types.append('title')
+                    break
+
+        # Check venues
+        for venue in all_venues:
+            if venue in claim_lower:
+                matches += 1
+                match_types.append('venue')
+                break
+
+        # Check DOIs
+        for doi in all_dois:
+            if doi in claim_lower:
+                matches += 1
+                match_types.append('doi')
+                break
+
+        # Check dates/years
+        for date in all_dates:
+            if date in claim_lower:
+                matches += 1
+                match_types.append('date')
+                break
+
+        # If the claim references at least 2 metadata fields from the evidence,
+        # or references a paper_id + any other field, it's deterministically SUPPORTED
+        if matches >= 2:
+            logger.info(f"Deterministic SUPPORTED ({', '.join(match_types)}): {claim[:80]}")
+            return 'SUPPORTED'
+
+        # If the claim references at least 1 metadata field and is a simple
+        # factual statement (about authors, title, venue, date), mark as SUPPORTED
+        if matches >= 1 and any(kw in claim_lower for kw in (
+            'author', 'wrote', 'written by', 'published in', 'published by',
+            'titled', 'entitled', 'paper id', 'doi', 'citation',
+            'journal', 'conference', 'venue'
+        )):
+            logger.info(f"Deterministic SUPPORTED ({', '.join(match_types)} + keyword): {claim[:80]}")
+            return 'SUPPORTED'
+        return None  # Fall through to LLM verification
 
     @staticmethod
     def _parse_verification_label(raw: str) -> str:
