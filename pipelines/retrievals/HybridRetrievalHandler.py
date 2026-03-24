@@ -883,28 +883,34 @@ class HybridRetrievalHandler:
 
     @staticmethod
     def _compute_query_relevance_scores(
-        query: str, results: List[Dict], keywords: List[str] = None
+        results: List[Dict], extracted: Dict, keywords: List[str] = None
     ) -> Dict[str, float]:
-        """Compute relevance scores for graph results based on query-metadata matching.
+        """Compute relevance scores for graph results based on pre-extracted entities.
 
         Unlike vector similarity (which compares query text to paper abstracts),
         this method scores how well each paper's metadata matches the query's
         intent. This is critical for metadata queries like "Who authored X?"
         or "What venue published Y?" where vector similarity is meaningless.
 
+        Uses the already-extracted entities (paper_ids, author_names, keywords,
+        venue, year, etc.) from the upstream extraction pipeline instead of
+        re-parsing the raw query with regex.
+
         Scoring dimensions (all additive, higher = more relevant):
             - Paper ID match:  +100  (explicitly requested by ID)
             - Author match:    +20   per matching author name
-            - Venue match:     +15   if venue name appears in query
+            - Venue match:     +15   if venue name matches extracted venue
             - Title match:     +10   per keyword match in title
-            - Year match:      +5    if publication year matches query
+            - Year match:      +5    if publication year matches extracted year
             - Keyword match:   +2    per keyword in title/abstract
             - Citation boost:  +0-5  normalized citation count
 
         Args:
-            query: User's natural language query
             results: Graph query results (list of paper dicts)
-            keywords: Extracted query keywords
+            extracted: Pre-extracted entities dict with keys like paper_ids,
+                       author_names, keywords, venue, year, year_from, etc.
+            keywords: Extracted query keywords (overrides extracted['keywords']
+                      if provided)
 
         Returns:
             {paper_id: relevance_score} dict (higher = more relevant)
@@ -912,25 +918,28 @@ class HybridRetrievalHandler:
         if not results:
             return {}
 
-        query_lower = query.lower()
-        keywords = keywords or []
-        keywords_lower = [kw.lower() for kw in keywords if kw]
+        extracted = extracted or {}
 
-        # Extract paper IDs mentioned in the query
-        requested_ids = set(pid.lower() for pid in re.findall(r'\b(W\d+)\b', query))
+        # Use pre-extracted entities instead of regex on query
+        requested_ids = set(
+            pid.lower() for pid in (extracted.get('paper_ids', []) or [])
+        )
 
-        # Extract author names from the query for matching
-        author_patterns = [
-            r'(?:by|authored?\s+by|written\s+by)\s+(.+?)(?:\?|$|\.)',
+        query_authors = [
+            name.strip().lower()
+            for name in (extracted.get('author_names', []) or [])
+            if name and len(name.strip()) > 2
         ]
-        query_authors = []
-        for pattern in author_patterns:
-            m = re.search(pattern, query, re.IGNORECASE)
-            if m:
-                # Split on "and", ",", "&" to get individual names
-                raw = m.group(1)
-                parts = re.split(r'\s+and\s+|,\s*|&\s*', raw)
-                query_authors.extend(p.strip().lower() for p in parts if len(p.strip()) > 2)
+
+        extracted_venue = (extracted.get('venue', '') or '').lower().strip()
+
+        extracted_year = (extracted.get('year', '') or '').strip()
+        extracted_year_from = (extracted.get('year_from', '') or '').strip()
+        extracted_year_to = (extracted.get('year_to', '') or '').strip()
+
+        # Keywords: prefer explicit argument, fallback to extracted
+        kw_list = keywords if keywords else (extracted.get('keywords', []) or [])
+        keywords_lower = [kw.lower() for kw in kw_list if kw]
 
         # Find max citation count for normalization
         max_cited = max(
@@ -958,22 +967,24 @@ class HybridRetrievalHandler:
                 if not author:
                     continue
                 author_lower = author.lower()
-                # Check if author name appears in query
-                if author_lower in query_lower:
-                    score += 20.0
-                else:
-                    # Check last name match
-                    parts = author_lower.split()
-                    if parts and any(part in query_lower for part in parts if len(part) > 2):
-                        score += 10.0
-                # Check against extracted query authors
                 for qa in query_authors:
+                    # Full name match
                     if qa in author_lower or author_lower in qa:
                         score += 20.0
+                        break
+                    # Last name match
+                    qa_parts = qa.split()
+                    author_parts = author_lower.split()
+                    if qa_parts and author_parts:
+                        if qa_parts[-1] == author_parts[-1] and len(qa_parts[-1]) > 2:
+                            score += 10.0
+                            break
 
             # 3. Venue match
             venue = (r.get('venue', '') or '').lower()
-            if venue and venue in query_lower:
+            if venue and extracted_venue and (
+                extracted_venue in venue or venue in extracted_venue
+            ):
                 score += 15.0
 
             # 4. Title keyword match
@@ -986,8 +997,13 @@ class HybridRetrievalHandler:
             # 5. Year match
             pub_date = (r.get('publication_date', '') or '')
             if pub_date:
-                year = pub_date[:4]
-                if year and year in query_lower:
+                pub_year = pub_date[:4]
+                if extracted_year and pub_year == extracted_year:
+                    score += 5.0
+                elif extracted_year_from and extracted_year_to:
+                    if extracted_year_from <= pub_year < extracted_year_to:
+                        score += 5.0
+                elif extracted_year_from and pub_year >= extracted_year_from:
                     score += 5.0
 
             # 6. Abstract keyword match
@@ -1066,7 +1082,8 @@ class HybridRetrievalHandler:
     async def _execute_graph_first(
         self, query: str, cypher_query: str, parameters: Dict,
         keywords: List[str], top_k: int, use_multimodal: bool,
-        template_key: str, template_info: Dict
+        template_key: str, template_info: Dict,
+        extracted: Dict = None
     ) -> tuple:
         """Graph-first strategy: run Neo4j, rank by query relevance, fallback to vector.
 
@@ -1090,7 +1107,7 @@ class HybridRetrievalHandler:
         # Vector similarity is poor for metadata queries like "who authored X?"
         # because the query text has no semantic overlap with paper abstracts.
         if results:
-            score_map = self._compute_query_relevance_scores(query, results, keywords)
+            score_map = self._compute_query_relevance_scores(results, extracted or {}, keywords)
             if score_map:
                 results.sort(
                     key=lambda r: score_map.get(r.get('paper_id'), 0.0),
@@ -1354,7 +1371,7 @@ class HybridRetrievalHandler:
             if strategy == 'graph_only':
                 results, score_map, visual_data = await self._execute_graph_first(
                     query, cypher_query, parameters, keywords, top_k,
-                    use_multimodal, template_key, template_info
+                    use_multimodal, template_key, template_info, extracted
                 )
             else:
                 results, score_map, visual_data = await self._execute_vector_first(
