@@ -1937,18 +1937,15 @@ class HybridRetrievalHandler:
 
             # Prepare context from search results — use more papers with longer abstracts
             # for richer RAG context (800 chars ≈ 2-3 key sentences from each abstract)
-            MAX_CONTEXT_PAPERS = 8
-            MAX_ABSTRACT_LEN = 800
-
             context_papers = []
-            for result in search_results[:MAX_CONTEXT_PAPERS]:
+            for result in search_results[:5]:  # Use top 5 results
                 # Handle both dict and object types
                 if hasattr(result, '__dict__'):
                     # It's an object, use getattr
                     context_papers.append({
                         "title": getattr(result, "title", "") or "",
                         "authors": getattr(result, "authors", []) or [],
-                        "abstract": (getattr(result, "abstract", "") or "")[:MAX_ABSTRACT_LEN],
+                        "abstract": (getattr(result, "abstract", "") or "")[:300],
                         "relevance_score": getattr(result, "relevance_score", 0),
                         "venue": getattr(result, "venue", "") or "",
                         "publication_date": getattr(result, "publication_date", "") or "",
@@ -1960,7 +1957,7 @@ class HybridRetrievalHandler:
                     context_papers.append({
                         "title": result.get("title", "") or "",
                         "authors": result.get("authors", []) or [],
-                        "abstract": (result.get("abstract", "") or "")[:MAX_ABSTRACT_LEN],
+                        "abstract": (result.get("abstract", "") or "")[:300],
                         "relevance_score": result.get("relevance_score", 0),
                         "venue": result.get("venue", "") or "",
                         "publication_date": result.get("publication_date", "") or "",
