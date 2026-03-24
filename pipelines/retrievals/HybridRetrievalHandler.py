@@ -2068,18 +2068,19 @@ Answer:"""
         verification_results = []
 
         for claim in claims:
-            logic_prompt = f"""
+            logic_prompt = f"""You are a fact-checker. Given the claim and evidence below, output exactly one word: SUPPORTED, CONTRADICTED, or NO_EVIDENCE.
+
+Rules:
+- SUPPORTED = the claim matches information in the evidence (titles, authors, venues, dates, IDs, abstracts, citation counts)
+- CONTRADICTED = the evidence directly conflicts with the claim
+- NO_EVIDENCE = the evidence has nothing related to the claim at all
+
+Evidence:
+{self._format_papers_for_prompt(context_papers)}
+
 Claim: {claim}
-Evidence: {self._format_papers_for_prompt(context_papers)}
 
-Label this claim as exactly ONE of the following:
-- SUPPORTED: If the evidence confirms the claim, either explicitly or through reasonable inference from the provided metadata (titles, authors, venues, dates, citation counts, abstracts). A claim about a paper's title, authorship, venue, or topic is SUPPORTED if that information appears in the evidence fields above.
-- CONTRADICTED: If the evidence explicitly refutes or conflicts with the claim.
-- NO_EVIDENCE: ONLY if none of the evidence is related to the claim at all, or the claim introduces completely new information not derivable from the evidence.
-
-Important: The evidence includes structured metadata (paper titles, author names, venues, dates, citation counts) AND abstract text. If a claim can be verified from ANY of these fields, label it SUPPORTED.
-
-Respond with ONLY the label (SUPPORTED, CONTRADICTED, or NO_EVIDENCE)."""
+Label:"""
 
             raw_label = await run_blocking(
                 self.verify_agent.generate_content, logic_prompt,
@@ -2096,19 +2097,49 @@ Respond with ONLY the label (SUPPORTED, CONTRADICTED, or NO_EVIDENCE)."""
 
     @staticmethod
     def _parse_verification_label(raw: str) -> str:
-        """Parse raw LLM output into a clean verification label."""
+        """Parse raw LLM output into a clean verification label.
+
+        Robust parsing for small LLMs that may add preamble, reasoning,
+        or formatting around the label.
+        """
         if not raw:
             return 'NO_EVIDENCE'
         text = raw.strip().upper()
-        # Direct match
+
+        # 1. Exact single-word match (ideal case)
+        if text in ('SUPPORTED', 'CONTRADICTED', 'NO_EVIDENCE'):
+            return text
+
+        # 2. Check first non-empty line (LLM often puts label first)
+        first_line = text.split('\n')[0].strip().strip('.*- ')
         for label in ('SUPPORTED', 'CONTRADICTED', 'NO_EVIDENCE'):
-            if label in text:
+            if first_line == label or first_line.startswith(label):
                 return label
-        # Fuzzy fallback
-        if 'SUPPORT' in text or 'CONFIRM' in text:
+
+        # 3. Check first word of the response
+        first_word = text.split()[0].strip('.:,*- ') if text.split() else ''
+        for label in ('SUPPORTED', 'CONTRADICTED', 'NO_EVIDENCE'):
+            if first_word == label:
+                return label
+
+        # 4. Substring match anywhere in text (order matters: check SUPPORTED before NO_EVIDENCE
+        #    since some LLMs write "the claim is SUPPORTED by the evidence")
+        if 'SUPPORTED' in text and 'NO_EVIDENCE' not in text and 'NOT SUPPORTED' not in text:
             return 'SUPPORTED'
-        if 'CONTRADICT' in text or 'REFUTE' in text:
+        if 'CONTRADICTED' in text:
             return 'CONTRADICTED'
+        if 'NO_EVIDENCE' in text or 'NO EVIDENCE' in text:
+            return 'NO_EVIDENCE'
+
+        # 5. Fuzzy keyword fallback
+        if any(kw in text for kw in ('SUPPORT', 'CONFIRM', 'VERIFIED', 'MATCHES', 'CONSISTENT')):
+            return 'SUPPORTED'
+        if any(kw in text for kw in ('CONTRADICT', 'REFUTE', 'CONFLICT', 'INCORRECT', 'WRONG')):
+            return 'CONTRADICTED'
+        if any(kw in text for kw in ('NOT SUPPORTED', 'INSUFFICIENT', 'CANNOT VERIFY', 'UNRELATED')):
+            return 'NO_EVIDENCE'
+
+        logger.warning(f"Could not parse verification label from: {raw[:80]}")
         return 'NO_EVIDENCE'
 
     async def extract_atomic_claims(self, ai_answer: str) -> List[str]:

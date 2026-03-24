@@ -148,7 +148,7 @@ class LLMClient:
         'author_extraction':    64,   # list of names
         'cypher_generation':    128,  # Cypher query + params
         'claim_extraction':     128,  # short bullet list of claims
-        'scifact_verification': 16,   # SUPPORTED / CONTRADICTED / NO_EVIDENCE
+        'scifact_verification': 32,   # SUPPORTED / CONTRADICTED / NO_EVIDENCE (extra room for preamble from small LLMs)
         'answer_synthesis':     400,  # main answer — concise, 5-6 sentences (extra room for richer context)
         'general':              128,
     }
