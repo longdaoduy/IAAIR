@@ -103,8 +103,8 @@ class HybridRetrievalHandler:
         self.embedding_client = embedder
         self.graph_handler = graph_db
         self.ai_agent = ai_agent
-        # self.verify_agent = LLMClient()
-        # self.ai_agent = None
+        self.verify_agent = LLMClient()
+        self.answer_agent = LLMClient()
         self.cache_manager = cache_manager
         self.performance_monitor = performance_monitor
         self.clip_client = clip_client
@@ -2008,7 +2008,7 @@ Write a single paragraph of 5-6 sentences answering the question. No bullet poin
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
-                self.ai_agent.generate_content,
+                self.answer_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
                 purpose='answer_synthesis',
@@ -2095,7 +2095,7 @@ Label this claim as exactly ONE of the following:
 Respond with ONLY the label (SUPPORTED, CONTRADICTED, or NO_EVIDENCE)."""
 
             raw_label = await run_blocking(
-                self.ai_agent.generate_content, logic_prompt,
+                self.verify_agent.generate_content, logic_prompt,
                 purpose='scifact_verification'
             )
             label = self._parse_verification_label(raw_label)
@@ -2152,7 +2152,7 @@ Respond with ONLY the label (SUPPORTED, CONTRADICTED, or NO_EVIDENCE)."""
 
             # Using your existing AI agent infrastructure
             raw_claims = await run_blocking(
-                self.ai_agent.generate_content,
+                self.verify_agent.generate_content,
                 prompt=extraction_prompt, purpose='claim_extraction'
             )
 
