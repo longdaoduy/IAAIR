@@ -1943,24 +1943,26 @@ class HybridRetrievalHandler:
                     context_papers.append({
                         "title": getattr(result, "title", "") or "",
                         "authors": getattr(result, "authors", []) or [],
-                        "abstract": (getattr(result, "abstract", "") or "")[:300],
+                        "abstract": (getattr(result, "abstract", "") or "")[:500],
                         "relevance_score": getattr(result, "relevance_score", 0),
                         "venue": getattr(result, "venue", "") or "",
                         "publication_date": getattr(result, "publication_date", "") or "",
                         "paper_id": getattr(result, "paper_id", "") or getattr(result, "id", ""),
-                        "doi": getattr(result, "doi", "") or ""
+                        "doi": getattr(result, "doi", "") or "",
+                        "cited_by_count": getattr(result, "cited_by_count", 0) or 0,
                     })
                 else:
                     # It's a dict, use .get()
                     context_papers.append({
                         "title": result.get("title", "") or "",
                         "authors": result.get("authors", []) or [],
-                        "abstract": (result.get("abstract", "") or "")[:300],
+                        "abstract": (result.get("abstract", "") or "")[:500],
                         "relevance_score": result.get("relevance_score", 0),
                         "venue": result.get("venue", "") or "",
                         "publication_date": result.get("publication_date", "") or "",
                         "paper_id": result.get("paper_id", "") or result.get("id", ""),
-                        "doi": result.get("doi", "") or ""
+                        "doi": result.get("doi", "") or "",
+                        "cited_by_count": result.get("cited_by_count", 0) or 0,
                     })
 
             # Build template-aware context for the prompt
@@ -1974,15 +1976,19 @@ class HybridRetrievalHandler:
             template_instructions = self._get_template_specific_instructions(template_info)
 
             system_prompt = "You are a research assistant specializing in academic literature. Be accurate, concise, and tailor your response to the type of query."
-            prompt = f"""Answer this question based on the search results: "{query}"
+            prompt = f"""Answer this question based ONLY on the search results below: "{query}"
 {template_context}
 
-Search Results:
+Search Results (these are the retrieved papers — use their metadata as facts):
 {self._format_papers_for_prompt(context_papers[:4])}
 
 Instructions:
 {template_instructions}
-- Be accurate — only use information from the provided results
+- The search results above ARE the answer source. Each result includes: title, authors, venue, date, paper ID, DOI, citation count, and abstract.
+- If the question asks about a specific paper ID (e.g. W1775749144), match it to the ID field in the results and report that paper's details.
+- If the question asks about authors, titles, venues, or other metadata, extract the answer directly from the result fields shown above.
+- NEVER say the information is "not available" or "not specified" if it appears in the search results above.
+- Be accurate — only use information from the provided results.
 
 Answer:"""
 
@@ -2171,9 +2177,13 @@ Respond with ONLY the label (SUPPORTED, CONTRADICTED, or NO_EVIDENCE)."""
             abstract = (p.get('abstract', '') or '')[:max_abstract_len]
             cited = p.get('cited_by_count', 0) or 0
             cite_info = f" | Cited: {cited}" if cited > 0 else ''
+            paper_id = p.get('paper_id', '') or p.get('id', '') or ''
+            doi = p.get('doi', '') or ''
+            id_info = f" | ID: {paper_id}" if paper_id else ''
+            doi_info = f" | DOI: {doi}" if doi else ''
             lines.append(
                 f"[{i}] {p.get('title', 'Untitled')} | {auth} | "
-                f"{p.get('venue', '') or ''} {p.get('publication_date', '') or ''}{cite_info}\n"
+                f"{p.get('venue', '') or ''} {p.get('publication_date', '') or ''}{cite_info}{id_info}{doi_info}\n"
                 f"    {abstract}"
             )
         return '\n'.join(lines)
