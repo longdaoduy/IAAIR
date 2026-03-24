@@ -1973,34 +1973,25 @@ class HybridRetrievalHandler:
             # Build template-specific instructions
             template_instructions = self._get_template_specific_instructions(template_info)
 
-            system_prompt = (
-                "You are a precise research assistant. Strict rules:\n"
-                "- Write ONLY a single plain-text paragraph of 5-6 complete sentences.\n"
-                "- Do NOT use bullet points, numbered lists, headers, or markdown formatting.\n"
-                "- Do NOT repeat or rephrase the question.\n"
-                "- Do NOT start with phrases like 'Based on the search results' or 'According to'.\n"
-                "- ONLY state facts from the provided evidence. NEVER invent authors, dates, or findings.\n"
-                # "- Cite papers using their EXACT title and authors from the evidence.\n"
-                # "- Reference papers by their number in brackets, e.g. [1], [2].\n"
-                "- If evidence is insufficient, say so in one sentence."
-            )
-            prompt = f"""Question: "{query}"
+            system_prompt = "You are a research assistant specializing in academic literature. Be accurate, concise, and tailor your response to the type of query."
+            prompt = f"""Answer this question based on the search results: "{query}"
 {template_context}
 
-Evidence:
+Search Results:
 {self._format_papers_for_prompt(context_papers[:4])}
 
+Instructions:
 {template_instructions}
+- Be accurate — only use information from the provided results
 
-Write a single paragraph of 5-6 sentences answering the question. No bullet points. No lists. Start directly with the answer:"""
+Answer:"""
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
                 self.answer_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
-                purpose='answer_synthesis',
-                max_tokens=350,
+                purpose='answer_synthesis'
             )
 
             if not ai_answer:
