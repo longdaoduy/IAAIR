@@ -1928,15 +1928,13 @@ class HybridRetrievalHandler:
             search_results: List of search result objects or dicts
             template_info: Optional dict with 'template_key' and 'description'
                            of the graph template used for retrieval
-            conversation_context: Prior conversation history for multi-turn context
         """
         try:
             if not self.ai_agent:
                 logger.info("AI Agent is not available for response generation")
                 return None
 
-            # Prepare context from search results — use more papers with longer abstracts
-            # for richer RAG context (800 chars ≈ 2-3 key sentences from each abstract)
+            # Prepare context from search results
             context_papers = []
             for result in search_results[:5]:  # Use top 5 results
                 # Handle both dict and object types
@@ -1983,21 +1981,13 @@ class HybridRetrievalHandler:
                 "- Do NOT start with phrases like 'Based on the search results' or 'According to'.\n"
                 "- ONLY state facts from the provided evidence. NEVER invent authors, dates, or findings.\n"
                 "- Cite papers using their EXACT title and authors from the evidence.\n"
-                "- Reference papers by their number in brackets, e.g. [1], [2].\n"
-                "- If evidence is insufficient, say so in one sentence.\n"
-                "- If conversation context is provided, use it to understand follow-up questions."
+                "- If evidence is insufficient, say so in one sentence."
             )
-
-            # Build conversation context block (empty string if no prior turns)
-            conv_block = ""
-            if conversation_context:
-                conv_block = f"\n{conversation_context}\n"
-
             prompt = f"""Question: "{query}"
-{template_context}{conv_block}
+{template_context}
 
 Evidence:
-{self._format_papers_for_prompt(context_papers[:6])}
+{self._format_papers_for_prompt(context_papers[:4])}
 
 {template_instructions}
 
@@ -2005,11 +1995,11 @@ Write a single paragraph of 5-6 sentences answering the question. No bullet poin
 
             # Generate response using LLMClient — offload to thread pool
             ai_answer = await run_blocking(
-                self.answer_agent.generate_content,
+                self.ai_agent.generate_content,
                 prompt=prompt,
                 system_prompt=system_prompt,
                 purpose='answer_synthesis',
-                max_tokens=400,
+                max_tokens=350,
             )
 
             if not ai_answer:
