@@ -2067,9 +2067,11 @@ Claim: {claim}
 Evidence: {self._format_papers_for_prompt(context_papers)}
 
 Label this claim as exactly ONE of the following:
-- SUPPORTED: If the evidence explicitly confirms the claim.
-- CONTRADICTED: If the evidence explicitly refutes the claim.
-- NO_EVIDENCE: If the evidence is relevant but doesn't prove/disprove it.
+- SUPPORTED: If the evidence confirms the claim, either explicitly or through reasonable inference from the provided metadata (titles, authors, venues, dates, citation counts, abstracts). A claim about a paper's title, authorship, venue, or topic is SUPPORTED if that information appears in the evidence fields above.
+- CONTRADICTED: If the evidence explicitly refutes or conflicts with the claim.
+- NO_EVIDENCE: ONLY if none of the evidence is related to the claim at all, or the claim introduces completely new information not derivable from the evidence.
+
+Important: The evidence includes structured metadata (paper titles, author names, venues, dates, citation counts) AND abstract text. If a claim can be verified from ANY of these fields, label it SUPPORTED.
 
 Respond with ONLY the label (SUPPORTED, CONTRADICTED, or NO_EVIDENCE)."""
 
@@ -2121,7 +2123,10 @@ Respond with ONLY the label (SUPPORTED, CONTRADICTED, or NO_EVIDENCE)."""
             1. Each claim must be a single sentence.
             2. Each claim must be self-contained (replace pronouns like 'it' or 'they' with the specific entity names).
             3. Remove introductory phrases (e.g., "The paper says", "According to the results").
-            4. Focus on scientific facts, authors, dates, and relationships between entities.
+            4. Focus on verifiable facts: paper titles, author names, publication venues, dates, citation counts, and key findings mentioned in abstracts.
+            5. Do NOT extract subjective ranking claims (e.g., "the most relevant paper", "the best study") or opinions about relevance ordering.
+            6. Do NOT extract claims about search result rankings (e.g., "[1] is the top result").
+            7. Keep claims that can be verified against paper metadata (title, authors, venue, year) or abstract content.
 
             Response to decompose:
             "{ai_answer}"

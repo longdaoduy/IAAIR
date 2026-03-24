@@ -558,65 +558,65 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
                         )
 
                     # # 2. SciFact verification — check claims against retrieved evidence
-                    # if ai_response:
-                    #     verification_start = datetime.now()
-                    #     try:
-                    #         papers_for_verification = [result.dict() for result in fused_results[:10]]
-                    #         verification_results = await factory.retrieval_handler.verify_claims_scifact(
-                    #             ai_response, papers_for_verification
-                    #         )
+                    if ai_response:
+                        verification_start = datetime.now()
+                        try:
+                            papers_for_verification = [result.dict() for result in fused_results[:10]]
+                            verification_results = await factory.retrieval_handler.verify_claims_scifact(
+                                ai_response, papers_for_verification
+                            )
 
-                    #         # Build summary counts
-                    #         label_counts = {'SUPPORTED': 0, 'CONTRADICTED': 0, 'NO_EVIDENCE': 0}
-                    #         for v in verification_results:
-                    #             lbl = v.get('label', 'NO_EVIDENCE')
-                    #             label_counts[lbl] = label_counts.get(lbl, 0) + 1
-                    #             # Push each label to Prometheus
-                    #             factory.performance_monitor.record_verification_label(lbl)
+                            # Build summary counts
+                            label_counts = {'SUPPORTED': 0, 'CONTRADICTED': 0, 'NO_EVIDENCE': 0}
+                            for v in verification_results:
+                                lbl = v.get('label', 'NO_EVIDENCE')
+                                label_counts[lbl] = label_counts.get(lbl, 0) + 1
+                                # Push each label to Prometheus
+                                factory.performance_monitor.record_verification_label(lbl)
 
-                    #         total_claims = len(verification_results)
-                    #         has_contradiction = label_counts['CONTRADICTED'] > 0
+                            total_claims = len(verification_results)
+                            has_contradiction = label_counts['CONTRADICTED'] > 0
 
-                    #         # Determine overall verdict
-                    #         if total_claims == 0:
-                    #             verdict = 'NO_CLAIMS'
-                    #         elif has_contradiction:
-                    #             verdict = 'CONTRADICTED'
-                    #         elif label_counts['SUPPORTED'] == total_claims:
-                    #             verdict = 'FULLY_SUPPORTED'
-                    #         elif label_counts['SUPPORTED'] > 0:
-                    #             verdict = 'PARTIALLY_SUPPORTED'
-                    #         else:
-                    #             verdict = 'NO_EVIDENCE'
+                            # Determine overall verdict
+                            if total_claims == 0:
+                                verdict = 'NO_CLAIMS'
+                            elif has_contradiction:
+                                verdict = 'CONTRADICTED'
+                            elif label_counts['SUPPORTED'] == total_claims:
+                                verdict = 'FULLY_SUPPORTED'
+                            elif label_counts['SUPPORTED'] > 0:
+                                verdict = 'PARTIALLY_SUPPORTED'
+                            else:
+                                verdict = 'NO_EVIDENCE'
 
-                    #         verification_summary = {
-                    #             'total_claims': total_claims,
-                    #             'supported': label_counts['SUPPORTED'],
-                    #             'contradicted': label_counts['CONTRADICTED'],
-                    #             'no_evidence': label_counts['NO_EVIDENCE'],
-                    #             'verdict': verdict,
-                    #         }
+                            verification_summary = {
+                                'total_claims': total_claims,
+                                'supported': label_counts['SUPPORTED'],
+                                'contradicted': label_counts['CONTRADICTED'],
+                                'no_evidence': label_counts['NO_EVIDENCE'],
+                                'verdict': verdict,
+                            }
 
-                    #         logger.info(
-                    #             f"Verification: {label_counts['SUPPORTED']}✓ "
-                    #             f"{label_counts['CONTRADICTED']}✗ "
-                    #             f"{label_counts['NO_EVIDENCE']}? → {verdict}"
-                    #         )
+                            logger.info(
+                                f"Verification: {label_counts['SUPPORTED']}✓ "
+                                f"{label_counts['CONTRADICTED']}✗ "
+                                f"{label_counts['NO_EVIDENCE']}? → {verdict}"
+                            )
 
-                    #         # Only cache if no contradictions
-                    #         if not has_contradiction:
-                    #             factory.cache_manager.cache_ai_response(
-                    #                 request.query, results_hash, ai_response
-                    #             )
-                    #         else:
-                    #             logger.warning("AI response has contradicted claims — not cached")
+                            # Only cache if no contradictions
+                            if not has_contradiction:
+                                factory.cache_manager.cache_ai_response(
+                                    request.query, results_hash, ai_response
+                                )
+                            else:
+                                logger.warning("AI response has contradicted claims — not cached")
 
-                    #     except Exception as ve:
-                    #         logger.error(f"Verification failed: {ve}")
-                    #         verification_summary = {'error': str(ve)}
+                        except Exception as ve:
+                            logger.error(f"Verification failed: {ve}")
+                            verification_summary = {'error': str(ve)}
 
-                    #     verification_time = (datetime.now() - verification_start).total_seconds()
-                    #     factory.performance_monitor.record_verification_duration(verification_time)
+                        verification_time = (datetime.now() - verification_start).total_seconds()
+                        factory.performance_monitor.record_verification_duration(verification_time)
 
             response_generation_time = (datetime.now() - response_start).total_seconds()
 
