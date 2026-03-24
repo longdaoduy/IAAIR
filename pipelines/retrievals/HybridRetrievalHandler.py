@@ -882,6 +882,130 @@ class HybridRetrievalHandler:
             return {}
 
     @staticmethod
+    def _compute_query_relevance_scores(
+        query: str, results: List[Dict], keywords: List[str] = None
+    ) -> Dict[str, float]:
+        """Compute relevance scores for graph results based on query-metadata matching.
+
+        Unlike vector similarity (which compares query text to paper abstracts),
+        this method scores how well each paper's metadata matches the query's
+        intent. This is critical for metadata queries like "Who authored X?"
+        or "What venue published Y?" where vector similarity is meaningless.
+
+        Scoring dimensions (all additive, higher = more relevant):
+            - Paper ID match:  +100  (explicitly requested by ID)
+            - Author match:    +20   per matching author name
+            - Venue match:     +15   if venue name appears in query
+            - Title match:     +10   per keyword match in title
+            - Year match:      +5    if publication year matches query
+            - Keyword match:   +2    per keyword in title/abstract
+            - Citation boost:  +0-5  normalized citation count
+
+        Args:
+            query: User's natural language query
+            results: Graph query results (list of paper dicts)
+            keywords: Extracted query keywords
+
+        Returns:
+            {paper_id: relevance_score} dict (higher = more relevant)
+        """
+        if not results:
+            return {}
+
+        query_lower = query.lower()
+        keywords = keywords or []
+        keywords_lower = [kw.lower() for kw in keywords if kw]
+
+        # Extract paper IDs mentioned in the query
+        requested_ids = set(pid.lower() for pid in re.findall(r'\b(W\d+)\b', query))
+
+        # Extract author names from the query for matching
+        author_patterns = [
+            r'(?:by|authored?\s+by|written\s+by)\s+(.+?)(?:\?|$|\.)',
+        ]
+        query_authors = []
+        for pattern in author_patterns:
+            m = re.search(pattern, query, re.IGNORECASE)
+            if m:
+                # Split on "and", ",", "&" to get individual names
+                raw = m.group(1)
+                parts = re.split(r'\s+and\s+|,\s*|&\s*', raw)
+                query_authors.extend(p.strip().lower() for p in parts if len(p.strip()) > 2)
+
+        # Find max citation count for normalization
+        max_cited = max(
+            (r.get('cited_by_count', 0) or 0 for r in results), default=1
+        ) or 1
+
+        score_map: Dict[str, float] = {}
+
+        for r in results:
+            pid = r.get('paper_id', '') or ''
+            if not pid:
+                continue
+
+            score = 0.0
+
+            # 1. Paper ID match (highest priority — user explicitly asked for this paper)
+            if pid.lower() in requested_ids:
+                score += 100.0
+
+            # 2. Author name match
+            authors = r.get('authors', []) or []
+            if isinstance(authors, str):
+                authors = [authors]
+            for author in authors:
+                if not author:
+                    continue
+                author_lower = author.lower()
+                # Check if author name appears in query
+                if author_lower in query_lower:
+                    score += 20.0
+                else:
+                    # Check last name match
+                    parts = author_lower.split()
+                    if parts and any(part in query_lower for part in parts if len(part) > 2):
+                        score += 10.0
+                # Check against extracted query authors
+                for qa in query_authors:
+                    if qa in author_lower or author_lower in qa:
+                        score += 20.0
+
+            # 3. Venue match
+            venue = (r.get('venue', '') or '').lower()
+            if venue and venue in query_lower:
+                score += 15.0
+
+            # 4. Title keyword match
+            title = (r.get('title', '') or '').lower()
+            if title:
+                for kw in keywords_lower:
+                    if kw in title:
+                        score += 10.0
+
+            # 5. Year match
+            pub_date = (r.get('publication_date', '') or '')
+            if pub_date:
+                year = pub_date[:4]
+                if year and year in query_lower:
+                    score += 5.0
+
+            # 6. Abstract keyword match
+            abstract = (r.get('abstract', '') or '').lower()
+            if abstract:
+                for kw in keywords_lower:
+                    if kw in abstract:
+                        score += 2.0
+
+            # 7. Citation count tiebreaker (normalized 0-5)
+            cited = r.get('cited_by_count', 0) or 0
+            score += 5.0 * (cited / max_cited)
+
+            score_map[pid] = score
+
+        return score_map
+
+    @staticmethod
     def _extract_paper_ids(results: List[Dict]) -> List[str]:
         """Extract non-empty paper_id values from result dicts."""
         return [r.get('paper_id') for r in results if r.get('paper_id')]
@@ -944,7 +1068,7 @@ class HybridRetrievalHandler:
         keywords: List[str], top_k: int, use_multimodal: bool,
         template_key: str, template_info: Dict
     ) -> tuple:
-        """Graph-first strategy: run Neo4j, compute similarity, fallback to vector.
+        """Graph-first strategy: run Neo4j, rank by query relevance, fallback to vector.
 
         Returns:
             (results, score_map, visual_data) tuple
@@ -962,18 +1086,19 @@ class HybridRetrievalHandler:
 
         results = self._deduplicate_results(results)
 
-        # Compute vector similarity for graph-discovered papers
-        graph_pids = self._extract_paper_ids(results)
-        if graph_pids:
-            score_map = await self._compute_similarity_scores(query, graph_pids)
+        # Rank results by query relevance (metadata matching, not vector similarity)
+        # Vector similarity is poor for metadata queries like "who authored X?"
+        # because the query text has no semantic overlap with paper abstracts.
+        if results:
+            score_map = self._compute_query_relevance_scores(query, results, keywords)
             if score_map:
                 results.sort(
                     key=lambda r: score_map.get(r.get('paper_id'), 0.0),
                     reverse=True
                 )
                 logger.info(
-                    f"Computed similarity for {len(score_map)}/{len(graph_pids)} "
-                    f"graph papers (scores: {min(score_map.values()):.3f}–{max(score_map.values()):.3f})"
+                    f"Ranked {len(results)} graph results by query relevance "
+                    f"(scores: {min(score_map.values()):.3f}–{max(score_map.values()):.3f})"
                 )
 
         # Fallback: graph returned 0 results → try vector-first
