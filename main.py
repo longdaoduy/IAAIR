@@ -557,66 +557,11 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
                             ai_response, fused_results
                         )
 
-                    # # 2. SciFact verification — check claims against retrieved evidence
+                    # Cache the AI response (verification is done separately via /verify endpoint)
                     if ai_response:
-                        verification_start = datetime.now()
-                        try:
-                            papers_for_verification = [result.dict() for result in fused_results[:10]]
-                            verification_results = await factory.retrieval_handler.verify_claims_scifact(
-                                ai_response, papers_for_verification
-                            )
-
-                            # Build summary counts
-                            label_counts = {'SUPPORTED': 0, 'CONTRADICTED': 0, 'NO_EVIDENCE': 0}
-                            for v in verification_results:
-                                lbl = v.get('label', 'NO_EVIDENCE')
-                                label_counts[lbl] = label_counts.get(lbl, 0) + 1
-                                # Push each label to Prometheus
-                                factory.performance_monitor.record_verification_label(lbl)
-
-                            total_claims = len(verification_results)
-                            has_contradiction = label_counts['CONTRADICTED'] > 0
-
-                            # Determine overall verdict
-                            if total_claims == 0:
-                                verdict = 'NO_CLAIMS'
-                            elif has_contradiction:
-                                verdict = 'CONTRADICTED'
-                            elif label_counts['SUPPORTED'] == total_claims:
-                                verdict = 'FULLY_SUPPORTED'
-                            elif label_counts['SUPPORTED'] > 0:
-                                verdict = 'PARTIALLY_SUPPORTED'
-                            else:
-                                verdict = 'NO_EVIDENCE'
-
-                            verification_summary = {
-                                'total_claims': total_claims,
-                                'supported': label_counts['SUPPORTED'],
-                                'contradicted': label_counts['CONTRADICTED'],
-                                'no_evidence': label_counts['NO_EVIDENCE'],
-                                'verdict': verdict,
-                            }
-
-                            logger.info(
-                                f"Verification: {label_counts['SUPPORTED']}✓ "
-                                f"{label_counts['CONTRADICTED']}✗ "
-                                f"{label_counts['NO_EVIDENCE']}? → {verdict}"
-                            )
-
-                            # Only cache if no contradictions
-                            if not has_contradiction:
-                                factory.cache_manager.cache_ai_response(
-                                    request.query, results_hash, ai_response
-                                )
-                            else:
-                                logger.warning("AI response has contradicted claims — not cached")
-
-                        except Exception as ve:
-                            logger.error(f"Verification failed: {ve}")
-                            verification_summary = {'error': str(ve)}
-
-                        verification_time = (datetime.now() - verification_start).total_seconds()
-                        factory.performance_monitor.record_verification_duration(verification_time)
+                        factory.cache_manager.cache_ai_response(
+                            request.query, results_hash, ai_response
+                        )
 
             response_generation_time = (datetime.now() - response_start).total_seconds()
 
@@ -959,6 +904,84 @@ async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFac
 #     except Exception as e:
 #         logger.error(f"Base64 image search error: {e}")
 #         raise HTTPException(status_code=500, detail=f"Image search failed: {str(e)}")
+
+
+# ===============================================================================
+# SCIFACT VERIFICATION ENDPOINT (called async after search results are displayed)
+# ===============================================================================
+
+class VerifyRequest(BaseModel):
+    ai_response: str
+    papers: List[Dict]
+
+
+@app.post("/verify")
+async def verify_claims(
+        request: VerifyRequest,
+        factory: ServiceFactory = Depends(get_services)
+):
+    """
+    Run SciFact verification on an AI response against retrieved papers.
+
+    This endpoint is designed to be called asynchronously AFTER the hybrid-search
+    returns results, so that search latency is not impacted by verification.
+    """
+    verification_start = datetime.now()
+    try:
+        verification_results = await factory.retrieval_handler.verify_claims_scifact(
+            request.ai_response, request.papers
+        )
+
+        # Build summary counts
+        label_counts = {'SUPPORTED': 0, 'CONTRADICTED': 0, 'NO_EVIDENCE': 0}
+        for v in verification_results:
+            lbl = v.get('label', 'NO_EVIDENCE')
+            label_counts[lbl] = label_counts.get(lbl, 0) + 1
+            factory.performance_monitor.record_verification_label(lbl)
+
+        total_claims = len(verification_results)
+        has_contradiction = label_counts['CONTRADICTED'] > 0
+
+        # Determine overall verdict
+        if total_claims == 0:
+            verdict = 'NO_CLAIMS'
+        elif has_contradiction:
+            verdict = 'CONTRADICTED'
+        elif label_counts['SUPPORTED'] == total_claims:
+            verdict = 'FULLY_SUPPORTED'
+        elif label_counts['SUPPORTED'] > 0:
+            verdict = 'PARTIALLY_SUPPORTED'
+        else:
+            verdict = 'NO_EVIDENCE'
+
+        verification_summary = {
+            'total_claims': total_claims,
+            'supported': label_counts['SUPPORTED'],
+            'contradicted': label_counts['CONTRADICTED'],
+            'no_evidence': label_counts['NO_EVIDENCE'],
+            'verdict': verdict,
+        }
+
+        verification_time = (datetime.now() - verification_start).total_seconds()
+        factory.performance_monitor.record_verification_duration(verification_time)
+
+        logger.info(
+            f"Verification: {label_counts['SUPPORTED']}✓ "
+            f"{label_counts['CONTRADICTED']}✗ "
+            f"{label_counts['NO_EVIDENCE']}? → {verdict} "
+            f"({verification_time:.1f}s)"
+        )
+
+        return {
+            "success": True,
+            "verification_results": verification_results,
+            "verification_summary": verification_summary,
+            "verification_time_seconds": verification_time,
+        }
+
+    except Exception as e:
+        logger.error(f"Verification failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
 
 
 # ===============================================================================
