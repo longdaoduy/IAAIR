@@ -913,7 +913,7 @@ class HybridRetrievalHandler:
                       if provided)
 
         Returns:
-            {paper_id: relevance_score} dict (higher = more relevant)
+            {paper_id: relevance_score} dict, normalized to [0, 1] range
         """
         if not results:
             return {}
@@ -1019,7 +1019,41 @@ class HybridRetrievalHandler:
 
             score_map[pid] = score
 
+        # Normalize scores to [0, 1] range
+        if score_map:
+            max_score = max(score_map.values())
+            min_score = min(score_map.values())
+            score_range = max_score - min_score
+            if score_range > 0:
+                score_map = {
+                    pid: (s - min_score) / score_range
+                    for pid, s in score_map.items()
+                }
+            elif max_score > 0:
+                # All scores are the same positive value → normalize to 1.0
+                score_map = {pid: 1.0 for pid in score_map}
+            # else: all zeros → leave as 0.0
+
         return score_map
+
+    @staticmethod
+    def _has_specific_params(extracted: Dict) -> bool:
+        """Check if extracted entities contain params beyond just keywords.
+
+        Returns True if there are paper_ids, author_names, venue, year,
+        institution, or any intent flags — i.e. entities that benefit from
+        graph search. Returns False if only keywords are present.
+        """
+        specific_keys = [
+            'paper_ids', 'author_names', 'venue', 'institution',
+            'year', 'year_from', 'year_to',
+            'wants_citations', 'wants_coauthors', 'wants_top_cited',
+        ]
+        for key in specific_keys:
+            val = extracted.get(key)
+            if val:  # non-empty list, non-empty string, or True
+                return True
+        return False
 
     @staticmethod
     def _extract_paper_ids(results: List[Dict]) -> List[str]:
@@ -1143,28 +1177,50 @@ class HybridRetrievalHandler:
         return results, score_map, visual_data
 
     async def _execute_vector_first(
-        self, query: str, cypher_query: str, keywords: List[str],
-        top_k: int, use_multimodal: bool, template_key: str,
-        extracted: Dict, param_builder, or_extra_params: Dict
+        self, query: str, cypher_query: str, parameters: Dict,
+        keywords: List[str], top_k: int, use_multimodal: bool,
+        template_key: str, extracted: Dict = None
     ) -> tuple:
-        """Vector-first strategy: discover via vector search, enrich via graph.
+        """Vector-first strategy: discover via vector search, optionally enrich via graph.
+
+        If the extracted entities contain specific params (paper_ids, author_names,
+        venue, year, etc.), runs graph search to enrich results and ranks them
+        with _compute_query_relevance_scores.
+
+        If only keywords are present, skips graph search entirely and returns
+        vector results directly (graph adds no value for pure topic queries).
 
         Returns:
             (results, score_map, visual_data) tuple
         """
+        extracted = extracted or {}
         logger.info(f"Running vector-first search for template '{template_key}'")
+
         sorted_ids, score_map, vector_results, visual_data = await self._vector_discover(
             query, keywords, top_k, use_multimodal
         )
 
-        # Inject discovered IDs and rebuild parameters
-        extracted.setdefault('paper_ids', []).extend(sorted_ids)
-        parameters = param_builder(extracted, top_k)
-        if or_extra_params:
-            parameters.update(or_extra_params)
-        logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs for '{template_key}'")
+        has_specific = self._has_specific_params(extracted)
 
-        # Execute graph query with vector fallback
+        if not has_specific:
+            # Only keywords — vector results are sufficient, no graph enrichment needed
+            logger.info(
+                f"Vector-first: keywords-only query, skipping graph search "
+                f"({len(vector_results)} vector results)"
+            )
+            results = self._deduplicate_results(vector_results)
+            results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
+            return results[:top_k], score_map, visual_data
+
+        # Has specific params — inject vector-discovered IDs into parameters
+        # and run graph search for enrichment + relevance ranking
+        if sorted_ids:
+            existing_ids = parameters.get('paper_ids', [])
+            merged_ids = list(dict.fromkeys(existing_ids + sorted_ids))  # dedupe, preserve order
+            parameters['paper_ids'] = merged_ids
+            logger.info(f"Vector-first: injected {len(sorted_ids)} paper IDs into parameters")
+
+        # Execute graph query with pre-built parameters
         try:
             results = await run_blocking(self.graph_handler.execute_query, cypher_query, parameters)
             logger.info(f"Graph search returned {len(results)} results")
@@ -1177,9 +1233,24 @@ class HybridRetrievalHandler:
             logger.info(f"Graph returned 0, falling back to {len(results)} vector results")
 
         results = self._deduplicate_results(results)
-        results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
 
-        return results, score_map, visual_data
+        # Rank by query relevance (using pre-extracted entities)
+        relevance_scores = self._compute_query_relevance_scores(results, extracted, keywords)
+        if relevance_scores:
+            # Merge: use relevance scores as primary ranking
+            score_map.update(relevance_scores)
+            results.sort(
+                key=lambda r: score_map.get(r.get('paper_id'), 0.0),
+                reverse=True
+            )
+            logger.info(
+                f"Ranked {len(results)} vector-first results by query relevance "
+                f"(scores: {min(relevance_scores.values()):.3f}–{max(relevance_scores.values()):.3f})"
+            )
+        else:
+            results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
+
+        return results[:top_k], score_map, visual_data
 
     @staticmethod
     def _boost_requested_papers(
@@ -1349,7 +1420,6 @@ class HybridRetrievalHandler:
                     f"{or_conditions}"
                 )
             requested_pids = set(extracted.get('paper_ids', []))
-            _or_extra_params = dict(extra_params) if or_conditions else {}
 
             # ── Strategy selection ──
             if search_strategy and search_strategy in self.VALID_STRATEGIES:
@@ -1375,8 +1445,8 @@ class HybridRetrievalHandler:
                 )
             else:
                 results, score_map, visual_data = await self._execute_vector_first(
-                    query, cypher_query, keywords, top_k, use_multimodal,
-                    template_key, extracted, param_builder, _or_extra_params
+                    query, cypher_query, parameters, keywords, top_k,
+                    use_multimodal, template_key, extracted
                 )
 
             # ── Post-processing: boost, truncate, inject scores ──
