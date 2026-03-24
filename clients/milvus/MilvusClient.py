@@ -1126,7 +1126,7 @@ class MilvusClient:
 
             results = figures_collection.search(
                 data=[description_embedding],
-                anns_field="description_embedding",
+                anns_field="image_embedding",
                 param=search_params,
                 limit=top_k,
                 output_fields=["id", "paper_id", "description"]
@@ -1174,7 +1174,7 @@ class MilvusClient:
 
             results = tables_collection.search(
                 data=[description_embedding],
-                anns_field="description_embedding",
+                anns_field="image_embedding",
                 param=search_params,
                 limit=top_k,
                 output_fields=["id", "paper_id", "description"]

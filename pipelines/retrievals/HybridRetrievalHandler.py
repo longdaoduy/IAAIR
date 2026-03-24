@@ -2223,6 +2223,7 @@ Label:"""
         )):
             logger.info(f"Deterministic SUPPORTED ({', '.join(match_types)} + keyword): {claim[:80]}")
             return 'SUPPORTED'
+
         return None  # Fall through to LLM verification
 
     @staticmethod
