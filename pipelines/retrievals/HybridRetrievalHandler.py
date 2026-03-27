@@ -1233,24 +1233,9 @@ class HybridRetrievalHandler:
             logger.info(f"Graph returned 0, falling back to {len(results)} vector results")
 
         results = self._deduplicate_results(results)
+        results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
 
-        # Rank by query relevance (using pre-extracted entities)
-        relevance_scores = self._compute_query_relevance_scores(results, extracted, keywords)
-        if relevance_scores:
-            # Merge: use relevance scores as primary ranking
-            score_map.update(relevance_scores)
-            results.sort(
-                key=lambda r: score_map.get(r.get('paper_id'), 0.0),
-                reverse=True
-            )
-            logger.info(
-                f"Ranked {len(results)} vector-first results by query relevance "
-                f"(scores: {min(relevance_scores.values()):.3f}–{max(relevance_scores.values()):.3f})"
-            )
-        else:
-            results.sort(key=lambda r: score_map.get(r.get('paper_id'), 0.0), reverse=True)
-
-        return results[:top_k], score_map, visual_data
+        return results, score_map, visual_data
 
     @staticmethod
     def _boost_requested_papers(
