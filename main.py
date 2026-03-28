@@ -406,6 +406,52 @@ async def generate_and_upload_embeddings(papers_data: List[Dict], timestamp: dat
 # SEMANTIC SEARCH ENDPOINTS
 # ===============================================================================
 
+class SimilarPapersRequest(BaseModel):
+    query_text: str
+    top_k: int = 10
+    use_hybrid: bool = True
+
+
+@app.post("/search")
+async def search_similar_papers_api(
+        request: SimilarPapersRequest,
+        factory: ServiceFactory = Depends(get_services)
+):
+    """Direct vector/hybrid similarity search against paper embeddings."""
+    start_time = datetime.now()
+    query_warnings = []
+    try:
+        try:
+            sanitized_query, query_warnings = sanitize_query(request.query_text)
+            if sanitized_query != request.query_text:
+                logger.info(f"Search query sanitized: {query_warnings}")
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+
+        results = await factory.retrieval_handler.search_similar_papers(
+            query_text=sanitized_query,
+            top_k=request.top_k,
+            use_hybrid=request.use_hybrid
+        )
+
+        elapsed = (datetime.now() - start_time).total_seconds()
+        return {
+            "success": True,
+            "query": sanitized_query,
+            "warnings": query_warnings,
+            "top_k": request.top_k,
+            "use_hybrid": request.use_hybrid,
+            "results_found": len(results or []),
+            "search_time_seconds": elapsed,
+            "results": results or []
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"/search endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
 @app.post("/hybrid-search", response_model=HybridSearchResponse)
 async def hybrid_fusion_search(request: HybridSearchRequest, factory: ServiceFactory = Depends(get_services)):
     """
